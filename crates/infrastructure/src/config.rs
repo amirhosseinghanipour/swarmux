@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 use serde::de::IgnoredAny;
-use swarmux_application::{GuardSettings, JevProvider, JevSettings, Settings};
+use swarmux_application::{GuardSettings, JevProvider, JevSettings, ReviewSettings, Settings};
 use swarmux_domain::{Pattern, Unmatched};
 
 /// Why the config file couldn't be used.
@@ -37,6 +37,14 @@ struct RawConfig {
     default_model: Option<String>,
     guard: Option<RawGuard>,
     jev: Option<RawJev>,
+    review: Option<RawReview>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawReview {
+    enabled: Option<bool>,
+    model: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -117,7 +125,29 @@ pub fn parse_settings(text: &str, path: &Path) -> Result<Settings, ConfigError> 
     if let Some(jev) = raw.jev {
         settings.jev = parse_jev(jev, text, path)?;
     }
+    if let Some(review) = raw.review {
+        settings.review = parse_review(review, text, path)?;
+    }
     Ok(settings)
+}
+
+fn parse_review(raw: RawReview, text: &str, path: &Path) -> Result<ReviewSettings, ConfigError> {
+    let mut review = ReviewSettings::default();
+    if let Some(enabled) = raw.enabled {
+        review.enabled = enabled;
+    }
+    if let Some(model) = raw.model {
+        let model = model.trim();
+        if model.is_empty() || model.contains(char::is_whitespace) {
+            return Err(ConfigError {
+                path: path.to_path_buf(),
+                line: key_line(text, "model"),
+                message: "review model must be one word, like \"opus\" or \"haiku\"".into(),
+            });
+        }
+        review.model = model.to_string();
+    }
+    Ok(review)
 }
 
 fn parse_jev(raw: RawJev, text: &str, path: &Path) -> Result<JevSettings, ConfigError> {
@@ -447,6 +477,23 @@ api_key = \"sk-SECRET-123\"",
         assert_eq!(e.line, Some(3));
         assert!(e.message.contains("swarmux jev set-key"), "{e}");
         assert!(!e.to_string().contains("SECRET"), "{e}");
+    }
+
+    #[test]
+    fn review_section_is_read() {
+        let s = parse("[review]\nenabled = true\nmodel = \" haiku \"\n").unwrap();
+        assert_eq!(
+            s.review,
+            ReviewSettings {
+                enabled: true,
+                model: "haiku".into()
+            }
+        );
+        assert_eq!(parse("").unwrap().review, ReviewSettings::default());
+        let e = parse("[review]\nmodel = \"\"").unwrap_err();
+        assert_eq!(e.line, Some(2));
+        assert!(parse("[review]\nenabled = \"yes\"").is_err());
+        assert!(parse("[review]\nreviewer = \"x\"").is_err());
     }
 
     #[test]

@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use swarmux_domain::{
     AgentEvent, Decision, Job, JobId, JobResult, JobStatus, Millis, PromptDraft, PromptId,
-    PromptTemplate, Session, SessionId,
+    PromptTemplate, ReviewState, Session, SessionId,
 };
 
 use crate::{AppResult, DecisionRecord, JobSummary};
@@ -30,6 +30,10 @@ pub struct NewJob {
     pub model: String,
     pub priority: i32,
     pub fork: bool,
+    /// Have a reviewer audit the job once it succeeds.
+    pub wants_review: bool,
+    /// Set on a review job: the job it audits.
+    pub review_of: Option<JobId>,
 }
 
 /// An event as stored for a job.
@@ -68,6 +72,10 @@ pub trait JobRepository {
     /// The newest `limit` jobs, newest first.
     fn summaries(&self, limit: usize) -> AppResult<Vec<JobSummary>>;
     fn summary(&self, id: JobId) -> AppResult<Option<JobSummary>>;
+    /// Stores where the job's review stands.
+    fn set_review(&self, id: JobId, review: &ReviewState) -> AppResult<()>;
+    /// `None` when no review was ever started for the job.
+    fn review(&self, id: JobId) -> AppResult<Option<ReviewState>>;
 }
 
 pub trait PromptRepository {
@@ -102,6 +110,8 @@ pub struct RunRequest {
     pub prompt: String,
     /// Load only project and local Claude Code settings, not the user's.
     pub lean: bool,
+    /// A review run: read-only tools, no session file, the review system prompt.
+    pub review: bool,
 }
 
 /// What a running job reports back.
@@ -124,6 +134,26 @@ pub trait AgentRunner {
     fn start(&self, request: RunRequest, sink: RunSink);
     /// Stops a started job. Its sink may receive nothing more afterwards.
     fn cancel(&self, job: JobId);
+    /// The command line `request` runs with, for display.
+    fn command_line(&self, _request: &RunRequest) -> Option<String> {
+        None
+    }
+}
+
+/// What a subagent definition (`.claude/agents/<type>.md`) says about it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AgentProfile {
+    /// The `model:` front matter value ("sonnet", "haiku", "inherit", …).
+    pub model: Option<String>,
+    /// The `description:` front matter value.
+    pub description: Option<String>,
+}
+
+/// Finds subagent definitions by type.
+pub trait AgentCatalog {
+    /// The definition for `agent_type`, looked up from the session folder
+    /// `cwd` first, then the user's own agents. Unknown types give defaults.
+    fn profile(&self, cwd: &Path, agent_type: &str) -> AgentProfile;
 }
 
 /// The machine swarmux runs on.

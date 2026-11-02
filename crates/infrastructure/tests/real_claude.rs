@@ -32,6 +32,7 @@ fn real_claude_job_reports_init_and_result() {
             permission_mode: "default".into(),
             prompt: "Read a.txt with the Read tool, then reply with exactly the word in it.".into(),
             lean: false,
+            review: false,
         },
         Box::new(move |m| {
             let _ = tx.send(m);

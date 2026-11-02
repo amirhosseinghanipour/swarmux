@@ -13,8 +13,8 @@ use swarmux_application::{
 };
 use swarmux_infrastructure::hook::{self, HookServer};
 use swarmux_infrastructure::{
-    ClaudeCli, ConfigRuleWriter, GitCli, GuardHook, HaikuRouter, Paths, SqliteStore,
-    SysinfoMonitor, SystemClock, load_settings,
+    ClaudeCli, ConfigRuleWriter, FsAgentCatalog, GitCli, GuardHook, HaikuRouter, Paths,
+    SqliteStore, SysinfoMonitor, SystemClock, load_settings,
 };
 use swarmux_tui::App;
 
@@ -134,12 +134,19 @@ fn run_tui() -> anyhow::Result<()> {
     let workspace = Rc::new(GitCli::default());
     let sessions = SessionService::new(store.clone(), clock.clone())
         .with_default_model(&settings.default_model);
-    let prompts = PromptService::new(store.clone(), store.clone(), workspace, clock.clone());
+    let prompts = PromptService::new(
+        store.clone(),
+        store.clone(),
+        workspace.clone(),
+        clock.clone(),
+    );
     let history = HistoryService::new(store.clone());
     let mut jobs = JobService::new(store.clone(), store, runner, clock)
         .with_limits(settings.limits())
         .with_loop_repeats(guard_settings.loop_repeats)
-        .with_monitor(Rc::new(SysinfoMonitor::new()));
+        .with_monitor(Rc::new(SysinfoMonitor::new()))
+        .with_review(workspace, &settings.review)
+        .with_agent_catalog(Rc::new(FsAgentCatalog::new(Some(paths.home.clone()))));
     jobs.recover()?;
     let app = App::new(
         sessions,

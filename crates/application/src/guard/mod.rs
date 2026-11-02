@@ -17,6 +17,8 @@ pub use shared::SharedPolicy;
 
 /// Decisions kept in memory for the guard panel.
 const RECENT: usize = 50;
+/// Latencies of instant decisions kept for the p95.
+const LATENCIES: usize = 500;
 
 /// Counts for this run.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -28,6 +30,24 @@ pub struct GuardStats {
     pub stopped: usize,
     /// Records JEV made (answers and errors).
     pub jev: usize,
+}
+
+impl GuardStats {
+    /// Tool-call decisions: allowed, denied, asked and passed.
+    pub fn tool_calls(&self) -> usize {
+        self.allowed + self.denied + self.asked + self.passed
+    }
+
+    /// Every decision counted, loop stops included.
+    pub fn total(&self) -> usize {
+        self.tool_calls() + self.stopped
+    }
+
+    /// `part` as a share of the tool-call decisions; `None` before the first.
+    pub fn share(&self, part: usize) -> Option<f64> {
+        let all = self.tool_calls();
+        (all > 0).then(|| part as f64 / all as f64)
+    }
 }
 
 /// A held tool call, as the UI shows it.
@@ -52,6 +72,8 @@ pub struct AlwaysAllowed {
 pub struct GuardReport {
     pub errors: Vec<AppError>,
     pub changed: bool,
+    /// Decisions logged since the last pump (also those made by key presses).
+    pub decisions: Vec<DecisionRecord>,
 }
 
 struct Held {
@@ -99,6 +121,10 @@ pub struct GuardService {
     held: Vec<Held>,
     stats: GuardStats,
     recent: VecDeque<DecisionRecord>,
+    /// Logged but not yet handed out by `pump`.
+    fresh: Vec<DecisionRecord>,
+    /// How long instant (code-only) decisions took, in microseconds.
+    latencies: VecDeque<u64>,
 }
 
 impl GuardService {
@@ -120,6 +146,8 @@ impl GuardService {
             held: Vec::new(),
             stats: GuardStats::default(),
             recent: VecDeque::new(),
+            fresh: Vec::new(),
+            latencies: VecDeque::new(),
         }
     }
 
@@ -148,9 +176,13 @@ impl GuardService {
         for item in self.inbox.poll() {
             report.changed = true;
             let (decision, latency) = match item.answered {
-                Some(answered) => answered,
+                Some(answered) => {
+                    self.latencies.push_back(answered.1);
+                    answered
+                }
                 None => {
                     let (decision, latency) = self.policy.decide(&item.request);
+                    self.latencies.push_back(latency);
                     if decision.verdict != Verdict::Ask {
                         self.inbox.respond(item.request.request_id, &decision);
                     }
@@ -189,7 +221,24 @@ impl GuardService {
                 report.errors.push(e);
             }
         }
+        while self.latencies.len() > LATENCIES {
+            self.latencies.pop_front();
+        }
+        report.decisions = std::mem::take(&mut self.fresh);
+        report.changed |= !report.decisions.is_empty();
         report
+    }
+
+    /// 95th percentile of how long the policy took to decide, in
+    /// microseconds; `None` before the first decision.
+    pub fn p95_latency_us(&self) -> Option<u64> {
+        let mut all: Vec<u64> = self.latencies.iter().copied().collect();
+        if all.is_empty() {
+            return None;
+        }
+        all.sort_unstable();
+        let rank = (all.len() * 95).div_ceil(100).max(1) - 1;
+        Some(all[rank])
     }
 
     /// Held calls waiting for the user, oldest first.
@@ -442,6 +491,7 @@ impl GuardService {
             self.stats.jev += 1;
         }
         let saved = self.decisions.record(&record);
+        self.fresh.push(record.clone());
         self.recent.push_front(record);
         self.recent.truncate(RECENT);
         saved

@@ -1,7 +1,7 @@
 use rusqlite::{OptionalExtension, Row, params};
 use swarmux_application::ports::{JobRepository, NewJob, StoredEvent};
-use swarmux_application::{AppResult, JobSummary};
-use swarmux_domain::{Job, JobId, JobResult, JobStatus, Millis, PromptId, SessionId};
+use swarmux_application::{AppError, AppResult, JobSummary};
+use swarmux_domain::{Job, JobId, JobResult, JobStatus, Millis, PromptId, ReviewState, SessionId};
 
 use super::sessions::session_id_at;
 use super::{OrStorage, SqliteStore};
@@ -30,8 +30,8 @@ fn status_at(r: &Row, idx: usize) -> rusqlite::Result<JobStatus> {
     })
 }
 
-const JOB_COLS: &str =
-    "id, session_id, prompt_id, body_rendered, model, priority, fork, status, created_at";
+const JOB_COLS: &str = "id, session_id, prompt_id, body_rendered, model, priority, fork, status, \
+     created_at, wants_review, review_of";
 
 fn job_from_row(r: &Row) -> rusqlite::Result<Job> {
     Ok(Job {
@@ -44,12 +44,15 @@ fn job_from_row(r: &Row) -> rusqlite::Result<Job> {
         fork: r.get(6)?,
         status: status_at(r, 7)?,
         created_at: r.get(8)?,
+        wants_review: r.get(9)?,
+        review_of: r.get::<_, Option<i64>>(10)?.map(JobId),
     })
 }
 
 const SUMMARY_SELECT: &str = "
 SELECT j.id, j.session_id, COALESCE(s.name, ''), j.body_rendered, j.model, j.status,
-       r.cost_usd, r.tokens_in, r.tokens_out, r.duration_ms, j.created_at, j.started_at, r.error
+       r.cost_usd, r.tokens_in, r.tokens_out, r.duration_ms, j.created_at, j.started_at, r.error,
+       j.review_of
 FROM jobs j
 LEFT JOIN sessions s ON s.id = j.session_id
 LEFT JOIN job_results r ON r.job_id = j.id";
@@ -69,6 +72,7 @@ fn summary_from_row(r: &Row) -> rusqlite::Result<JobSummary> {
         created_at: r.get(10)?,
         started_at: r.get(11)?,
         error: r.get(12)?,
+        review_of: r.get::<_, Option<i64>>(13)?.map(JobId),
     })
 }
 
@@ -76,8 +80,9 @@ impl JobRepository for SqliteStore {
     fn insert(&self, job: &NewJob, now: Millis) -> AppResult<JobId> {
         self.conn
             .execute(
-                "INSERT INTO jobs (prompt_id, body_rendered, session_id, model, priority, fork, status, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                "INSERT INTO jobs (prompt_id, body_rendered, session_id, model, priority, fork, status,
+                                   created_at, wants_review, review_of)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                 params![
                     job.prompt_id.map(|p| p.0),
                     job.prompt,
@@ -86,7 +91,9 @@ impl JobRepository for SqliteStore {
                     job.priority,
                     job.fork,
                     JobStatus::Queued.as_str(),
-                    now
+                    now,
+                    job.wants_review,
+                    job.review_of.map(|j| j.0)
                 ],
             )
             .or_storage()?;
@@ -276,6 +283,30 @@ impl JobRepository for SqliteStore {
             .optional()
             .or_storage()
     }
+
+    fn set_review(&self, id: JobId, review: &ReviewState) -> AppResult<()> {
+        self.conn
+            .execute(
+                "UPDATE jobs SET review = ?1 WHERE id = ?2",
+                params![review.encode(), id.0],
+            )
+            .or_storage()?;
+        Ok(())
+    }
+
+    fn review(&self, id: JobId) -> AppResult<Option<ReviewState>> {
+        let text: Option<String> = self
+            .conn
+            .query_row("SELECT review FROM jobs WHERE id = ?1", [id.0], |r| {
+                r.get(0)
+            })
+            .optional()
+            .or_storage()?
+            .flatten();
+        text.map(|t| ReviewState::decode(&t))
+            .transpose()
+            .map_err(|e| AppError::Storage(e.to_string()))
+    }
 }
 
 #[cfg(test)]
@@ -408,6 +439,40 @@ mod tests {
         assert_eq!(s.summaries(1).unwrap().len(), 1);
         assert_eq!(s.summary(a).unwrap().unwrap().prompt, "first");
         assert_eq!(s.summary(JobId(99)).unwrap(), None);
+    }
+
+    #[test]
+    fn review_requests_links_and_states_round_trip() {
+        use swarmux_domain::{Review, ReviewVerdict};
+        let (s, sess) = store();
+        let mut new = new_job(sess.id, "fix");
+        new.wants_review = true;
+        let job = JobRepository::insert(&s, &new, 1).unwrap();
+        let mut review = new_job(sess.id, "swarmux review of job #1");
+        review.review_of = Some(job);
+        let rid = JobRepository::insert(&s, &review, 2).unwrap();
+
+        let got = JobRepository::get(&s, job).unwrap().unwrap();
+        assert!(got.wants_review && got.review_of.is_none());
+        assert_eq!(
+            JobRepository::get(&s, rid).unwrap().unwrap().review_of,
+            Some(job)
+        );
+        assert_eq!(s.summary(rid).unwrap().unwrap().review_of, Some(job));
+
+        assert_eq!(s.review(job).unwrap(), None);
+        let state = ReviewState::Done {
+            review: Review {
+                verdict: ReviewVerdict::Concerns,
+                concerns: vec!["no test for the \"empty\" case".into()],
+                diffs_checked: 3,
+            },
+            job: rid,
+            cost_usd: 0.031,
+        };
+        s.set_review(job, &state).unwrap();
+        assert_eq!(s.review(job).unwrap(), Some(state));
+        assert_eq!(s.review(JobId(99)).unwrap(), None);
     }
 
     #[test]

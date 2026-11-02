@@ -12,7 +12,7 @@ use tokio::process::Command;
 use tokio::runtime::Handle;
 use tokio::task::AbortHandle;
 
-use super::command::{build_args, user_message};
+use super::command::{build_args, display, user_message};
 use super::parse::parse_line;
 use crate::hook::{ENV_JOB, ENV_PIPE, hook_settings};
 
@@ -111,6 +111,14 @@ impl AgentRunner for ClaudeCli {
         if let Some(task) = lock(&self.running).remove(&job) {
             task.abort();
         }
+    }
+
+    fn command_line(&self, request: &RunRequest) -> Option<String> {
+        let mut args = build_args(request);
+        if let Some(guard) = &self.guard {
+            args.extend(guard.args());
+        }
+        Some(display(&args))
     }
 }
 

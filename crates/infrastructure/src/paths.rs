@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 /// Where swarmux keeps its data. Injectable so tests never touch the real home.
 #[derive(Clone, Debug)]
 pub struct Paths {
+    /// The user's home folder.
+    pub home: PathBuf,
     pub data_dir: PathBuf,
     pub db: PathBuf,
     pub config: PathBuf,
@@ -15,6 +17,7 @@ impl Paths {
         let db = data_dir.join("swarmux.db");
         let config = data_dir.join("config.toml");
         Paths {
+            home: home.to_path_buf(),
             data_dir,
             db,
             config,

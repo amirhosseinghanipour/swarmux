@@ -70,6 +70,8 @@ mod tests {
             fork: false,
             status: JobStatus::Queued,
             created_at,
+            wants_review: false,
+            review_of: None,
         }
     }
 

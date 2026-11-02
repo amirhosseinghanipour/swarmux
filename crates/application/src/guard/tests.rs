@@ -347,3 +347,39 @@ mod jev {
         assert_eq!(f.inbox.answers().len(), 1);
     }
 }
+
+#[test]
+fn each_pump_hands_out_the_new_decisions_once() {
+    let mut f = fixture(&["Bash(make:*)"], &[], Unmatched::Ask);
+    f.inbox.push(Some(JobId(2)), "Bash", "make");
+    let held = f.inbox.push(Some(JobId(2)), "Bash", "deploy");
+    let report = f.svc.pump();
+    let outcomes: Vec<Outcome> = report.decisions.iter().map(|d| d.outcome).collect();
+    assert_eq!(outcomes, [Outcome::Allow, Outcome::Ask]);
+    assert!(f.svc.pump().decisions.is_empty());
+    f.svc.approve(held).unwrap();
+    let report = f.svc.pump();
+    assert!(report.changed);
+    assert_eq!(report.decisions[0].job_id, Some(JobId(2)));
+    assert_eq!(report.decisions[0].outcome, Outcome::Allow);
+}
+
+#[test]
+fn shares_and_p95_cover_instant_decisions() {
+    let mut f = fixture(&["Bash(make:*)"], &["WebFetch"], Unmatched::Pass);
+    assert_eq!(f.svc.p95_latency_us(), None);
+    assert_eq!(f.svc.stats().share(0), None);
+    for i in 1..=20 {
+        f.inbox
+            .push_answered("Bash", "make", Decision::new(Verdict::Allow, None));
+        if i % 10 == 0 {
+            f.inbox.push(None, "WebFetch", "x");
+        }
+    }
+    f.svc.pump();
+    let s = f.svc.stats();
+    assert_eq!((s.tool_calls(), s.total()), (22, 22));
+    assert_eq!(s.share(s.allowed), Some(20.0 / 22.0));
+    // The fake transport reports 7 µs; the policy itself takes at most a few.
+    assert!(f.svc.p95_latency_us().unwrap() <= 1_000);
+}

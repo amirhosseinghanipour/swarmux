@@ -5,7 +5,11 @@
 
 use std::collections::{HashMap, VecDeque};
 
-use crate::{Actor, AgentEvent, JobId, JobResult, JobStatus};
+use crate::subagent::{self, Subagent, SubagentStatus};
+use crate::{
+    Actor, AgentEvent, JobId, JobResult, JobStatus, Phase, PhaseInput, ReviewState, TokenTally,
+    phase_of,
+};
 
 const LOG_CAP: usize = 500;
 const TEXT_MAX: usize = 160;
@@ -35,8 +39,30 @@ pub struct JobProgress {
     pub context_window: Option<u64>,
     pub subagents_spawned: u32,
     pub last_tick: u32,
+    /// Subagents in the order they started.
+    pub subagents: Vec<Subagent>,
+    /// The lead's own usage.
+    pub lead_tokens: TokenTally,
+    /// When guard, routing and JEV decisions were made for this job.
+    pub decision_marks: Vec<u32>,
+    /// Why the loop breaker stopped an agent, oldest first.
+    pub loop_stops: Vec<String>,
+    /// `None` when no review was asked for.
+    pub review: Option<ReviewState>,
+    /// When each phase (in [`Phase::ALL`] order) was first reached.
+    pub phase_ticks: [Option<u32>; 7],
+    /// The command line the job runs with, when known.
+    pub command: Option<String>,
+    /// Name of the main actor in the log and timeline ("lead", or "reviewer").
+    pub lead_label: String,
+    /// Added to every logged time, so a review's log lines up with its job's.
+    pub log_offset: u32,
+    /// Cache-read tokens of the whole job, once Claude Code reported them.
+    final_cache_read: Option<u64>,
     /// Subagent tool_use id → label (e.g. "explorer").
     labels: HashMap<String, String>,
+    /// Subagent calls seen while replaying, not yet matched to an actor.
+    replay_starts: VecDeque<(String, u32)>,
 }
 
 impl JobProgress {
@@ -59,13 +85,107 @@ impl JobProgress {
             context_window: None,
             subagents_spawned: 0,
             last_tick: 0,
+            subagents: Vec::new(),
+            lead_tokens: TokenTally::default(),
+            decision_marks: Vec::new(),
+            loop_stops: Vec::new(),
+            review: None,
+            phase_ticks: [Some(0), None, None, None, None, None, None],
+            command: None,
+            lead_label: "lead".into(),
+            log_offset: 0,
+            final_cache_read: None,
             labels: HashMap::new(),
+            replay_starts: VecDeque::new(),
+        }
+    }
+
+    /// The step the job is at now.
+    pub fn phase(&self) -> Phase {
+        phase_of(PhaseInput {
+            status: self.status,
+            decisions: self.decision_marks.len() as u32,
+            subagents_started: self.subagents.len(),
+            subagents_running: self.subagents_running(),
+            review: self.review.as_ref(),
+        })
+    }
+
+    pub fn subagents_running(&self) -> usize {
+        self.subagents.iter().filter(|s| s.is_running()).count()
+    }
+
+    /// Cache-read tokens so far: the final figure once known, else the sum
+    /// of the usage reports.
+    pub fn cache_read(&self) -> u64 {
+        self.final_cache_read.unwrap_or_else(|| {
+            self.lead_tokens.cache_read
+                + self
+                    .subagents
+                    .iter()
+                    .map(|s| s.tokens.cache_read)
+                    .sum::<u64>()
+        })
+    }
+
+    /// Makes this the progress of a review that started `offset` ticks into
+    /// the reviewed job.
+    pub fn as_reviewer(&mut self, offset: u32) {
+        self.lead_label = "reviewer".into();
+        self.log_offset = offset;
+        if let Some(lane) = self.lanes.first_mut() {
+            lane.label = "reviewer".into();
+        }
+    }
+
+    /// Notes a guard, routing or JEV decision made for this job.
+    pub fn record_decision(&mut self, tick: u32) {
+        self.decision_marks.push(tick);
+        self.refresh_phase(tick);
+    }
+
+    /// Notes that the loop breaker stopped an agent, and why.
+    pub fn record_loop_stop(&mut self, reason: &str) {
+        self.loop_stops.push(reason.to_string());
+    }
+
+    pub fn set_review(&mut self, review: Option<ReviewState>, tick: u32) {
+        self.review = review;
+        self.refresh_phase(tick);
+    }
+
+    /// Sets the model a subagent runs on (from its definition).
+    pub fn set_subagent_model(&mut self, id: &str, model: Option<String>) {
+        if let Some(s) = self.subagents.iter_mut().find(|s| s.id == id) {
+            s.model = model;
+        }
+    }
+
+    /// Records the first time the current phase was reached.
+    fn refresh_phase(&mut self, tick: u32) {
+        let slot = &mut self.phase_ticks[self.phase().index()];
+        if slot.is_none() {
+            *slot = Some(tick);
+        }
+    }
+
+    /// Ends subagents still marked running when the job itself ends.
+    fn close_subagents(&mut self, tick: u32) {
+        let status = if self.status == JobStatus::Done {
+            SubagentStatus::Done
+        } else {
+            SubagentStatus::Failed
+        };
+        for s in self.subagents.iter_mut().filter(|s| s.is_running()) {
+            s.status = status;
+            let last = s.marks.last().copied().unwrap_or(tick);
+            s.ended_tick = Some(last.max(s.started_tick));
         }
     }
 
     pub fn label_for(&self, actor: &Actor) -> String {
         match actor {
-            Actor::Lead => "lead".into(),
+            Actor::Lead => self.lead_label.clone(),
             Actor::Subagent(id) => self.labels.get(id).cloned().unwrap_or_else(|| id.clone()),
         }
     }
@@ -86,16 +206,27 @@ impl JobProgress {
             self.labels.insert(id.clone(), label.to_string());
         }
         self.mark(ev.actor(), tick);
+        subagent::observe(&mut self.subagents, ev, tick);
+        let finished = self.apply_inner(ev, tick);
+        if finished.is_some() {
+            self.close_subagents(tick);
+        }
+        self.refresh_phase(tick);
+        finished
+    }
 
+    fn apply_inner(&mut self, ev: &AgentEvent, tick: u32) -> Option<JobResult> {
         match ev {
             AgentEvent::Usage {
                 input,
+                output,
                 cache_read,
                 cache_creation,
                 actor: Actor::Lead,
-                ..
             } => {
                 self.context_used = input + cache_read + cache_creation;
+                self.lead_tokens
+                    .add(*input, *output, *cache_read, *cache_creation, tick);
                 None
             }
             AgentEvent::Usage { .. } => None,
@@ -122,6 +253,7 @@ impl JobProgress {
                 self.tokens_out = *tokens_out;
                 self.context_window = *context_window;
                 self.subagents_spawned = *subagents_spawned;
+                self.final_cache_read = Some(*cache_read);
                 self.status = if *is_error {
                     JobStatus::Failed
                 } else {
@@ -173,6 +305,7 @@ impl JobProgress {
         }
         self.last_tick = self.last_tick.max(tick);
         self.status = status;
+        self.close_subagents(tick);
         self.push_log(tick, "swarmux", kind, error.unwrap_or("by user"));
         Some(JobResult {
             tokens_in: self.tokens_in,
@@ -194,9 +327,73 @@ impl JobProgress {
             id => Actor::Subagent(id.to_string()),
         };
         self.last_tick = self.last_tick.max(tick);
+        if actor == Actor::Lead
+            && kind == "tool_use"
+            && let Some(summary) = text
+                .strip_prefix("Task ")
+                .or_else(|| text.strip_prefix("Agent "))
+        {
+            self.replay_starts.push_back((summary.to_string(), tick));
+        }
+        if let Actor::Subagent(id) = &actor {
+            self.replay_subagent(id, tick);
+        }
+        if kind == "usage"
+            && let Some([input, output, read, creation]) = parse_usage(text)
+        {
+            let ev = AgentEvent::Usage {
+                input,
+                output,
+                cache_read: read,
+                cache_creation: creation,
+                actor: actor.clone(),
+            };
+            self.mark(&actor, tick);
+            subagent::observe(&mut self.subagents, &ev, tick);
+            if actor == Actor::Lead {
+                self.context_used = input + read + creation;
+                self.lead_tokens.add(input, output, read, creation, tick);
+            }
+            return;
+        }
+        if let Actor::Subagent(id) = &actor
+            && let Some(s) = self.subagents.iter_mut().find(|s| &s.id == id)
+        {
+            s.marks.push(tick);
+        }
         self.mark(&actor, tick);
         let label = self.label_for(&actor);
         self.push_log(tick, &label, kind, text);
+        self.refresh_phase(tick);
+    }
+
+    /// The first stored event of a subagent: match it to the oldest Task
+    /// call not matched yet (stored calls carry no tool_use id).
+    fn replay_subagent(&mut self, id: &str, tick: u32) {
+        if self.subagents.iter().any(|s| s.id == id) {
+            return;
+        }
+        let (summary, start) = self
+            .replay_starts
+            .pop_front()
+            .unwrap_or_else(|| ("Task".to_string(), tick));
+        let ev = AgentEvent::ToolUse {
+            id: id.to_string(),
+            name: "Task".into(),
+            summary,
+            actor: Actor::Lead,
+        };
+        subagent::observe(&mut self.subagents, &ev, start);
+        if let Some(kind) = self.subagents.last().map(|s| s.kind.clone()) {
+            self.labels.insert(id.to_string(), kind);
+        }
+    }
+
+    /// Ends a replayed job: its status, and its subagents with it.
+    pub fn finish_replay(&mut self, status: JobStatus) {
+        self.status = status;
+        self.close_subagents(self.last_tick);
+        self.refresh_phase(self.last_tick);
     }
 
     /// Adds a line from swarmux itself, such as why a prompt came here.
@@ -222,7 +419,7 @@ impl JobProgress {
     }
 
     fn push_log(&mut self, tick: u32, label: &str, kind: &str, text: &str) {
-        let secs = tick / 10;
+        let secs = (tick + self.log_offset) / 10;
         self.log.push_back(format!(
             "{:02}:{:02} {label:<10} {kind:<11} {text}",
             secs / 60,
@@ -251,7 +448,13 @@ pub fn describe(ev: &AgentEvent) -> String {
                 first.to_string()
             }
         }
-        AgentEvent::Usage { input, output, .. } => format!("in {input} out {output}"),
+        AgentEvent::Usage {
+            input,
+            output,
+            cache_read,
+            cache_creation,
+            ..
+        } => format!("in {input} out {output} cache {cache_read}/{cache_creation}"),
         AgentEvent::Result {
             cost_usd,
             duration_ms,
@@ -267,6 +470,21 @@ pub fn describe(ev: &AgentEvent) -> String {
     match s.char_indices().nth(TEXT_MAX) {
         Some((i, _)) => format!("{}…", &s[..i]),
         None => s,
+    }
+}
+
+/// Reads a stored usage line (`in 2 out 5 cache 100/10`; older rows have no
+/// cache part).
+fn parse_usage(text: &str) -> Option<[u64; 4]> {
+    let w: Vec<&str> = text.split_whitespace().collect();
+    let num = |s: &str| s.parse::<u64>().ok();
+    match w.as_slice() {
+        ["in", i, "out", o] => Some([num(i)?, num(o)?, 0, 0]),
+        ["in", i, "out", o, "cache", c] => {
+            let (r, cc) = c.split_once('/')?;
+            Some([num(i)?, num(o)?, num(r)?, num(cc)?])
+        }
+        _ => None,
     }
 }
 
@@ -367,7 +585,107 @@ mod tests {
         assert_eq!(p.lanes[1].marks, [12]);
         assert_eq!(p.last_tick, 12);
         assert!(p.log[0].starts_with("00:00 lead       text        hello"));
-        assert!(p.log[1].contains("toolu_A"));
+        assert!(p.log[1].contains("Task"), "{}", p.log[1]);
+        assert_eq!(p.subagents.len(), 1);
+    }
+
+    #[test]
+    fn replay_matches_task_calls_and_reads_usage() {
+        let mut p = progress();
+        p.replay("lead", "tool_use", "Task worker: run tests", 2);
+        p.replay("lead", "tool_use", "Agent explorer: map", 3);
+        p.replay("lead", "usage", "in 2 out 10 cache 100/5", 4);
+        p.replay("toolu_B", "text", "mapping", 6);
+        p.replay("toolu_A", "usage", "in 1 out 30", 9);
+        p.finish_replay(JobStatus::Done);
+        let kinds: Vec<&str> = p.subagents.iter().map(|s| s.kind.as_str()).collect();
+        assert_eq!(kinds, ["worker", "explorer"]);
+        assert_eq!(p.subagents[0].started_tick, 2);
+        assert_eq!(p.subagents[1].tokens.output, 30);
+        assert_eq!(p.lead_tokens.cache_read, 100);
+        assert_eq!(p.context_used, 107);
+        assert!(p.subagents.iter().all(|s| s.status == SubagentStatus::Done));
+        assert_eq!(p.phase(), Phase::Ship);
+        assert_eq!(p.lanes[1].label, "worker");
+        assert_eq!(parse_usage("in x out 1"), None);
+    }
+
+    fn task(id: &str, kind: &str) -> AgentEvent {
+        AgentEvent::ToolUse {
+            id: id.into(),
+            name: "Task".into(),
+            summary: format!("{kind}: work"),
+            actor: Actor::Lead,
+        }
+    }
+
+    fn finish(id: &str) -> AgentEvent {
+        AgentEvent::ToolResult {
+            tool_use_id: id.into(),
+            is_error: false,
+            preview: "ok".into(),
+            actor: Actor::Lead,
+        }
+    }
+
+    #[test]
+    fn phases_are_reached_in_order_and_remembered() {
+        let mut p = progress();
+        assert_eq!(p.phase(), Phase::Plan);
+        p.record_decision(3);
+        assert_eq!(p.phase(), Phase::Fork);
+        p.apply(&task("A", "worker"), 5);
+        assert_eq!(p.phase(), Phase::Delegate);
+        p.apply(&task("B", "explorer"), 6);
+        assert_eq!((p.phase(), p.subagents_running()), (Phase::Parallel, 2));
+        p.apply(&finish("A"), 9);
+        p.apply(&finish("B"), 11);
+        assert_eq!(p.phase(), Phase::Merge);
+        p.set_review(Some(ReviewState::Requested), 11);
+        p.apply(&result(0.2, false), 14);
+        assert_eq!(p.phase(), Phase::Audit);
+        let ticks: Vec<Option<u32>> = p.phase_ticks.to_vec();
+        assert_eq!(
+            ticks,
+            [Some(0), Some(3), Some(5), Some(6), Some(11), Some(14), None]
+        );
+        p.set_review(None, 20);
+        assert_eq!((p.phase(), p.phase_ticks[6]), (Phase::Ship, Some(20)));
+    }
+
+    #[test]
+    fn lead_and_subagent_tokens_and_cache() {
+        let mut p = progress();
+        p.apply(&task("A", "worker"), 1);
+        let usage = |actor: Actor, out: u64| AgentEvent::Usage {
+            input: 1,
+            output: out,
+            cache_read: 40,
+            cache_creation: 0,
+            actor,
+        };
+        p.apply(&usage(Actor::Lead, 5), 2);
+        p.apply(&usage(Actor::Lead, 5), 2);
+        p.apply(&usage(Actor::Subagent("A".into()), 9), 3);
+        assert_eq!((p.lead_tokens.turns, p.lead_tokens.seen), (1, 46));
+        assert_eq!(p.subagents[0].tokens.output, 9);
+        assert_eq!(p.cache_read(), 80);
+        p.apply(&result(0.1, false), 4);
+        assert_eq!(p.cache_read(), 3, "the final figure wins");
+        assert_eq!(p.subagents[0].status, SubagentStatus::Done);
+    }
+
+    #[test]
+    fn cancel_fails_running_subagents_and_keeps_loop_stops() {
+        let mut p = progress();
+        p.apply(&task("A", "worker"), 1);
+        p.record_loop_stop("loop guard: Bash failed the same way twice");
+        p.cancel(4);
+        assert_eq!(p.subagents[0].status, SubagentStatus::Failed);
+        assert_eq!(p.subagents[0].ended_tick, Some(4));
+        assert_eq!(p.loop_stops.len(), 1);
+        p.set_subagent_model("A", Some("haiku".into()));
+        assert_eq!(p.subagents[0].model.as_deref(), Some("haiku"));
     }
 
     #[test]
@@ -410,6 +728,21 @@ mod tests {
         );
         assert_eq!(p.context_used, 112);
         assert!(p.log.is_empty(), "usage is not logged");
+    }
+
+    #[test]
+    fn reviewer_logs_with_offset() {
+        let mut p = progress();
+        p.as_reviewer(650);
+        p.apply(
+            &AgentEvent::Text {
+                text: "checking".into(),
+                actor: Actor::Lead,
+            },
+            20,
+        );
+        assert!(p.log[0].starts_with("01:07 reviewer"), "{}", p.log[0]);
+        assert_eq!(p.lanes[0].label, "reviewer");
     }
 
     #[test]

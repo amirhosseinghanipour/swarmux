@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use swarmux_domain::{JobId, JobProgress, JobResult, JobStatus, Millis, SessionId};
+use swarmux_domain::{JobId, JobProgress, JobResult, JobStatus, Millis, ReviewState, SessionId};
 
 use crate::ports::JobRepository;
 use crate::{AppError, AppResult};
@@ -25,6 +25,8 @@ pub struct JobSummary {
     pub created_at: Millis,
     pub started_at: Option<Millis>,
     pub error: Option<String>,
+    /// Set on a review job: the job it audits.
+    pub review_of: Option<JobId>,
 }
 
 impl JobSummary {
@@ -51,6 +53,8 @@ impl JobSummary {
 pub struct JobDetail {
     pub summary: JobSummary,
     pub result: Option<JobResult>,
+    /// `None` when no review was started for the job.
+    pub review: Option<ReviewState>,
 }
 
 /// Use cases for past jobs.
@@ -75,19 +79,75 @@ impl HistoryService {
         Ok(JobDetail {
             summary,
             result: self.jobs.result(id)?,
+            review: self.review(id)?,
         })
+    }
+
+    /// The job's review. One still marked running whose review job has
+    /// ended (swarmux quit meanwhile) is shown as failed.
+    pub fn review(&self, id: JobId) -> AppResult<Option<ReviewState>> {
+        let Some(state) = self.jobs.review(id)? else {
+            return Ok(None);
+        };
+        if let ReviewState::Running { job } = state {
+            let status = self.jobs.summary(job)?.map(|s| s.status);
+            if status.is_none_or(|s| s.is_finished()) {
+                return Ok(Some(ReviewState::Failed {
+                    error: "review interrupted".into(),
+                    job: Some(job),
+                    cost_usd: 0.0,
+                }));
+            }
+        }
+        Ok(Some(state))
+    }
+
+    /// Rebuilds a job and its review run (if any) to view them again.
+    pub fn replay_with_review(&self, id: JobId) -> AppResult<(JobProgress, Option<JobProgress>)> {
+        let mut job = self.replay(id)?;
+        let review = self.review(id)?;
+        let run = match review.as_ref().and_then(ReviewState::job) {
+            Some(rid) => {
+                let start = |j: JobId| -> AppResult<Option<Millis>> {
+                    Ok(self
+                        .jobs
+                        .summary(j)?
+                        .map(|s| s.started_at.unwrap_or(s.created_at)))
+                };
+                let offset = match (start(id)?, start(rid)?) {
+                    (Some(a), Some(b)) => ((b - a).max(0) / 100) as u32,
+                    _ => job.last_tick,
+                };
+                Some(self.rebuild(rid, Some(offset))?)
+            }
+            None => None,
+        };
+        let end = run
+            .as_ref()
+            .map_or(job.last_tick, |r| r.log_offset + r.last_tick);
+        job.set_review(review, end);
+        Ok((job, run))
     }
 
     /// Rebuilds a job's progress from what was stored, to view it again.
     pub fn replay(&self, id: JobId) -> AppResult<JobProgress> {
+        self.rebuild(id, None)
+    }
+
+    /// Replays `id`; with `reviewer`, as a review that started that many
+    /// ticks into the job it audits.
+    fn rebuild(&self, id: JobId, reviewer: Option<u32>) -> AppResult<JobProgress> {
         let s = self.jobs.summary(id)?.ok_or(AppError::JobNotFound)?;
         let mut p = JobProgress::new(id, &s.session_name, &s.model);
+        if let Some(offset) = reviewer {
+            p.as_reviewer(offset);
+        }
         let start = s.started_at.unwrap_or(s.created_at);
         for ev in self.jobs.events(id)? {
             let tick = ((ev.ts - start).max(0) / 100) as u32;
             p.replay(&ev.actor, &ev.kind, &ev.payload, tick);
         }
-        p.status = s.status;
+        p.finish_replay(s.status);
         p.cost_usd = s.cost_usd;
         p.tokens_in = s.tokens_in;
         p.tokens_out = s.tokens_out;
@@ -120,6 +180,8 @@ mod tests {
             model: "sonnet".into(),
             priority: 0,
             fork: false,
+            wants_review: false,
+            review_of: None,
         };
         JobRepository::insert(store, &job, now).unwrap()
     }
@@ -180,6 +242,54 @@ mod tests {
         assert_eq!(p.status, JobStatus::Done);
         assert_eq!(p.last_tick, 20);
         assert!(p.log[0].contains("hi"));
+    }
+
+    #[test]
+    fn review_comes_back_with_detail_and_replay() {
+        use swarmux_domain::{Review, ReviewVerdict};
+        let (store, s) = store();
+        let id = add(&store, &s, "p", 1_000);
+        store.set_status(id, JobStatus::Running, 1_000).unwrap();
+        store.set_status(id, JobStatus::Done, 2_000).unwrap();
+        let rid = add(&store, &s, "swarmux review of job #1", 2_500);
+        store.set_status(rid, JobStatus::Running, 3_000).unwrap();
+        store
+            .append_event(rid, "text", "lead", "checking", 3_500)
+            .unwrap();
+        let svc = HistoryService::new(store.clone());
+
+        store
+            .set_review(id, &ReviewState::Running { job: rid })
+            .unwrap();
+        assert_eq!(
+            svc.review(id).unwrap(),
+            Some(ReviewState::Running { job: rid })
+        );
+        store
+            .set_status(rid, JobStatus::Interrupted, 4_000)
+            .unwrap();
+        assert!(matches!(
+            svc.detail(id).unwrap().review,
+            Some(ReviewState::Failed { ref error, .. }) if error == "review interrupted"
+        ));
+
+        let done = ReviewState::Done {
+            review: Review {
+                verdict: ReviewVerdict::Pass,
+                concerns: vec![],
+                diffs_checked: 2,
+            },
+            job: rid,
+            cost_usd: 0.02,
+        };
+        store.set_review(id, &done).unwrap();
+        let (job, run) = svc.replay_with_review(id).unwrap();
+        assert_eq!(job.review, Some(done));
+        let run = run.unwrap();
+        assert_eq!(run.log_offset, 20);
+        assert!(run.log[0].starts_with("00:02 reviewer"), "{}", run.log[0]);
+        assert_eq!(job.phase(), swarmux_domain::Phase::Ship);
+        assert_eq!(svc.review(rid).unwrap(), None);
     }
 
     #[test]

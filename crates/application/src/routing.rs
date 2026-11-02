@@ -307,7 +307,7 @@ impl RoutingService {
                 model: s.model.clone(),
                 recent: history
                     .iter()
-                    .filter(|j| j.session_id == s.id)
+                    .filter(|j| j.session_id == s.id && j.review_of.is_none())
                     .take(RECENT_PROMPTS)
                     .map(|j| summarize(&j.prompt, PREVIEW_MAX))
                     .collect(),

@@ -1,16 +1,19 @@
+mod review;
+
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
 use swarmux_domain::{
-    AgentEvent, DomainError, Job, JobId, JobProgress, JobStatus, Limits, LoopBreaker, LoopTrip,
-    Millis, PromptId, Session, SessionId, describe, plan, run_order,
+    AgentEvent, DomainError, Job, JobId, JobProgress, JobResult, JobStatus, Limits, LoopBreaker,
+    LoopTrip, Millis, PromptId, ReviewState, Session, SessionId, describe, plan, run_order,
 };
 
 use crate::ports::{
-    AgentRunner, Clock, JobRepository, NewJob, RunRequest, RunSink, RunnerMsg, SessionRepository,
-    SystemMonitor,
+    AgentCatalog, AgentRunner, Clock, JobRepository, NewJob, RunRequest, RunSink, RunnerMsg,
+    SessionRepository, SystemMonitor, Workspace,
 };
-use crate::{AppError, AppResult, RenderedPrompt, Settings};
+use crate::{AppError, AppResult, RenderedPrompt, ReviewSettings, Settings};
 
 /// Finished jobs kept in memory for the queue and dashboard.
 const KEEP_FINISHED: usize = 50;
@@ -24,6 +27,8 @@ struct Tracked {
     progress: JobProgress,
     started_at: Option<Millis>,
     breaker: LoopBreaker,
+    /// The session folder, once started.
+    cwd: Option<PathBuf>,
 }
 
 /// One row of the queue screen.
@@ -85,6 +90,10 @@ pub struct JobService {
     tracked: Vec<Tracked>,
     /// Last memory reading and when it was taken.
     ram: Option<(Millis, Option<u64>)>,
+    catalog: Option<Rc<dyn AgentCatalog>>,
+    /// Where review jobs read the diff; without it there are no reviews.
+    workspace: Option<Rc<dyn Workspace>>,
+    review: ReviewSettings,
 }
 
 impl JobService {
@@ -107,7 +116,45 @@ impl JobService {
             rx,
             tracked: Vec::new(),
             ram: None,
+            catalog: None,
+            workspace: None,
+            review: ReviewSettings::default(),
         }
+    }
+
+    /// Reviews finished jobs (when asked for) with `settings.model`, reading
+    /// the diff from `workspace`. `settings.enabled` is the starting default.
+    pub fn with_review(
+        mut self,
+        workspace: Rc<dyn Workspace>,
+        settings: &ReviewSettings,
+    ) -> JobService {
+        self.workspace = Some(workspace);
+        self.review = settings.clone();
+        self
+    }
+
+    /// Looks up which model each subagent runs on.
+    pub fn with_agent_catalog(mut self, catalog: Rc<dyn AgentCatalog>) -> JobService {
+        self.catalog = Some(catalog);
+        self
+    }
+
+    /// Whether newly dispatched jobs get a review.
+    pub fn review_next(&self) -> bool {
+        self.review.enabled && self.workspace.is_some()
+    }
+
+    /// Turns reviews of new jobs on or off. Returns the new setting, which
+    /// stays off without a workspace to read diffs from.
+    pub fn set_review_next(&mut self, on: bool) -> bool {
+        self.review.enabled = on;
+        self.review_next()
+    }
+
+    /// The reviewer's model.
+    pub fn review_model(&self) -> &str {
+        &self.review.model
     }
 
     pub fn with_limits(mut self, limits: Limits) -> JobService {
@@ -147,7 +194,8 @@ impl JobService {
 
     /// Queues `prompt` for the session; it starts as soon as it is allowed to.
     pub fn dispatch(&mut self, session_id: SessionId, prompt: &str) -> AppResult<JobId> {
-        self.enqueue(session_id, prompt, None, None, false)
+        let review = self.review_next();
+        self.enqueue(session_id, prompt, None, None, false, (review, None))
     }
 
     /// Like [`JobService::dispatch`], and records which template the job came from.
@@ -156,12 +204,14 @@ impl JobService {
         session_id: SessionId,
         rendered: &RenderedPrompt,
     ) -> AppResult<JobId> {
+        let review = self.review_next();
         self.enqueue(
             session_id,
             rendered.text(),
             Some(rendered.prompt_id()),
             None,
             false,
+            (review, None),
         )
     }
 
@@ -242,9 +292,60 @@ impl JobService {
         }
     }
 
-    /// The most recently dispatched job.
+    /// The most recently dispatched job (reviews aside).
     pub fn latest(&self) -> Option<&JobProgress> {
-        self.tracked.last().map(|t| &t.progress)
+        self.tracked
+            .iter()
+            .rev()
+            .find(|t| t.job.review_of.is_none())
+            .map(|t| &t.progress)
+    }
+
+    /// The job a review job audits, or the job itself.
+    pub fn subject_of(&self, id: JobId) -> JobId {
+        self.find(id)
+            .and_then(|i| self.tracked[i].job.review_of)
+            .unwrap_or(id)
+    }
+
+    /// The review of `job` from this run, queued, running or finished.
+    pub fn review_progress(&self, job: JobId) -> Option<&JobProgress> {
+        self.tracked
+            .iter()
+            .rev()
+            .find(|t| t.job.review_of == Some(job))
+            .map(|t| &t.progress)
+    }
+
+    /// Notes a guard, routing or JEV decision made for `job`.
+    pub fn observe_decision(&mut self, job: JobId) {
+        if let Some(i) = self.find(job) {
+            let tick = self.tick_of(i);
+            self.tracked[i].progress.record_decision(tick);
+        }
+    }
+
+    /// Where the timeline of `job` ends: now while it (or its review) runs,
+    /// else when the last of them finished.
+    pub fn timeline_end(&self, job: JobId) -> u32 {
+        let end = |i: usize| {
+            let p = &self.tracked[i].progress;
+            let own = if p.status == JobStatus::Running {
+                self.tick_of(i).max(p.last_tick)
+            } else {
+                p.last_tick
+            };
+            own + p.log_offset
+        };
+        let Some(i) = self.find(job) else {
+            return 0;
+        };
+        let review = self
+            .tracked
+            .iter()
+            .rposition(|t| t.job.review_of == Some(job) && t.started_at.is_some())
+            .map_or(0, end);
+        end(i).max(review)
     }
 
     /// A job queued, running or recently finished in this run.
@@ -321,11 +422,18 @@ impl JobService {
     fn track(&mut self, job: Job, session_name: &str) {
         let mut progress = JobProgress::new(job.id, session_name, &job.model);
         progress.status = JobStatus::Queued;
+        if job.wants_review {
+            progress.review = Some(ReviewState::Requested);
+        }
+        if job.review_of.is_some() {
+            progress.as_reviewer(0);
+        }
         self.tracked.push(Tracked {
             job,
             progress,
             started_at: None,
             breaker: LoopBreaker::new(self.loop_repeats),
+            cwd: None,
         });
     }
 
@@ -340,6 +448,7 @@ impl JobService {
             job.prompt_id,
             Some(job.model),
             fork,
+            (job.wants_review, job.review_of),
         )
     }
 
@@ -350,6 +459,7 @@ impl JobService {
         prompt_id: Option<PromptId>,
         model: Option<String>,
         fork: bool,
+        (wants_review, review_of): (bool, Option<JobId>),
     ) -> AppResult<JobId> {
         let prompt = prompt.trim();
         if prompt.is_empty() {
@@ -367,6 +477,8 @@ impl JobService {
             model: model.unwrap_or(session.model),
             priority: 0,
             fork,
+            wants_review,
+            review_of,
         };
         let id = self.jobs.insert(&new, now)?;
         self.track(
@@ -380,6 +492,8 @@ impl JobService {
                 fork,
                 status: JobStatus::Queued,
                 created_at: now,
+                wants_review,
+                review_of,
             },
             &session.name,
         );
@@ -437,10 +551,20 @@ impl JobService {
         self.jobs.set_status(id, JobStatus::Running, now)?;
         self.sessions.touch(session_id, now)?;
 
+        let offset = self.tracked[i]
+            .job
+            .review_of
+            .and_then(|of| self.find(of))
+            .and_then(|j| self.tracked[j].started_at)
+            .map_or(0, |at| ((now - at).max(0) / 100) as u32);
         let t = &mut self.tracked[i];
         t.started_at = Some(now);
         t.job.status = JobStatus::Running;
         t.progress.status = JobStatus::Running;
+        t.cwd = Some(session.cwd.clone());
+        if t.job.review_of.is_some() {
+            t.progress.as_reviewer(offset);
+        }
         let request = RunRequest {
             job_id: id,
             cwd: session.cwd,
@@ -451,7 +575,9 @@ impl JobService {
             permission_mode: session.permission_mode,
             prompt: t.job.prompt.clone(),
             lean: session.lean,
+            review: t.job.review_of.is_some(),
         };
+        t.progress.command = self.runner.command_line(&request);
         let tx = self.tx.clone();
         let sink: RunSink = Box::new(move |msg| {
             // The service may be gone at shutdown; nothing left to update then.
@@ -508,11 +634,17 @@ impl JobService {
                         now,
                     )?;
                 }
+                let finished = self.tracked[i].progress.apply(&ev, tick);
+                if let AgentEvent::ToolUse { id, .. } = &ev
+                    && ev.starts_subagent()
+                {
+                    self.resolve_subagent_model(i, id);
+                }
                 let t = &mut self.tracked[i];
-                let finished = t.progress.apply(&ev, tick);
                 match t.breaker.observe(&ev) {
                     Some(trip) if finished.is_none() => {
                         self.runner.cancel(job_id);
+                        t.progress.record_loop_stop(&trip.reason());
                         let stopped = t.progress.stop(&trip.reason(), tick);
                         applied.trip = Some(trip);
                         stopped
@@ -543,8 +675,38 @@ impl JobService {
             self.tracked[i].job.status = status;
             self.jobs.save_result(job_id, &result)?;
             self.jobs.set_status(job_id, status, now)?;
+            self.after_finish(i, &result)?;
         }
         Ok(applied)
+    }
+
+    /// Sets a new subagent's model from its definition ("inherit" means the lead's).
+    fn resolve_subagent_model(&mut self, i: usize, id: &str) {
+        let (Some(catalog), Some(cwd)) = (&self.catalog, &self.tracked[i].cwd) else {
+            return;
+        };
+        let p = &self.tracked[i].progress;
+        let Some(kind) = p.subagents.iter().find(|s| s.id == id).map(|s| &s.kind) else {
+            return;
+        };
+        let model = catalog
+            .profile(cwd, kind)
+            .model
+            .map(|m| if m == "inherit" { p.model.clone() } else { m });
+        self.tracked[i].progress.set_subagent_model(id, model);
+    }
+
+    /// Starts the review of a job that asked for one, or files a finished
+    /// review on the job it audited.
+    fn after_finish(&mut self, i: usize, result: &JobResult) -> AppResult<()> {
+        let job = &self.tracked[i].job;
+        if let Some(of) = job.review_of {
+            return self.file_review(i, of, result);
+        }
+        if job.wants_review {
+            return self.start_review(i, result);
+        }
+        Ok(())
     }
 
     /// A fork's `init` names the new Claude session: bind it to a new

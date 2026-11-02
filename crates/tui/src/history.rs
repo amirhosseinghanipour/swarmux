@@ -83,6 +83,7 @@ mod tests {
             created_at: 0,
             started_at: None,
             error: None,
+            review_of: None,
         }
     }
 

@@ -1,5 +1,6 @@
 //! swarmux infrastructure: adapters that implement the application's ports.
 
+pub mod agents;
 pub mod claude_cli;
 mod clock;
 pub mod config;
@@ -11,6 +12,7 @@ mod monitor;
 pub mod paths;
 pub mod sqlite;
 
+pub use agents::FsAgentCatalog;
 pub use claude_cli::{ClaudeCli, GuardHook, HaikuRouter};
 pub use clock::SystemClock;
 pub use config::{ConfigError, load_settings};

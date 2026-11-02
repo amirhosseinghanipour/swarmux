@@ -8,11 +8,17 @@ mod error;
 mod event;
 mod guard;
 mod job;
+mod json;
+mod model;
+mod phase;
 mod progress;
 mod prompt;
+mod review;
 mod schedule;
 mod session;
+mod subagent;
 mod template;
+mod tokens;
 
 pub use date::{iso_date, iso_minute};
 pub use error::DomainError;
@@ -22,11 +28,18 @@ pub use guard::{
     Verdict, error_signature, host_of,
 };
 pub use job::{Job, JobId, JobResult, JobStatus};
+pub use model::{Family, display_name};
+pub use phase::{Phase, PhaseInput, phase_of};
 pub use progress::{JobProgress, Lane, describe};
 pub use prompt::{PromptDraft, PromptId, PromptTemplate, parse_tags};
+pub use review::{
+    REVIEW_SYSTEM, Review, ReviewState, ReviewVerdict, diff_files, parse_review, review_prompt,
+};
 pub use schedule::{Limits, plan, run_order};
 pub use session::{DEFAULT_MODEL, DEFAULT_PERMISSION_MODE, Session, SessionId};
+pub use subagent::{Subagent, SubagentStatus, ToolOutcome};
 pub use template::{render, variables};
+pub use tokens::TokenTally;
 
 /// Unix time in milliseconds.
 pub type Millis = i64;

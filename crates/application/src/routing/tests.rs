@@ -118,6 +118,8 @@ fn router_sees_each_sessions_latest_prompts() {
             model: "sonnet".into(),
             priority: 0,
             fork: false,
+            wants_review: false,
+            review_of: None,
         };
         JobRepository::insert(f.store.as_ref(), &job, 10 + i as i64).unwrap();
     }

@@ -109,8 +109,17 @@ CREATE TABLE jev_consent (
 );
 ";
 
+/// Review step: which jobs want a review and which jobs are reviews.
+/// The review itself goes in the existing `jobs.review` column.
+const SCHEMA_V6: &str = "
+ALTER TABLE jobs ADD COLUMN wants_review INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE jobs ADD COLUMN review_of INTEGER REFERENCES jobs(id);
+";
+
 /// Migrations in order; index + 1 is the resulting `user_version`.
-const MIGRATIONS: &[&str] = &[SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5];
+const MIGRATIONS: &[&str] = &[
+    SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6,
+];
 
 /// Maps adapter errors into the application's error type.
 pub(crate) trait OrStorage<T> {
@@ -181,6 +190,8 @@ pub(crate) mod tests {
             model: "sonnet".into(),
             priority: 0,
             fork: false,
+            wants_review: false,
+            review_of: None,
         }
     }
 

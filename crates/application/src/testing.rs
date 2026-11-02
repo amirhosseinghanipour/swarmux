@@ -6,15 +6,15 @@ use std::path::{Path, PathBuf};
 
 use swarmux_domain::{
     Decision, Job, JobId, JobResult, JobStatus, Millis, PromptDraft, PromptId, PromptTemplate,
-    Session, SessionId,
+    ReviewState, Session, SessionId,
 };
 
 use crate::ports::{
-    Advice, AdviceAnswer, AdviceError, AdviceReply, AdviceRequest, AdviceSink, AgentRunner, Clock,
-    ConsentStore, DecisionAdvisor, DecisionRepository, HookInbox, HookRequest, InboxItem,
-    JobRepository, NewJob, PromptRepository, PromptRouter, RouteAnswer, RouteReply, RouteRequest,
-    RouteSink, RuleWriter, RunRequest, RunSink, RunnerMsg, SessionRepository, StoredEvent,
-    SystemMonitor, Workspace,
+    Advice, AdviceAnswer, AdviceError, AdviceReply, AdviceRequest, AdviceSink, AgentCatalog,
+    AgentProfile, AgentRunner, Clock, ConsentStore, DecisionAdvisor, DecisionRepository, HookInbox,
+    HookRequest, InboxItem, JobRepository, NewJob, PromptRepository, PromptRouter, RouteAnswer,
+    RouteReply, RouteRequest, RouteSink, RuleWriter, RunRequest, RunSink, RunnerMsg,
+    SessionRepository, StoredEvent, SystemMonitor, Workspace,
 };
 use crate::{AppError, AppResult, DecisionRecord, JobSummary};
 
@@ -43,6 +43,7 @@ struct JobRow {
     started_at: Option<Millis>,
     result: Option<JobResult>,
     events: Vec<StoredEvent>,
+    review: Option<ReviewState>,
 }
 
 /// Sessions, jobs and prompts in memory.
@@ -102,6 +103,7 @@ impl InMemoryStore {
             created_at: row.job.created_at,
             started_at: row.started_at,
             error: r.and_then(|r| r.error.clone()),
+            review_of: row.job.review_of,
         }
     }
 
@@ -174,6 +176,8 @@ impl JobRepository for InMemoryStore {
             fork: new.fork,
             status: JobStatus::Queued,
             created_at: now,
+            wants_review: new.wants_review,
+            review_of: new.review_of,
         };
         self.jobs.borrow_mut().insert(
             id.0,
@@ -182,6 +186,7 @@ impl JobRepository for InMemoryStore {
                 started_at: None,
                 result: None,
                 events: Vec::new(),
+                review: None,
             },
         );
         Ok(id)
@@ -276,6 +281,14 @@ impl JobRepository for InMemoryStore {
 
     fn summary(&self, id: JobId) -> AppResult<Option<JobSummary>> {
         Ok(self.jobs.borrow().get(&id.0).map(|r| self.summarize(r)))
+    }
+
+    fn set_review(&self, id: JobId, review: &ReviewState) -> AppResult<()> {
+        self.with_job(id, |r| r.review = Some(review.clone()))
+    }
+
+    fn review(&self, id: JobId) -> AppResult<Option<ReviewState>> {
+        self.with_job(id, |r| r.review.clone())
     }
 }
 
@@ -390,6 +403,54 @@ impl AgentRunner for FakeRunner {
 
     fn cancel(&self, job: JobId) {
         self.cancelled.borrow_mut().push(job);
+    }
+
+    fn command_line(&self, request: &RunRequest) -> Option<String> {
+        let mode = if request.review {
+            "--tools Read,Grep,Glob --no-session-persistence".to_string()
+        } else if request.resume {
+            format!("--resume {}", request.session_id)
+        } else {
+            format!("--session-id {}", request.session_id)
+        };
+        Some(format!("claude -p --model {} {mode}", request.model))
+    }
+}
+
+/// Subagent definitions by type, set by the test.
+#[derive(Default)]
+pub struct FakeAgentCatalog {
+    profiles: RefCell<HashMap<String, AgentProfile>>,
+    asked: RefCell<Vec<(PathBuf, String)>>,
+}
+
+impl FakeAgentCatalog {
+    /// Defines `agent_type` with `model`.
+    pub fn define(&self, agent_type: &str, model: &str) {
+        self.profiles.borrow_mut().insert(
+            agent_type.to_string(),
+            AgentProfile {
+                model: Some(model.to_string()),
+                description: None,
+            },
+        );
+    }
+
+    pub fn asked(&self) -> Vec<(PathBuf, String)> {
+        self.asked.borrow().clone()
+    }
+}
+
+impl AgentCatalog for FakeAgentCatalog {
+    fn profile(&self, cwd: &Path, agent_type: &str) -> AgentProfile {
+        self.asked
+            .borrow_mut()
+            .push((cwd.to_path_buf(), agent_type.to_string()));
+        self.profiles
+            .borrow()
+            .get(agent_type)
+            .cloned()
+            .unwrap_or_default()
     }
 }
 

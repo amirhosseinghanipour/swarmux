@@ -29,6 +29,7 @@ fn request(cwd: PathBuf, prompt: &str) -> RunRequest {
         permission_mode: "default".into(),
         prompt: prompt.into(),
         lean: false,
+        review: false,
     }
 }
 
@@ -254,4 +255,71 @@ fn cancel_kills_the_process() {
             .all(|m| !matches!(m, RunnerMsg::Exited { .. })),
         "a cancelled job reports nothing more"
     );
+}
+
+#[test]
+fn review_runs_read_only_and_answer_with_a_verdict() {
+    use swarmux_domain::{AgentEvent, ReviewVerdict, parse_review};
+    let dir = tempfile::tempdir().unwrap();
+    let echo = dir.path().join("echo.json");
+    let req = RunRequest {
+        review: true,
+        model: "haiku".into(),
+        ..request(dir.path().into(), "swarmux review of job #1")
+    };
+    let msgs = run(
+        FAKE,
+        &[
+            ("FAKE_CLAUDE_ECHO_FILE", echo.to_string_lossy().into_owned()),
+            ("FAKE_CLAUDE_FIXTURE", fixture("stream_review.jsonl")),
+        ],
+        req.clone(),
+    );
+    let v: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&echo).unwrap()).unwrap();
+    let args: Vec<String> = serde_json::from_value(v["args"].clone()).unwrap();
+    assert_eq!(args, build_args(&req));
+    let pair = |a: &str, b: &str| args.windows(2).any(|w| w[0] == a && w[1] == b);
+    assert!(pair("--tools", "Read,Grep,Glob") && pair("--model", "haiku"));
+    assert!(!args.iter().any(|a| a == "--session-id" || a == "--resume"));
+
+    let text = msgs
+        .iter()
+        .find_map(|m| match m {
+            RunnerMsg::Event(AgentEvent::Result { text, cost_usd, .. }) => {
+                Some((text.clone(), *cost_usd))
+            }
+            _ => None,
+        })
+        .unwrap();
+    let review = parse_review(&text.0).unwrap();
+    assert_eq!(
+        (review.verdict, review.diffs_checked),
+        (ReviewVerdict::Pass, 2)
+    );
+    assert_eq!(text.1, 0.0042);
+}
+
+#[test]
+fn command_line_shows_the_real_flags_without_the_hook_json() {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap();
+    let cli = ClaudeCli::new(FAKE.into(), rt.handle().clone()).with_guard(GuardHook {
+        exe: "swarmux".into(),
+        pipe: "p".into(),
+        timeout_secs: 10,
+    });
+    let line = cli
+        .command_line(&request(PathBuf::from("/w"), "hi"))
+        .unwrap();
+    assert!(
+        line.starts_with("claude -p --output-format stream-json"),
+        "{line}"
+    );
+    assert!(
+        line.contains("--model sonnet --permission-mode default"),
+        "{line}"
+    );
+    assert!(line.ends_with("--settings …"), "{line}");
 }

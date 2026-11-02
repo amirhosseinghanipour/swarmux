@@ -68,6 +68,10 @@ pub struct Job {
     pub fork: bool,
     pub status: JobStatus,
     pub created_at: Millis,
+    /// Have a reviewer audit the job once it finishes successfully.
+    pub wants_review: bool,
+    /// Set on a review job: the job it audits.
+    pub review_of: Option<JobId>,
 }
 
 /// Final numbers of a job, as reported by Claude Code (or by swarmux on failure).

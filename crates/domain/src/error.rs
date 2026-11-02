@@ -18,4 +18,6 @@ pub enum DomainError {
     UnknownJobStatus(String),
     #[error("invalid rule {pattern:?}: {reason}")]
     InvalidPattern { pattern: String, reason: String },
+    #[error("invalid stored review: {0}")]
+    InvalidReview(String),
 }

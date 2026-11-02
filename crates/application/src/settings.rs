@@ -11,6 +11,25 @@ pub struct Settings {
     pub default_model: String,
     pub guard: GuardSettings,
     pub jev: JevSettings,
+    pub review: ReviewSettings,
+}
+
+/// The `[review]` section.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReviewSettings {
+    /// Review new jobs unless turned off (`v` on the dashboard toggles it).
+    pub enabled: bool,
+    /// Model of the reviewer.
+    pub model: String,
+}
+
+impl Default for ReviewSettings {
+    fn default() -> ReviewSettings {
+        ReviewSettings {
+            enabled: false,
+            model: "opus".to_string(),
+        }
+    }
 }
 
 /// The `[guard]` section.
@@ -34,6 +53,7 @@ impl Default for Settings {
             default_model: DEFAULT_MODEL.to_string(),
             guard: GuardSettings::default(),
             jev: JevSettings::default(),
+            review: ReviewSettings::default(),
         }
     }
 }
@@ -144,6 +164,7 @@ mod tests {
             (s.guard.approval_timeout_secs, s.guard.loop_repeats),
             (120, 2)
         );
+        assert_eq!((s.review.enabled, s.review.model.as_str()), (false, "opus"));
     }
 
     #[test]

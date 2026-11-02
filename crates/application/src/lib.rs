@@ -28,4 +28,4 @@ pub use jobs::{JobService, PumpReport, QueueEntry, QueueStats};
 pub use prompts::{BUILTIN_VARIABLES, PromptService, RenderedPrompt};
 pub use routing::{ROUTE_PROMPT_MAX, RouteReport, Routed, RoutingService};
 pub use sessions::SessionService;
-pub use settings::{GuardSettings, JevProvider, JevSettings, Settings};
+pub use settings::{GuardSettings, JevProvider, JevSettings, ReviewSettings, Settings};
