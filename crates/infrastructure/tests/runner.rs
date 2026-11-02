@@ -7,8 +7,8 @@ use std::time::Duration;
 
 use swarmux_application::ports::{AgentRunner, RunRequest, RunnerMsg};
 use swarmux_domain::{JobId, SessionId};
-use swarmux_infrastructure::ClaudeCli;
 use swarmux_infrastructure::claude_cli::command::{build_args, user_message};
+use swarmux_infrastructure::{ClaudeCli, GuardHook};
 
 fn fixture(name: &str) -> String {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -33,6 +33,15 @@ fn request(cwd: PathBuf, prompt: &str) -> RunRequest {
 
 /// Runs one request through the adapter and collects every message.
 fn run(bin: &str, env: &[(&str, String)], req: RunRequest) -> Vec<RunnerMsg> {
+    run_with(bin, env, None, req)
+}
+
+fn run_with(
+    bin: &str,
+    env: &[(&str, String)],
+    guard: Option<GuardHook>,
+    req: RunRequest,
+) -> Vec<RunnerMsg> {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(1)
         .enable_all()
@@ -42,7 +51,10 @@ fn run(bin: &str, env: &[(&str, String)], req: RunRequest) -> Vec<RunnerMsg> {
         .iter()
         .map(|(k, v)| (k.to_string(), v.clone()))
         .collect();
-    let cli = ClaudeCli::new(bin.into(), rt.handle().clone()).with_env(env);
+    let mut cli = ClaudeCli::new(bin.into(), rt.handle().clone()).with_env(env);
+    if let Some(guard) = guard {
+        cli = cli.with_guard(guard);
+    }
     let (tx, rx) = mpsc::channel();
     cli.start(req, Box::new(move |m| tx.send(m).unwrap()));
     let mut out = Vec::new();
@@ -103,6 +115,35 @@ fn passes_prompt_args_and_cwd_unchanged() {
     assert!(v["cwd"].as_str().unwrap().ends_with("with space"));
     let args: Vec<String> = serde_json::from_value(v["args"].clone()).unwrap();
     assert_eq!(args, build_args(&req));
+}
+
+#[test]
+fn guard_hook_adds_settings_and_env() {
+    let dir = tempfile::tempdir().unwrap();
+    let echo = dir.path().join("echo.json");
+    let guard = GuardHook {
+        exe: r"C:\bin\swarmux.exe".into(),
+        pipe: r"\\.\pipe\swarmux-test".into(),
+        timeout_secs: 130,
+    };
+    let req = request(dir.path().into(), "hi");
+    run_with(
+        FAKE,
+        &[("FAKE_CLAUDE_ECHO_FILE", echo.to_string_lossy().into_owned())],
+        Some(guard.clone()),
+        req.clone(),
+    );
+    let v: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&echo).unwrap()).unwrap();
+    let args: Vec<String> = serde_json::from_value(v["args"].clone()).unwrap();
+    assert_eq!(args[..args.len() - 2], build_args(&req));
+    assert_eq!(args[args.len() - 2], "--settings");
+    let settings: serde_json::Value = serde_json::from_str(&args[args.len() - 1]).unwrap();
+    let hook = &settings["hooks"]["PreToolUse"][0]["hooks"][0];
+    assert_eq!(hook["command"], r"C:\bin\swarmux.exe");
+    assert_eq!(hook["timeout"], 130);
+    assert_eq!(v["hook_pipe"], guard.pipe);
+    assert_eq!(v["job_id"], req.job_id.to_string());
 }
 
 #[test]

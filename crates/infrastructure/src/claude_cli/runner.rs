@@ -14,6 +14,7 @@ use tokio::task::AbortHandle;
 
 use super::command::{build_args, user_message};
 use super::parse::parse_line;
+use crate::hook::{ENV_JOB, ENV_PIPE, hook_settings};
 
 /// How much of the end of stderr is kept for error messages.
 const STDERR_TAIL: usize = 2048;
@@ -24,8 +25,30 @@ type Running = Arc<Mutex<HashMap<JobId, AbortHandle>>>;
 pub struct ClaudeCli {
     bin: PathBuf,
     env: Vec<(String, String)>,
+    guard: Option<GuardHook>,
     rt: Handle,
     running: Running,
+}
+
+/// The guard's PreToolUse hook, added to every job.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GuardHook {
+    /// The `swarmux` executable that runs `hook pre-tool`.
+    pub exe: PathBuf,
+    /// The socket the app listens on.
+    pub pipe: String,
+    /// Claude Code kills the hook after this long.
+    pub timeout_secs: u64,
+}
+
+impl GuardHook {
+    /// `--settings` and its JSON.
+    fn args(&self) -> [String; 2] {
+        [
+            "--settings".into(),
+            hook_settings(&self.exe, self.timeout_secs),
+        ]
+    }
 }
 
 /// The map stays usable even if a task panicked while holding the lock.
@@ -38,6 +61,7 @@ impl ClaudeCli {
         ClaudeCli {
             bin,
             env: Vec::new(),
+            guard: None,
             rt,
             running: Running::default(),
         }
@@ -46,6 +70,12 @@ impl ClaudeCli {
     /// How many jobs are still running.
     pub fn running(&self) -> usize {
         lock(&self.running).len()
+    }
+
+    /// Routes every job's tool calls through the guard's hook.
+    pub fn with_guard(mut self, guard: GuardHook) -> ClaudeCli {
+        self.guard = Some(guard);
+        self
     }
 
     /// Extra environment for every child (used by tests).
@@ -58,14 +88,20 @@ impl ClaudeCli {
 impl AgentRunner for ClaudeCli {
     fn start(&self, request: RunRequest, sink: RunSink) {
         let bin = self.bin.clone();
-        let env = self.env.clone();
+        let mut env = self.env.clone();
         let job = request.job_id;
+        let mut extra_args = Vec::new();
+        if let Some(guard) = &self.guard {
+            extra_args.extend(guard.args());
+            env.push((ENV_PIPE.into(), guard.pipe.clone()));
+            env.push((ENV_JOB.into(), job.to_string()));
+        }
         let running = self.running.clone();
         // Held until the handle is stored, so a job that ends at once still
         // finds (and removes) its own entry.
         let mut map = lock(&self.running);
         let task = self.rt.spawn(async move {
-            run(bin, env, request, sink).await;
+            run(bin, env, extra_args, request, sink).await;
             lock(&running).remove(&job);
         });
         map.insert(job, task.abort_handle());
@@ -78,9 +114,16 @@ impl AgentRunner for ClaudeCli {
     }
 }
 
-async fn run(bin: PathBuf, env: Vec<(String, String)>, req: RunRequest, sink: RunSink) {
+async fn run(
+    bin: PathBuf,
+    env: Vec<(String, String)>,
+    extra_args: Vec<String>,
+    req: RunRequest,
+    sink: RunSink,
+) {
     let mut cmd = Command::new(&bin);
     cmd.args(build_args(&req))
+        .args(extra_args)
         .envs(env)
         .current_dir(&req.cwd)
         .stdin(Stdio::piped())

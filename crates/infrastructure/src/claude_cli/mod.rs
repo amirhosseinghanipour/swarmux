@@ -4,4 +4,4 @@ pub mod command;
 pub mod parse;
 mod runner;
 
-pub use runner::ClaudeCli;
+pub use runner::{ClaudeCli, GuardHook};

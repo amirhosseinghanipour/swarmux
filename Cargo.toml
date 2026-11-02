@@ -25,7 +25,7 @@ sysinfo = { version = "0.40.1", default-features = false, features = ["system"] 
 tempfile = "3.27.0"
 thiserror = "2"
 toml = { version = "1.1.8", default-features = false, features = ["parse", "serde", "std"] }
-tokio = { version = "1", features = ["rt-multi-thread", "process", "io-util", "sync", "macros", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "process", "io-util", "sync", "macros", "time", "net"] }
 uuid = { version = "1.29.0", features = ["v4"] }
 
 # The `swarmux` binary: composition root only.

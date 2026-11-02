@@ -5,7 +5,8 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
-use swarmux_application::Settings;
+use swarmux_application::{GuardSettings, Settings};
+use swarmux_domain::{Pattern, Unmatched};
 
 /// Why the config file couldn't be used.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,6 +34,17 @@ struct RawConfig {
     max_concurrent: Option<i64>,
     min_free_ram_mb: Option<i64>,
     default_model: Option<String>,
+    guard: Option<RawGuard>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawGuard {
+    allow: Option<Vec<String>>,
+    deny: Option<Vec<String>>,
+    unmatched: Option<String>,
+    approval_timeout_secs: Option<i64>,
+    loop_repeats: Option<i64>,
 }
 
 /// Reads settings from `path`; a missing file gives the defaults.
@@ -87,7 +99,69 @@ pub fn parse_settings(text: &str, path: &Path) -> Result<Settings, ConfigError> 
         }
         settings.default_model = model.to_string();
     }
+    if let Some(guard) = raw.guard {
+        settings.guard = parse_guard(guard, text, path)?;
+    }
     Ok(settings)
+}
+
+fn parse_guard(raw: RawGuard, text: &str, path: &Path) -> Result<GuardSettings, ConfigError> {
+    let error = |line: Option<usize>, message: String| ConfigError {
+        path: path.to_path_buf(),
+        line,
+        message,
+    };
+    let rules = |list: Option<Vec<String>>| -> Result<Vec<Pattern>, ConfigError> {
+        list.unwrap_or_default()
+            .iter()
+            .map(|r| {
+                Pattern::parse(r).map_err(|e| {
+                    let quoted = [format!("\"{r}\""), format!("'{r}'")];
+                    let line = text
+                        .lines()
+                        .position(|l| quoted.iter().any(|q| l.contains(q.as_str())));
+                    error(line.map(|i| i + 1), e.to_string())
+                })
+            })
+            .collect()
+    };
+    let mut guard = GuardSettings {
+        allow: rules(raw.allow)?,
+        deny: rules(raw.deny)?,
+        ..GuardSettings::default()
+    };
+    if let Some(u) = raw.unmatched {
+        guard.unmatched = match u.trim() {
+            "ask" => Unmatched::Ask,
+            "pass" => Unmatched::Pass,
+            _ => {
+                return Err(error(
+                    key_line(text, "unmatched"),
+                    "unmatched must be \"ask\" or \"pass\"".into(),
+                ));
+            }
+        };
+    }
+    if let Some(secs) = raw.approval_timeout_secs {
+        guard.approval_timeout_secs = u64::try_from(secs)
+            .ok()
+            .filter(|&s| (1..=3600).contains(&s))
+            .ok_or_else(|| {
+                error(
+                    key_line(text, "approval_timeout_secs"),
+                    "approval_timeout_secs must be between 1 and 3600".into(),
+                )
+            })?;
+    }
+    if let Some(n) = raw.loop_repeats {
+        guard.loop_repeats = u32::try_from(n).ok().filter(|&n| n != 1).ok_or_else(|| {
+            error(
+                key_line(text, "loop_repeats"),
+                "loop_repeats must be 0 (off) or at least 2".into(),
+            )
+        })?;
+    }
+    Ok(guard)
 }
 
 /// 1-based line of byte offset `at`.
@@ -173,6 +247,80 @@ mod tests {
         assert!(parse("min_free_ram_mb = -1").is_err());
         assert!(parse("default_model = \"  \"").is_err());
         assert_eq!(parse("min_free_ram_mb = 0").unwrap().min_free_ram_mb, 0);
+    }
+
+    #[test]
+    fn guard_section_is_read() {
+        let s = parse(
+            "[guard]
+allow = [\"Bash(cargo test:*)\", \"Edit(src/**)\"]
+deny = [\"WebFetch\"]
+unmatched = \"pass\"
+approval_timeout_secs = 30
+loop_repeats = 0
+",
+        )
+        .unwrap();
+        let g = s.guard;
+        let shown: Vec<String> = g.allow.iter().map(ToString::to_string).collect();
+        assert_eq!(shown, ["Bash(cargo test:*)", "Edit(src/**)"]);
+        assert_eq!(g.deny[0].to_string(), "WebFetch");
+        assert_eq!(g.unmatched, Unmatched::Pass);
+        assert_eq!((g.approval_timeout_secs, g.loop_repeats), (30, 0));
+    }
+
+    #[test]
+    fn guard_defaults_without_section() {
+        assert_eq!(
+            parse("max_concurrent = 2").unwrap().guard,
+            GuardSettings::default()
+        );
+    }
+
+    #[test]
+    fn bad_rules_are_reported_with_line() {
+        let e = parse(
+            "[guard]
+allow = [
+  \"Bash(ok)\",
+  \"Bash(\",
+]
+",
+        )
+        .unwrap_err();
+        assert_eq!(e.line, Some(4), "{e}");
+        assert!(e.message.contains("Bash("), "{e}");
+    }
+
+    #[test]
+    fn bad_guard_values_are_rejected() {
+        assert!(
+            parse(
+                "[guard]
+unmatched = \"maybe\""
+            )
+            .is_err()
+        );
+        assert!(
+            parse(
+                "[guard]
+approval_timeout_secs = 0"
+            )
+            .is_err()
+        );
+        assert!(
+            parse(
+                "[guard]
+loop_repeats = 1"
+            )
+            .is_err()
+        );
+        let e = parse(
+            "[guard]
+alow = []",
+        )
+        .unwrap_err();
+        assert!(e.message.contains("alow"), "{e}");
     }
 
     #[test]

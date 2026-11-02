@@ -1,7 +1,7 @@
 //! Test stand-in for `claude` (built only with `--features fake-claude`).
 //!
 //! Env vars: FAKE_CLAUDE_FIXTURE (file printed to stdout), FAKE_CLAUDE_ECHO_FILE
-//! (receives {"stdin","cwd","args"} as JSON), FAKE_CLAUDE_STDERR, FAKE_CLAUDE_EXIT,
+//! (receives {"stdin","cwd","args","hook_pipe","job_id"} as JSON), FAKE_CLAUDE_STDERR, FAKE_CLAUDE_EXIT,
 //! FAKE_CLAUDE_SLEEP_MS (wait before exiting) and FAKE_CLAUDE_DONE_FILE (written
 //! after the wait, so tests can tell whether the process was killed).
 
@@ -16,6 +16,8 @@ fn main() {
             "stdin": stdin,
             "cwd": std::env::current_dir().unwrap().to_string_lossy(),
             "args": std::env::args().skip(1).collect::<Vec<_>>(),
+            "hook_pipe": std::env::var("SWARMUX_HOOK_PIPE").ok(),
+            "job_id": std::env::var("SWARMUX_JOB_ID").ok(),
         });
         std::fs::write(path, echo.to_string()).unwrap();
     }

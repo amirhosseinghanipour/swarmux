@@ -1,5 +1,6 @@
 //! SQLite adapter for the storage ports.
 
+mod decisions;
 mod jobs;
 mod prompts;
 mod sessions;
@@ -87,8 +88,15 @@ CREATE INDEX jobs_status ON jobs(status);
 CREATE INDEX jobs_created ON jobs(created_at);
 ";
 
+/// What each guard decision was about.
+const SCHEMA_V3: &str = "
+ALTER TABLE decisions ADD COLUMN tool TEXT NOT NULL DEFAULT '';
+ALTER TABLE decisions ADD COLUMN subject TEXT NOT NULL DEFAULT '';
+CREATE INDEX decisions_ts ON decisions(ts);
+";
+
 /// Migrations in order; index + 1 is the resulting `user_version`.
-const MIGRATIONS: &[&str] = &[SCHEMA_V1, SCHEMA_V2];
+const MIGRATIONS: &[&str] = &[SCHEMA_V1, SCHEMA_V2, SCHEMA_V3];
 
 /// Maps adapter errors into the application's error type.
 pub(crate) trait OrStorage<T> {
@@ -203,7 +211,7 @@ pub(crate) mod tests {
         .unwrap();
         drop(conn);
         let s = SqliteStore::open(&path).unwrap();
-        assert_eq!(s.schema_version().unwrap(), 2);
+        assert_eq!(s.schema_version().unwrap(), MIGRATIONS.len() as i64);
         let job = JobRepository::get(&s, JobId(1)).unwrap().unwrap();
         assert_eq!((job.prompt.as_str(), job.fork), ("old", false));
     }
