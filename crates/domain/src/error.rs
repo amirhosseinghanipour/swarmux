@@ -16,4 +16,6 @@ pub enum DomainError {
     MissingVariable(String),
     #[error("unknown job status {0:?}")]
     UnknownJobStatus(String),
+    #[error("invalid rule {pattern:?}: {reason}")]
+    InvalidPattern { pattern: String, reason: String },
 }

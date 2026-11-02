@@ -156,6 +156,11 @@ impl JobProgress {
         self.end(JobStatus::Cancelled, "cancelled", None, tick)
     }
 
+    /// Ends the job as cancelled by swarmux itself, with `reason` as its error.
+    pub fn stop(&mut self, reason: &str, tick: u32) -> Option<JobResult> {
+        self.end(JobStatus::Cancelled, "cancelled", Some(reason), tick)
+    }
+
     fn end(
         &mut self,
         status: JobStatus,
@@ -331,6 +336,21 @@ mod tests {
         assert!(p.log.back().unwrap().contains("cancelled"));
         assert_eq!(p.cancel(21), None);
         assert_eq!(p.fail("late", 22), None);
+    }
+
+    #[test]
+    fn stop_records_the_reason() {
+        let mut p = progress();
+        let r = p
+            .stop("loop guard: Bash failed the same way twice", 5)
+            .unwrap();
+        assert_eq!(p.status, JobStatus::Cancelled);
+        assert_eq!(
+            r.error.as_deref(),
+            Some("loop guard: Bash failed the same way twice")
+        );
+        assert!(p.log.back().unwrap().contains("loop guard"));
+        assert_eq!(p.stop("again", 6), None);
     }
 
     #[test]

@@ -6,6 +6,7 @@
 mod date;
 mod error;
 mod event;
+mod guard;
 mod job;
 mod progress;
 mod prompt;
@@ -16,6 +17,10 @@ mod template;
 pub use date::{iso_date, iso_minute};
 pub use error::DomainError;
 pub use event::{Actor, AgentEvent};
+pub use guard::{
+    BUILTIN_ALLOW, BUILTIN_DENY, Decision, GuardPolicy, LoopBreaker, LoopTrip, Pattern, Unmatched,
+    Verdict, error_signature, host_of,
+};
 pub use job::{Job, JobId, JobResult, JobStatus};
 pub use progress::{JobProgress, Lane, describe};
 pub use prompt::{PromptDraft, PromptId, PromptTemplate, parse_tags};
