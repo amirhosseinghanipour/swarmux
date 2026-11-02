@@ -5,6 +5,7 @@ mod decisions;
 mod jobs;
 mod prompts;
 mod sessions;
+mod telemetry;
 
 use std::path::Path;
 
@@ -116,9 +117,27 @@ ALTER TABLE jobs ADD COLUMN wants_review INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE jobs ADD COLUMN review_of INTEGER REFERENCES jobs(id);
 ";
 
+/// Telemetry that outlives a run: the latest usage-limit reading per window
+/// and the latest environment per Claude session.
+const SCHEMA_V7: &str = "
+CREATE TABLE rate_limits (
+    window TEXT PRIMARY KEY,
+    status TEXT NOT NULL,
+    utilization REAL,
+    resets_at INTEGER,
+    surpassed_threshold REAL,
+    observed_at INTEGER NOT NULL
+);
+CREATE TABLE session_environments (
+    session_id TEXT PRIMARY KEY,
+    environment TEXT NOT NULL,
+    seen_at INTEGER NOT NULL
+);
+";
+
 /// Migrations in order; index + 1 is the resulting `user_version`.
 const MIGRATIONS: &[&str] = &[
-    SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6,
+    SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6, SCHEMA_V7,
 ];
 
 /// Maps adapter errors into the application's error type.
