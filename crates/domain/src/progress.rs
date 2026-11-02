@@ -254,11 +254,15 @@ impl JobProgress {
                 self.context_window = *context_window;
                 self.subagents_spawned = *subagents_spawned;
                 self.final_cache_read = Some(*cache_read);
-                self.status = if *is_error {
-                    JobStatus::Failed
-                } else {
-                    JobStatus::Done
-                };
+                // Claude Code reports again after background subagents end;
+                // that updates the numbers but doesn't end the job twice.
+                if !self.status.is_finished() {
+                    self.status = if *is_error {
+                        JobStatus::Failed
+                    } else {
+                        JobStatus::Done
+                    };
+                }
                 self.log(ev, tick);
                 Some(JobResult {
                     tokens_in: *tokens_in,
@@ -523,6 +527,17 @@ mod tests {
         assert_eq!(r.outcome, "success");
         assert_eq!(r.text, "all good");
         assert!(p.log.back().unwrap().starts_with("00:01 lead"));
+    }
+
+    #[test]
+    fn a_later_result_updates_numbers_but_keeps_the_status() {
+        let mut p = progress();
+        p.apply(&result(0.1, false), 1);
+        let again = p.apply(&result(0.3, true), 9).unwrap();
+        assert_eq!(
+            (p.status, p.cost_usd, again.cost_usd),
+            (JobStatus::Done, 0.3, 0.3)
+        );
     }
 
     #[test]

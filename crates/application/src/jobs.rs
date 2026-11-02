@@ -619,6 +619,7 @@ impl JobService {
             return Ok(applied);
         }
         let tick = self.tick_of(i);
+        let was_finished = self.tracked[i].progress.status.is_finished();
 
         let finished = match msg {
             RunnerMsg::Event(ev) => {
@@ -673,6 +674,10 @@ impl JobService {
         };
 
         if let Some(result) = finished {
+            if was_finished {
+                // A later report (after background subagents): new numbers only.
+                return self.jobs.save_result(job_id, &result).map(|()| applied);
+            }
             let status = self.tracked[i].progress.status;
             self.tracked[i].job.status = status;
             self.jobs.save_result(job_id, &result)?;

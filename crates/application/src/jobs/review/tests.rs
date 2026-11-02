@@ -259,3 +259,17 @@ fn decisions_move_a_job_to_fork() {
         (Phase::Fork, &[12][..])
     );
 }
+
+#[test]
+fn a_second_result_does_not_start_a_second_review() {
+    let mut f = fixture(true);
+    let job = f.run_job();
+    // Claude Code reports again once a background subagent ends.
+    f.runner
+        .emit(0, result("fixed it, scout done", 0.35, false));
+    f.svc.pump();
+    assert_eq!(f.runner.started(), 2, "one review only");
+    assert_eq!(f.store.result_of(job).unwrap().cost_usd, 0.35);
+    let review_job = f.runner.request(1).job_id;
+    assert_eq!(f.svc.review_progress(job).unwrap().job_id, review_job);
+}
