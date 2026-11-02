@@ -9,6 +9,7 @@ mod history;
 mod prompts;
 mod queue;
 mod routing;
+pub mod theme;
 mod ui;
 
 pub use app::App;

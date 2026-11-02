@@ -9,6 +9,7 @@ pub mod input;
 pub mod prompts;
 pub mod queue;
 pub mod sessions;
+pub mod widgets;
 
 use ratatui::{
     Frame,
