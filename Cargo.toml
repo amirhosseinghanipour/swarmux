@@ -46,6 +46,7 @@ swarmux-infrastructure.workspace = true
 swarmux-tui.workspace = true
 anyhow.workspace = true
 clap.workspace = true
+rpassword.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]

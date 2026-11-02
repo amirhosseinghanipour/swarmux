@@ -5,10 +5,11 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use swarmux_application::ports::SystemMonitor;
+use swarmux_application::ports::{ConsentStore, SystemMonitor};
 use swarmux_application::{GuardSettings, Settings, SharedPolicy};
 use swarmux_infrastructure::hook::{self, ENV_JOB, ENV_PIPE, HookServer};
-use swarmux_infrastructure::{Paths, SqliteStore, SysinfoMonitor, load_settings};
+use swarmux_infrastructure::jev::keys;
+use swarmux_infrastructure::{Endpoint, Paths, SqliteStore, SysinfoMonitor, load_settings};
 
 const GB: f64 = (1u64 << 30) as f64;
 
@@ -48,6 +49,7 @@ pub fn run() -> anyhow::Result<()> {
             println!("       min_free_ram_mb = {}", s.min_free_ram_mb);
             println!("       default_model   = \"{}\"", s.default_model);
             guard_summary(&s);
+            jev_summary(&s, &paths);
         }
         Err(e) => println!("fail config {e}"),
     }
@@ -79,6 +81,36 @@ fn guard_summary(s: &Settings) {
     }
     for rule in policy.deny_rules() {
         println!("       deny  {rule}");
+    }
+}
+
+/// The JEV provider and whether a key is found (never the key itself).
+fn jev_summary(s: &Settings, paths: &Paths) {
+    let j = &s.jev;
+    let Some(endpoint) = Endpoint::for_provider(j.provider) else {
+        println!("ok   jev off (bring your own key: swarmux jev set-key typesafe)");
+        return;
+    };
+    let p = j.provider.as_str();
+    println!(
+        "ok   jev provider {p} at {} (model {}), threshold {:.2}, timeout {} ms",
+        endpoint.host(),
+        endpoint.model,
+        j.threshold,
+        j.timeout_ms()
+    );
+    match keys::find_key(j.provider) {
+        Some((_, source)) => println!("ok   jev key found in {source}"),
+        None => println!(
+            "warn jev has no key: run `swarmux jev set-key {p}` or set {}",
+            keys::env_var(j.provider).unwrap_or_default()
+        ),
+    }
+    let consent = SqliteStore::open(&paths.db).and_then(|db| db.has_consent(p));
+    match consent {
+        Ok(true) => println!("ok   jev consent given: unmatched tool calls and routing ask {p}"),
+        Ok(false) => println!("ok   jev consent not given yet: swarmux asks before first use"),
+        Err(e) => println!("fail jev consent unknown: {e}"),
     }
 }
 

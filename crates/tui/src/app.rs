@@ -1,5 +1,6 @@
 //! UI state and key handling. All work goes through application use cases.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -7,7 +8,7 @@ use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifier
 use ratatui::DefaultTerminal;
 use swarmux_application::{
     AppError, AppResult, GuardService, HistoryService, JobService, PromptService, QueueEntry,
-    QueueStats, SessionService,
+    QueueStats, RoutingService, SessionService,
 };
 use swarmux_domain::{JobId, JobProgress, PromptId, Session};
 
@@ -15,6 +16,7 @@ use crate::dashboard::DashboardState;
 use crate::history::{HistoryAction, HistoryScreen};
 use crate::prompts::{FormAction, PendingDispatch, PromptForm, PromptsScreen};
 use crate::queue::{QueueAction, QueueScreen};
+use crate::routing::RoutePayload;
 use crate::ui::input::{Input, InputAction};
 
 /// Redraw budget: about 10 frames per second.
@@ -55,6 +57,8 @@ impl Screen {
 pub enum InputPurpose {
     NewSession,
     Prompt,
+    /// A prompt swarmux sends to the session it picks.
+    RoutedPrompt,
     /// A value for the template variable `prompts.pending` is asking for.
     Variable,
     /// The history search; applied as it is typed.
@@ -81,11 +85,14 @@ pub struct App {
     pub queue: QueueScreen,
     pub history: HistoryScreen,
     pub dashboard: DashboardState,
-    session_service: SessionService,
-    jobs: JobService,
-    prompt_service: PromptService,
+    pub(crate) session_service: SessionService,
+    pub(crate) jobs: JobService,
+    pub(crate) prompt_service: PromptService,
     history_service: HistoryService,
     pub guard: GuardService,
+    pub routing: RoutingService,
+    /// Prompts being routed, by ticket.
+    pub(crate) routes: HashMap<u64, RoutePayload>,
     cwd: PathBuf,
 }
 
@@ -96,6 +103,7 @@ impl App {
         prompt_service: PromptService,
         history_service: HistoryService,
         guard: GuardService,
+        routing: RoutingService,
         cwd: PathBuf,
     ) -> App {
         let mut app = App {
@@ -115,6 +123,8 @@ impl App {
             prompt_service,
             history_service,
             guard,
+            routing,
+            routes: HashMap::new(),
             cwd,
         };
         app.refresh_sessions(None);
@@ -144,6 +154,7 @@ impl App {
             errors.extend(self.guard.record_loop(*job, trip).err());
         }
         errors.extend(self.guard.pump().errors);
+        errors.extend(self.pump_routes());
         if let Some(e) = errors.into_iter().last() {
             self.error = Some(e.to_string());
         }
@@ -217,6 +228,7 @@ impl App {
                     let result = match purpose {
                         InputPurpose::NewSession => self.create_session(&text),
                         InputPurpose::Prompt => self.dispatch(&text),
+                        InputPurpose::RoutedPrompt => self.route_prompt(&text),
                         InputPurpose::Variable => self.answer_variable(text),
                         InputPurpose::Search => Ok(()),
                     };
@@ -240,6 +252,13 @@ impl App {
 
         self.error = None;
         self.notice = None;
+        if let KeyCode::Char(c @ ('y' | 'n')) = key.code
+            && self.guard.jev().is_some_and(|j| j.wants_consent())
+        {
+            let result = self.answer_consent(c == 'y');
+            self.show(result);
+            return;
+        }
         if let KeyCode::Char(c @ ('y' | 'n' | 'a')) = key.code
             && self.guard.pending_count() > 0
         {
@@ -279,11 +298,16 @@ impl App {
                 let result = self.prompts_key(c, confirming_delete);
                 self.show(result);
             }
-            KeyCode::Char('p') if self.screen == Screen::Dashboard => {
+            KeyCode::Char(c @ ('p' | 'P')) if self.screen == Screen::Dashboard => {
                 if self.sessions.is_empty() {
                     self.error = Some("create a session first: press 5 then n".into());
                 } else {
-                    self.mode = Mode::Input(InputPurpose::Prompt, Input::default());
+                    let purpose = if c == 'P' {
+                        InputPurpose::RoutedPrompt
+                    } else {
+                        InputPurpose::Prompt
+                    };
+                    self.mode = Mode::Input(purpose, Input::default());
                 }
             }
             _ => {}
@@ -404,7 +428,8 @@ impl App {
                     }
                 }
             }
-            'd' => return self.start_template_dispatch(),
+            'd' => return self.start_template_dispatch(false),
+            'D' => return self.start_template_dispatch(true),
             _ => {}
         }
         Ok(())
@@ -427,8 +452,9 @@ impl App {
         Ok(())
     }
 
-    /// Asks for the selected template's variables, then dispatches it.
-    fn start_template_dispatch(&mut self) -> AppResult<()> {
+    /// Asks for the selected template's variables, then dispatches it (or
+    /// routes it, with `route`).
+    fn start_template_dispatch(&mut self, route: bool) -> AppResult<()> {
         let Some(prompt) = self.prompts.selected_prompt() else {
             self.error = Some("no prompt selected: press n to write one".into());
             return Ok(());
@@ -442,6 +468,7 @@ impl App {
             session_id: session.id,
             remaining: PromptService::user_variables(&prompt.body),
             values: Default::default(),
+            route,
         });
         self.ask_or_dispatch()
     }
@@ -463,6 +490,10 @@ impl App {
             self.mode = Mode::Input(InputPurpose::Variable, Input::default());
             return Ok(());
         }
+        if pending.route {
+            self.screen = Screen::Dashboard;
+            return self.route_template(pending);
+        }
         let rendered =
             self.prompt_service
                 .render(pending.prompt_id, pending.session_id, &pending.values)?;
@@ -478,7 +509,7 @@ impl App {
         Ok(())
     }
 
-    fn refresh_prompts(&mut self, select: Option<PromptId>) {
+    pub(crate) fn refresh_prompts(&mut self, select: Option<PromptId>) {
         match self.prompt_service.list() {
             Ok(list) => self.prompts.set_list(list, select),
             Err(e) => self.error = Some(e.to_string()),
@@ -520,7 +551,7 @@ impl App {
         Ok(())
     }
 
-    fn refresh_sessions(&mut self, select: Option<&Session>) {
+    pub(crate) fn refresh_sessions(&mut self, select: Option<&Session>) {
         match self.session_service.list() {
             Ok(list) => self.sessions = list,
             Err(e) => self.error = Some(e.to_string()),
@@ -541,11 +572,12 @@ pub(crate) mod tests_support {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use swarmux_application::ports::PromptRepository;
     use swarmux_application::testing::{
-        FakeDecisionRepo, FakeHookInbox, FakeMonitor, FakeRuleWriter, FakeRunner, FakeWorkspace,
-        FixedClock, InMemoryStore,
+        FakeAdvisor, FakeConsents, FakeDecisionRepo, FakeHookInbox, FakeMonitor, FakeRouter,
+        FakeRuleWriter, FakeRunner, FakeWorkspace, FixedClock, InMemoryStore,
     };
     use swarmux_application::{
-        GuardService, HistoryService, JobService, PromptService, SessionService, SharedPolicy,
+        GuardService, HistoryService, Jev, JobService, PromptService, RoutingService,
+        SessionService, SharedPolicy,
     };
     use swarmux_domain::{GuardPolicy, PromptDraft};
 
@@ -560,6 +592,9 @@ pub(crate) mod tests_support {
         pub inbox: Rc<FakeHookInbox>,
         pub decisions: Rc<FakeDecisionRepo>,
         pub rules: Rc<FakeRuleWriter>,
+        pub router: Rc<FakeRouter>,
+        /// Set by [`test_app_with_jev`].
+        pub advisor: Option<Rc<FakeAdvisor>>,
     }
 
     /// An app wired to in-memory fakes.
@@ -567,8 +602,17 @@ pub(crate) mod tests_support {
         test_app_with_store(Rc::new(InMemoryStore::default()))
     }
 
+    /// An app with JEV configured; `consented` says whether the user already agreed.
+    pub(crate) fn test_app_with_jev(consented: bool) -> TestApp {
+        build(Rc::new(InMemoryStore::default()), Some(consented))
+    }
+
     /// An app over an existing store, like a restart.
     pub(crate) fn test_app_with_store(store: Rc<InMemoryStore>) -> TestApp {
+        build(store, None)
+    }
+
+    fn build(store: Rc<InMemoryStore>, jev: Option<bool>) -> TestApp {
         let runner = Rc::new(FakeRunner::default());
         let clock = Rc::new(FixedClock::new(1_000));
         let monitor = Rc::new(FakeMonitor::default());
@@ -581,15 +625,43 @@ pub(crate) mod tests_support {
         let inbox = Rc::new(FakeHookInbox::default());
         let decisions = Rc::new(FakeDecisionRepo::default());
         let rules = Rc::new(FakeRuleWriter::default());
-        let guard = GuardService::new(
+        let mut guard = GuardService::new(
             SharedPolicy::new(GuardPolicy::default()),
             inbox.clone(),
             decisions.clone(),
             clock.clone(),
         )
         .with_rule_writer(rules.clone());
+        let router = Rc::new(FakeRouter::default());
+        let mut routing = RoutingService::new(
+            store.clone(),
+            store.clone(),
+            decisions.clone(),
+            clock.clone(),
+        )
+        .with_router(router.clone());
+        let mut advisor = None;
+        if let Some(consented) = jev {
+            let fake = Rc::new(FakeAdvisor::default());
+            let consents = Rc::new(FakeConsents::default());
+            let jev = Rc::new(Jev::new(fake.clone(), consents, clock.clone(), 0.85).unwrap());
+            if consented {
+                jev.grant().unwrap();
+            }
+            guard = guard.with_jev(jev.clone());
+            routing = routing.with_jev(jev);
+            advisor = Some(fake);
+        }
         TestApp {
-            app: App::new(sessions, jobs, prompts, history, guard, "/work".into()),
+            app: App::new(
+                sessions,
+                jobs,
+                prompts,
+                history,
+                guard,
+                routing,
+                "/work".into(),
+            ),
             store,
             runner,
             clock,
@@ -597,6 +669,8 @@ pub(crate) mod tests_support {
             inbox,
             decisions,
             rules,
+            router,
+            advisor,
         }
     }
 

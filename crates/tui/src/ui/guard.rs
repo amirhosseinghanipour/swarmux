@@ -1,4 +1,5 @@
-//! The guard panel on the dashboard and the approval overlay on every screen.
+//! The guard / JEV panel on the dashboard, and the approval and JEV consent
+//! overlays on every screen.
 
 use ratatui::{
     Frame,
@@ -7,17 +8,21 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Clear, Paragraph},
 };
-use swarmux_application::{DecisionRecord, Outcome};
+use swarmux_application::{DecisionRecord, JevState, Outcome, Source};
 
-use super::{GREEN, MUTED, ORANGE, RED};
+use super::{BLUE, GREEN, MUTED, ORANGE, RED};
 use crate::app::App;
 
 /// Height of the guard panel, borders included.
 pub const PANEL_HEIGHT: u16 = 8;
 /// Height of the approval overlay, borders included.
 pub const APPROVAL_HEIGHT: u16 = 6;
+/// Height of the JEV consent overlay, borders included.
+pub const CONSENT_HEIGHT: u16 = 9;
+/// Cells in a confidence bar.
+const BAR: usize = 10;
 
-/// Counts for this run and the latest decisions.
+/// Counts for this run, JEV's state and the latest decisions (guard and routing).
 pub fn render_panel(frame: &mut Frame, area: Rect, app: &App) {
     let s = app.guard.stats();
     let mut lines = vec![Line::from(vec![
@@ -31,19 +36,114 @@ pub fn render_panel(frame: &mut Frame, area: Rect, app: &App) {
         Span::styled(" · ", Style::new().fg(MUTED)),
         Span::styled(format!("loop stops {}", s.stopped), Style::new().fg(RED)),
     ])];
-    let room = area.height.saturating_sub(3) as usize;
-    let recent: Vec<&DecisionRecord> = app.guard.recent().take(room).collect();
+    lines.push(jev_line(app));
+    let room = area.height.saturating_sub(4) as usize;
+    let mut recent: Vec<&DecisionRecord> = app.guard.recent().take(room).collect();
+    recent.extend(app.routing.recent().take(room));
+    recent.sort_by_key(|d| std::cmp::Reverse(d.ts));
+    recent.truncate(room);
     if recent.is_empty() {
         lines.push(Line::styled(
             "no tool calls yet: every call your jobs make is checked here",
             Style::new().fg(MUTED),
         ));
     }
-    lines.extend(recent.into_iter().map(decision_line));
+    lines.extend(recent.into_iter().map(|d| match (d.source, d.confidence) {
+        (Source::Jev, Some(c)) => jev_decision_line(d, c),
+        _ => decision_line(d),
+    }));
     let block = Block::bordered()
         .border_style(Style::new().fg(GREEN))
-        .title(Span::styled(" guard ", Style::new().fg(GREEN)));
+        .title(Span::styled(" guard / JEV ", Style::new().fg(GREEN)));
     frame.render_widget(Paragraph::new(lines).block(block), area);
+}
+
+/// Whether JEV is on, and how to turn it on when it isn't.
+fn jev_line(app: &App) -> Line<'static> {
+    let muted = Style::new().fg(MUTED);
+    let Some(jev) = app.guard.jev() else {
+        return Line::styled(
+            "JEV off · bring your own key: swarmux jev set-key typesafe",
+            muted,
+        );
+    };
+    let p = jev.provider();
+    if !jev.has_key() {
+        return Line::styled(
+            format!("JEV {p}: no key found · swarmux jev set-key {p}"),
+            Style::new().fg(ORANGE),
+        );
+    }
+    match jev.state() {
+        JevState::NeedsConsent => Line::styled(
+            format!("JEV {p} waits for your consent"),
+            Style::new().fg(ORANGE),
+        ),
+        JevState::Declined => Line::styled(
+            format!("JEV {p} off for this run (not allowed); restart swarmux to be asked again"),
+            muted,
+        ),
+        JevState::On => {
+            let deciding = match app.guard.consulting_count() {
+                0 => String::new(),
+                n => format!(" · deciding {n}"),
+            };
+            Line::from(vec![
+                Span::styled(format!("JEV {p}"), Style::new().fg(BLUE)),
+                Span::styled(
+                    format!(
+                        " · threshold {:.2} · {} decisions{deciding}",
+                        jev.threshold(),
+                        app.guard.stats().jev
+                    ),
+                    muted,
+                ),
+            ])
+        }
+    }
+}
+
+/// `jev   Bash make deploy ████████░░ 0.91 → allow`
+fn jev_decision_line(d: &DecisionRecord, confidence: f64) -> Line<'_> {
+    let (what, target) = if d.outcome == Outcome::Route {
+        let rule = d.rule.as_deref().unwrap_or_default();
+        let target = rule
+            .strip_prefix("→ ")
+            .and_then(|r| r.split([':', ' ']).next())
+            .unwrap_or("?");
+        ("which session".to_string(), target.to_string())
+    } else {
+        let target = match d.outcome {
+            Outcome::Ask => "ask you",
+            other => other.as_str(),
+        };
+        (
+            format!("{} {}", d.tool, shorten(&d.subject, 40)),
+            target.to_string(),
+        )
+    };
+    let color = match d.outcome {
+        Outcome::Allow | Outcome::Route => GREEN,
+        Outcome::Deny | Outcome::Stop => RED,
+        Outcome::Ask | Outcome::Pass => ORANGE,
+    };
+    Line::from(vec![
+        Span::styled("jev   ", Style::new().fg(BLUE)),
+        Span::raw(format!("{what} ")),
+        Span::styled(bar(confidence), Style::new().fg(BLUE)),
+        Span::raw(format!(" {confidence:.2} ")),
+        Span::styled(format!("→ {target}"), Style::new().fg(color)),
+        Span::styled(
+            format!("  {}", latency(d.latency_us)),
+            Style::new().fg(MUTED),
+        ),
+    ])
+}
+
+/// 0.8 → `████████░░`.
+pub fn bar(confidence: f64) -> String {
+    let filled = ((confidence.clamp(0.0, 1.0) * BAR as f64).round() as usize).min(BAR);
+    format!("{}{}", "█".repeat(filled), "░".repeat(BAR - filled))
 }
 
 fn decision_line(d: &DecisionRecord) -> Line<'_> {
@@ -55,6 +155,17 @@ fn decision_line(d: &DecisionRecord) -> Line<'_> {
     };
     let job = d.job_id.map(|j| format!("#{j} ")).unwrap_or_default();
     let subject = shorten(&d.subject, 48);
+    if d.outcome == Outcome::Route {
+        return Line::from(vec![
+            Span::styled("route ", Style::new().fg(color)),
+            Span::raw(format!("{} ", shorten(&d.subject, 32))),
+            Span::raw(d.rule.as_deref().unwrap_or_default().to_string()),
+            Span::styled(
+                format!("  {} · {}", d.source.as_str(), latency(d.latency_us)),
+                Style::new().fg(MUTED),
+            ),
+        ]);
+    }
     Line::from(vec![
         Span::styled(
             format!("{:<5} ", d.outcome.as_str()),
@@ -128,6 +239,33 @@ pub fn render_approval(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(Paragraph::new(lines).block(block), area);
 }
 
+/// What JEV would send and where; `y` agrees, `n` keeps it off this run.
+pub fn render_consent(frame: &mut Frame, area: Rect, app: &App) {
+    let Some(jev) = app.guard.jev() else {
+        return;
+    };
+    let mut lines: Vec<Line> = jev.disclosure().into_iter().map(Line::raw).collect();
+    lines.push(Line::from(vec![
+        Span::styled("y", Style::new().fg(GREEN).add_modifier(Modifier::BOLD)),
+        Span::raw(" use JEV (remembered) · "),
+        Span::styled("n", Style::new().fg(RED).add_modifier(Modifier::BOLD)),
+        Span::raw(" not now (off for this run)"),
+    ]));
+    let block = Block::bordered()
+        .border_style(Style::new().fg(BLUE))
+        .title(Span::styled(
+            format!(" JEV · {} · {} ", jev.provider(), jev.host()),
+            Style::new().fg(BLUE).add_modifier(Modifier::BOLD),
+        ));
+    frame.render_widget(Clear, area);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .wrap(ratatui::widgets::Wrap { trim: true })
+            .block(block),
+        area,
+    );
+}
+
 /// 12 → "12µs", 1500 → "1.5ms", 30_000_000 → "30s".
 pub fn latency(us: u64) -> String {
     match us {
@@ -155,6 +293,13 @@ mod tests {
     use crossterm::event::KeyCode;
     use swarmux_application::ports::RunnerMsg;
     use swarmux_domain::{Actor, AgentEvent, Verdict};
+
+    #[test]
+    fn bars_round_and_clamp() {
+        assert_eq!(bar(0.91), "█████████░");
+        assert_eq!(bar(0.0), "░░░░░░░░░░");
+        assert_eq!(bar(1.7), "██████████");
+    }
 
     #[test]
     fn latency_units() {
@@ -249,7 +394,7 @@ mod tests {
         t.inbox.push(None, "Read", "/w/src/main.rs");
         t.app.update();
         let out = render_to_string(&t.app, 120, 30);
-        assert!(out.contains(" guard "), "{out}");
+        assert!(out.contains(" guard / JEV "), "{out}");
         assert!(out.contains("allow 1 · deny 0 · ask 0 · pass 0"), "{out}");
         assert!(out.contains("Read /w/src/main.rs  Read(**)"), "{out}");
     }

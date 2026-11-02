@@ -8,6 +8,7 @@ mod dashboard;
 mod history;
 mod prompts;
 mod queue;
+mod routing;
 mod ui;
 
 pub use app::App;

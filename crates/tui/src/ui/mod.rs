@@ -53,7 +53,15 @@ pub fn draw(frame: &mut Frame, app: &App) {
         Screen::History => history::render(frame, body, app),
         Screen::Sessions => sessions::render(frame, body, app),
     }
-    if app.guard.pending_count() > 0 {
+    if app.guard.jev().is_some_and(|j| j.wants_consent()) {
+        let h = guard::CONSENT_HEIGHT.min(body.height);
+        let overlay = Rect {
+            y: body.y + body.height - h,
+            height: h,
+            ..body
+        };
+        guard::render_consent(frame, overlay, app);
+    } else if app.guard.pending_count() > 0 {
         let h = guard::APPROVAL_HEIGHT.min(body.height);
         let overlay = Rect {
             y: body.y + body.height - h,
@@ -63,7 +71,11 @@ pub fn draw(frame: &mut Frame, app: &App) {
         guard::render_approval(frame, overlay, app);
     }
 
-    let stats = stats_line(app.stats(), app.guard.pending_count());
+    let stats = stats_line(
+        app.stats(),
+        app.guard.pending_count(),
+        app.routing.in_flight(),
+    );
     let [left, right] = Layout::horizontal([
         Constraint::Fill(1),
         Constraint::Length(stats.width() as u16),
@@ -93,8 +105,9 @@ pub fn short(n: u64) -> String {
     }
 }
 
-/// `approvals k · running n/cap · queued m · RAM free x.x GB`, right of the status bar.
-fn stats_line(s: QueueStats, approvals: usize) -> Line<'static> {
+/// `approvals k · routing r · running n/cap · queued m · RAM free x.x GB`,
+/// right of the status bar.
+fn stats_line(s: QueueStats, approvals: usize, routing: usize) -> Line<'static> {
     let ram = match s.free_ram {
         Some(b) => format!("{:.1} GB", b as f64 / (1u64 << 30) as f64),
         None => "n/a".into(),
@@ -106,6 +119,12 @@ fn stats_line(s: QueueStats, approvals: usize) -> Line<'static> {
             Style::new().fg(Color::Black).bg(ORANGE),
         ));
         spans.push(Span::raw(" "));
+    }
+    if routing > 0 {
+        spans.push(Span::styled(
+            format!("routing {routing} · "),
+            Style::new().fg(BLUE),
+        ));
     }
     spans.push(Span::styled(
         format!(
@@ -154,6 +173,7 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
                     "prompt → {}",
                     app.selected_session().map_or("?", |s| s.name.as_str())
                 ),
+                InputPurpose::RoutedPrompt => "prompt → swarmux picks the session".to_string(),
                 InputPurpose::Variable => format!(
                     "var {}",
                     app.prompts
@@ -202,11 +222,13 @@ fn hints(app: &App) -> &'static str {
         return " tab next field · ctrl+s save · esc cancel";
     }
     match app.screen {
-        Screen::Dashboard => " p prompt · ↑↓ session · 3 queue · 1-5 screens · q quit",
+        Screen::Dashboard => {
+            " p prompt · P let swarmux route · ↑↓ session · 3 queue · 1-5 screens · q quit"
+        }
         Screen::Queue => " c cancel · r retry · +/- priority · enter view · ↑↓ select · q quit",
         Screen::History => " / search · r re-run · f fork · enter view · ↑↓ select · q quit",
         Screen::Prompts => {
-            " n new · e edit · x delete · d dispatch · ↑↓ select · 1-5 screens · q quit"
+            " n new · e edit · x delete · d dispatch · D route · ↑↓ select · 1-5 screens · q quit"
         }
         Screen::Sessions => " n new session · l lean on/off · ↑↓ select · 1-5 screens · q quit",
     }

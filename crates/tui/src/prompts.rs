@@ -53,6 +53,8 @@ pub struct PendingDispatch {
     /// Still to ask, in order; the first one is being asked now.
     pub remaining: Vec<String>,
     pub values: HashMap<String, String>,
+    /// Let swarmux pick the session instead of `session_id`.
+    pub route: bool,
 }
 
 impl PendingDispatch {
@@ -198,6 +200,7 @@ mod tests {
             session_id: SessionId::random(),
             remaining: vec!["a".into(), "b".into()],
             values: HashMap::new(),
+            route: false,
         };
         assert_eq!(p.asking(), Some("a"));
         p.answer("1".into());

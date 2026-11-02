@@ -1,18 +1,20 @@
 //! Composition root: the only place that wires concrete adapters to use cases.
 
 mod doctor;
+mod jev;
 
 use std::rc::Rc;
 
 use anyhow::Context;
 use clap::{Parser, Subcommand};
 use swarmux_application::{
-    GuardService, HistoryService, JobService, PromptService, SessionService, SharedPolicy,
+    GuardService, HistoryService, Jev, JobService, PromptService, RoutingService, SessionService,
+    SharedPolicy,
 };
 use swarmux_infrastructure::hook::{self, HookServer};
 use swarmux_infrastructure::{
-    ClaudeCli, ConfigRuleWriter, GitCli, GuardHook, Paths, SqliteStore, SysinfoMonitor,
-    SystemClock, load_settings,
+    ClaudeCli, ConfigRuleWriter, GitCli, GuardHook, HaikuRouter, Paths, SqliteStore,
+    SysinfoMonitor, SystemClock, load_settings,
 };
 use swarmux_tui::App;
 
@@ -31,11 +33,30 @@ struct Cli {
 enum Command {
     /// Check that Claude Code is installed and swarmux's data is healthy.
     Doctor,
+    /// JEV, the optional hosted decision model (bring your own key).
+    Jev {
+        #[command(subcommand)]
+        action: JevAction,
+    },
     /// Hooks Claude Code runs inside swarmux jobs (not for direct use).
     #[command(hide = true)]
     Hook {
         #[command(subcommand)]
         event: HookEvent,
+    },
+}
+
+#[derive(Subcommand)]
+enum JevAction {
+    /// Store a provider's API key in the OS keychain (read without echo).
+    SetKey {
+        /// typesafe or openrouter
+        provider: String,
+    },
+    /// Send one sample decision and print the verdict, confidence and latency.
+    Test {
+        /// typesafe or openrouter (default: the one in config.toml)
+        provider: Option<String>,
     },
 }
 
@@ -49,6 +70,12 @@ fn main() -> anyhow::Result<()> {
     match Cli::parse().command {
         None => run_tui(),
         Some(Command::Doctor) => doctor::run(),
+        Some(Command::Jev {
+            action: JevAction::SetKey { provider },
+        }) => jev::set_key(&provider),
+        Some(Command::Jev {
+            action: JevAction::Test { provider },
+        }) => jev::test(provider.as_deref()),
         Some(Command::Hook {
             event: HookEvent::PreTool,
         }) => {
@@ -86,9 +113,23 @@ fn run_tui() -> anyhow::Result<()> {
     };
     let runner =
         Rc::new(ClaudeCli::new(doctor::claude_bin(), rt.handle().clone()).with_guard(guard_hook));
-    let guard = GuardService::new(policy, server, store.clone(), clock.clone())
+    let mut guard = GuardService::new(policy, server, store.clone(), clock.clone())
         .with_timeout_secs(guard_settings.approval_timeout_secs)
         .with_rule_writer(Rc::new(ConfigRuleWriter::new(paths.config.clone())));
+    let router = HaikuRouter::new(doctor::claude_bin(), rt.handle().clone());
+    let mut routing =
+        RoutingService::new(store.clone(), store.clone(), store.clone(), clock.clone())
+            .with_router(Rc::new(router));
+    if let Some((advisor, _)) = jev::advisor(&settings.jev, rt.handle().clone())? {
+        let jev = Rc::new(Jev::new(
+            Rc::new(advisor),
+            store.clone(),
+            clock.clone(),
+            settings.jev.threshold,
+        )?);
+        guard = guard.with_jev(jev.clone());
+        routing = routing.with_jev(jev);
+    }
 
     let workspace = Rc::new(GitCli::default());
     let sessions = SessionService::new(store.clone(), clock.clone())
@@ -106,6 +147,7 @@ fn run_tui() -> anyhow::Result<()> {
         prompts,
         history,
         guard,
+        routing,
         std::env::current_dir()?,
     );
     Ok(swarmux_tui::run(app)?)
