@@ -12,6 +12,7 @@ pub mod jev;
 mod monitor;
 pub mod paths;
 pub mod sqlite;
+pub mod telemetry;
 
 pub use agents::FsAgentCatalog;
 pub use claude_cli::{ClaudeCli, GuardHook, HaikuRouter};
