@@ -59,7 +59,7 @@ fn done(text: &str, cost: f64) -> AgentEvent {
 
 /// A session, review on, and a job with three subagents part-way through
 /// (two still running). Returns the app.
-fn running_job() -> TestApp {
+pub(crate) fn running_job() -> TestApp {
     let mut t = test_app();
     t.catalog.define("worker", "sonnet");
     t.catalog.define("tester", "sonnet");
@@ -157,7 +157,7 @@ fn running_job() -> TestApp {
 }
 
 /// The same job finished, reviewed and passed.
-fn reviewed_job() -> TestApp {
+pub(crate) fn reviewed_job() -> TestApp {
     let mut t = running_job();
     // Answer the approvals the unmatched calls are waiting on.
     t.keys([KeyCode::Char('y'), KeyCode::Char('y')]);

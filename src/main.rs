@@ -7,6 +7,7 @@ use std::rc::Rc;
 
 use anyhow::Context;
 use clap::{Parser, Subcommand};
+use swarmux_application::ports::Clock;
 use swarmux_application::{
     GuardService, HistoryService, Jev, JobService, PromptService, RoutingService, SessionService,
     SharedPolicy,
@@ -16,7 +17,7 @@ use swarmux_infrastructure::{
     ClaudeCli, ConfigRuleWriter, FsAgentCatalog, GitCli, GuardHook, HaikuRouter, Paths,
     SqliteStore, SysinfoMonitor, SystemClock, load_settings,
 };
-use swarmux_tui::App;
+use swarmux_tui::{App, Launch};
 
 /// Claude Code may run the hook this much longer than an approval can wait.
 const HOOK_GRACE_SECS: u64 = 10;
@@ -25,6 +26,9 @@ const HOOK_GRACE_SECS: u64 = 10;
 #[derive(Parser)]
 #[command(version, about)]
 struct Cli {
+    /// Start without the splash screen.
+    #[arg(long, global = true)]
+    no_splash: bool,
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -67,8 +71,9 @@ enum HookEvent {
 }
 
 fn main() -> anyhow::Result<()> {
-    match Cli::parse().command {
-        None => run_tui(),
+    let cli = Cli::parse();
+    match cli.command {
+        None => run_tui(cli.no_splash),
         Some(Command::Doctor) => doctor::run(),
         Some(Command::Jev {
             action: JevAction::SetKey { provider },
@@ -85,7 +90,7 @@ fn main() -> anyhow::Result<()> {
     }
 }
 
-fn run_tui() -> anyhow::Result<()> {
+fn run_tui(no_splash: bool) -> anyhow::Result<()> {
     // Everything that can fail with a readable message happens before the
     // terminal switches into full-screen mode.
     let paths = Paths::default_home()?;
@@ -156,6 +161,14 @@ fn run_tui() -> anyhow::Result<()> {
         guard,
         routing,
         std::env::current_dir()?,
+    )
+    .with_look(
+        &settings.ui,
+        Launch {
+            claude: doctor::claude_bin().display().to_string(),
+            no_splash,
+            now_ms: SystemClock.now(),
+        },
     );
     Ok(swarmux_tui::run(app)?)
 }

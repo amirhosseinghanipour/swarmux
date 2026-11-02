@@ -6,12 +6,12 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Clear, Paragraph},
+    widgets::{Clear, Paragraph},
 };
 use swarmux_application::{DecisionRecord, JevState, Outcome};
 
-use super::{BLUE, GREEN, MUTED, ORANGE, RED};
 use crate::app::App;
+use crate::theme::Theme;
 
 /// Height of the approval overlay, borders included.
 pub const APPROVAL_HEIGHT: u16 = 6;
@@ -21,8 +21,8 @@ pub const CONSENT_HEIGHT: u16 = 9;
 const BAR: usize = 10;
 
 /// Whether JEV is on, and how to turn it on when it isn't.
-pub(crate) fn jev_line(app: &App) -> Line<'static> {
-    let muted = Style::new().fg(MUTED);
+pub(crate) fn jev_line(app: &App, t: &Theme) -> Line<'static> {
+    let muted = Style::new().fg(t.muted);
     let Some(jev) = app.guard.jev() else {
         return Line::styled(
             "JEV off · bring your own key: swarmux jev set-key typesafe",
@@ -33,13 +33,13 @@ pub(crate) fn jev_line(app: &App) -> Line<'static> {
     if !jev.has_key() {
         return Line::styled(
             format!("JEV {p}: no key found · swarmux jev set-key {p}"),
-            Style::new().fg(ORANGE),
+            Style::new().fg(t.lead),
         );
     }
     match jev.state() {
         JevState::NeedsConsent => Line::styled(
             format!("JEV {p} waits for your consent"),
-            Style::new().fg(ORANGE),
+            Style::new().fg(t.lead),
         ),
         JevState::Declined => Line::styled(
             format!("JEV {p} off for this run (not allowed); restart swarmux to be asked again"),
@@ -51,7 +51,7 @@ pub(crate) fn jev_line(app: &App) -> Line<'static> {
                 n => format!(" · deciding {n}"),
             };
             Line::from(vec![
-                Span::styled(format!("JEV {p}"), Style::new().fg(BLUE)),
+                Span::styled(format!("JEV {p}"), Style::new().fg(t.haiku)),
                 Span::styled(
                     format!(
                         " · threshold {:.2} · {} decisions{deciding}",
@@ -66,7 +66,7 @@ pub(crate) fn jev_line(app: &App) -> Line<'static> {
 }
 
 /// `jev   Bash make deploy ████████░░ 0.91 → allow`
-pub(crate) fn jev_decision_line(d: &DecisionRecord, confidence: f64) -> Line<'_> {
+pub(crate) fn jev_decision_line<'a>(d: &'a DecisionRecord, confidence: f64, t: &Theme) -> Line<'a> {
     let (what, target) = if d.outcome == Outcome::Route {
         let rule = d.rule.as_deref().unwrap_or_default();
         let target = rule
@@ -85,19 +85,19 @@ pub(crate) fn jev_decision_line(d: &DecisionRecord, confidence: f64) -> Line<'_>
         )
     };
     let color = match d.outcome {
-        Outcome::Allow | Outcome::Route => GREEN,
-        Outcome::Deny | Outcome::Stop => RED,
-        Outcome::Ask | Outcome::Pass => ORANGE,
+        Outcome::Allow | Outcome::Route => t.ok,
+        Outcome::Deny | Outcome::Stop => t.error,
+        Outcome::Ask | Outcome::Pass => t.lead,
     };
     Line::from(vec![
-        Span::styled("jev   ", Style::new().fg(BLUE)),
+        Span::styled("jev   ", Style::new().fg(t.haiku)),
         Span::raw(format!("{what} ")),
-        Span::styled(bar(confidence), Style::new().fg(BLUE)),
+        Span::styled(bar(confidence), Style::new().fg(t.haiku)),
         Span::raw(format!(" {confidence:.2} ")),
         Span::styled(format!("→ {target}"), Style::new().fg(color)),
         Span::styled(
             format!("  {}", latency(d.latency_us)),
-            Style::new().fg(MUTED),
+            Style::new().fg(t.muted),
         ),
     ])
 }
@@ -108,12 +108,12 @@ pub fn bar(confidence: f64) -> String {
     format!("{}{}", "█".repeat(filled), "░".repeat(BAR - filled))
 }
 
-pub(crate) fn decision_line(d: &DecisionRecord) -> Line<'_> {
+pub(crate) fn decision_line<'a>(d: &'a DecisionRecord, t: &Theme) -> Line<'a> {
     let color = match d.outcome {
-        Outcome::Allow | Outcome::Route => GREEN,
-        Outcome::Deny | Outcome::Stop => RED,
-        Outcome::Ask => ORANGE,
-        Outcome::Pass => MUTED,
+        Outcome::Allow | Outcome::Route => t.ok,
+        Outcome::Deny | Outcome::Stop => t.error,
+        Outcome::Ask => t.lead,
+        Outcome::Pass => t.muted,
     };
     let job = d.job_id.map(|j| format!("#{j} ")).unwrap_or_default();
     let subject = shorten(&d.subject, 48);
@@ -124,7 +124,7 @@ pub(crate) fn decision_line(d: &DecisionRecord) -> Line<'_> {
             Span::raw(d.rule.as_deref().unwrap_or_default().to_string()),
             Span::styled(
                 format!("  {} · {}", d.source.as_str(), latency(d.latency_us)),
-                Style::new().fg(MUTED),
+                Style::new().fg(t.muted),
             ),
         ]);
     }
@@ -140,13 +140,14 @@ pub(crate) fn decision_line(d: &DecisionRecord) -> Line<'_> {
                 d.rule.as_deref().unwrap_or("no rule"),
                 latency(d.latency_us)
             ),
-            Style::new().fg(MUTED),
+            Style::new().fg(t.muted),
         ),
     ])
 }
 
 /// The oldest held tool call, its job and how long until it is denied.
 pub fn render_approval(frame: &mut Frame, area: Rect, app: &App) {
+    let t = &app.look.theme;
     let approvals = app.guard.approvals();
     let Some(first) = approvals.first() else {
         return;
@@ -172,30 +173,30 @@ pub fn render_approval(frame: &mut Frame, area: Rect, app: &App) {
         Line::from(vec![
             Span::styled(
                 format!("{} ", r.tool_name),
-                Style::new().fg(ORANGE).add_modifier(Modifier::BOLD),
+                Style::new().fg(t.lead).add_modifier(Modifier::BOLD),
             ),
             Span::raw(what),
         ]),
-        Line::styled(format!("{job} · in {}", r.cwd), Style::new().fg(MUTED)),
+        Line::styled(format!("{job} · in {}", r.cwd), Style::new().fg(t.muted)),
         Line::styled(
             format!("denied in {} s unless you answer", first.secs_left),
-            Style::new().fg(MUTED),
+            Style::new().fg(t.muted),
         ),
         Line::from(vec![
-            Span::styled("y", Style::new().fg(GREEN).add_modifier(Modifier::BOLD)),
+            Span::styled("y", Style::new().fg(t.ok).add_modifier(Modifier::BOLD)),
             Span::raw(" approve · "),
-            Span::styled("n", Style::new().fg(RED).add_modifier(Modifier::BOLD)),
+            Span::styled("n", Style::new().fg(t.error).add_modifier(Modifier::BOLD)),
             Span::raw(" deny · "),
-            Span::styled("a", Style::new().fg(GREEN).add_modifier(Modifier::BOLD)),
+            Span::styled("a", Style::new().fg(t.ok).add_modifier(Modifier::BOLD)),
             Span::raw(" always allow"),
-            Span::styled(more, Style::new().fg(ORANGE)),
+            Span::styled(more, Style::new().fg(t.lead)),
         ]),
     ];
-    let block = Block::bordered()
-        .border_style(Style::new().fg(ORANGE))
+    let block = super::rounded(t)
+        .border_style(Style::new().fg(t.lead))
         .title(Span::styled(
             " approval needed ",
-            Style::new().fg(ORANGE).add_modifier(Modifier::BOLD),
+            Style::new().fg(t.lead).add_modifier(Modifier::BOLD),
         ));
     frame.render_widget(Clear, area);
     frame.render_widget(Paragraph::new(lines).block(block), area);
@@ -203,21 +204,22 @@ pub fn render_approval(frame: &mut Frame, area: Rect, app: &App) {
 
 /// What JEV would send and where; `y` agrees, `n` keeps it off this run.
 pub fn render_consent(frame: &mut Frame, area: Rect, app: &App) {
+    let t = &app.look.theme;
     let Some(jev) = app.guard.jev() else {
         return;
     };
     let mut lines: Vec<Line> = jev.disclosure().into_iter().map(Line::raw).collect();
     lines.push(Line::from(vec![
-        Span::styled("y", Style::new().fg(GREEN).add_modifier(Modifier::BOLD)),
+        Span::styled("y", Style::new().fg(t.ok).add_modifier(Modifier::BOLD)),
         Span::raw(" use JEV (remembered) · "),
-        Span::styled("n", Style::new().fg(RED).add_modifier(Modifier::BOLD)),
+        Span::styled("n", Style::new().fg(t.error).add_modifier(Modifier::BOLD)),
         Span::raw(" not now (off for this run)"),
     ]));
-    let block = Block::bordered()
-        .border_style(Style::new().fg(BLUE))
+    let block = super::rounded(t)
+        .border_style(Style::new().fg(t.haiku))
         .title(Span::styled(
             format!(" JEV · {} · {} ", jev.provider(), jev.host()),
-            Style::new().fg(BLUE).add_modifier(Modifier::BOLD),
+            Style::new().fg(t.haiku).add_modifier(Modifier::BOLD),
         ));
     frame.render_widget(Clear, area);
     frame.render_widget(

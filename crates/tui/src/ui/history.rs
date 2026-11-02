@@ -8,23 +8,26 @@ use ratatui::{
 use swarmux_application::JobDetail;
 use swarmux_domain::{ReviewState, ReviewVerdict, iso_minute};
 
-use super::{GREEN, MUTED, ORANGE, RED, short, status_span};
+use super::{short, status_span};
 use crate::app::App;
+use crate::theme::Theme;
 
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
+    let t = &app.look.theme;
     let [table_area, detail_area] =
         Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)]).areas(area);
     render_table(frame, table_area, app);
-    render_detail(frame, detail_area, app.history.detail.as_ref());
+    render_detail(frame, detail_area, app.history.detail.as_ref(), t);
 }
 
-fn panel(title: String) -> Block<'static> {
-    Block::bordered()
-        .border_style(Style::new().fg(MUTED))
+fn panel(t: &Theme, title: String) -> Block<'static> {
+    super::rounded(t)
+        .border_style(Style::new().fg(t.muted))
         .title(title)
 }
 
 fn render_table(frame: &mut Frame, area: Rect, app: &App) {
+    let t = &app.look.theme;
     let h = &app.history;
     let title = if h.query.is_empty() {
         " history (UTC) ".to_string()
@@ -37,7 +40,10 @@ fn render_table(frame: &mut Frame, area: Rect, app: &App) {
         } else {
             "nothing matches: press / to change the search"
         };
-        frame.render_widget(Paragraph::new(hint).fg(MUTED).block(panel(title)), area);
+        frame.render_widget(
+            Paragraph::new(hint).fg(t.muted).block(panel(t, title)),
+            area,
+        );
         return;
     }
     let rows: Vec<Row> = h
@@ -47,7 +53,7 @@ fn render_table(frame: &mut Frame, area: Rect, app: &App) {
             Row::new(vec![
                 Cell::from(iso_minute(r.created_at)),
                 Cell::from(r.session_name.clone()),
-                Cell::from(status_span(r.status)),
+                Cell::from(status_span(t, r.status)),
                 Cell::from(format!("${:.4}", r.cost_usd)),
                 Cell::from(format!("{}/{}", short(r.tokens_in), short(r.tokens_out))),
                 Cell::from(r.preview(80)),
@@ -62,30 +68,30 @@ fn render_table(frame: &mut Frame, area: Rect, app: &App) {
         Constraint::Length(11),
         Constraint::Fill(1),
     ];
-    let header = Row::new(["time", "session", "status", "cost", "tokens", "prompt"]).fg(MUTED);
+    let header = Row::new(["time", "session", "status", "cost", "tokens", "prompt"]).fg(t.muted);
     let table = Table::new(rows, widths)
         .header(header)
-        .block(panel(title))
+        .block(panel(t, title))
         .highlight_symbol("› ")
         .row_highlight_style(Style::new().bold());
     let mut state = TableState::default().with_selected(Some(h.selected));
     frame.render_stateful_widget(table, area, &mut state);
 }
 
-fn render_detail(frame: &mut Frame, area: Rect, detail: Option<&JobDetail>) {
+fn render_detail(frame: &mut Frame, area: Rect, detail: Option<&JobDetail>, t: &Theme) {
     let Some(d) = detail else {
-        frame.render_widget(panel(" job ".into()), area);
+        frame.render_widget(panel(t, " job ".into()), area);
         return;
     };
     let s = &d.summary;
-    let heading = |text: &str| Line::styled(text.to_string(), Style::new().fg(ORANGE));
+    let heading = |text: &str| Line::styled(text.to_string(), Style::new().fg(t.lead));
     let duration = s
         .duration_ms
         .map_or_else(String::new, |ms| format!(" · {:.1}s", ms as f64 / 1000.0));
     let mut lines = vec![
         Line::from(vec![
             Span::raw(format!("{} · {} · ", s.session_name, s.model)),
-            status_span(s.status),
+            status_span(t, s.status),
         ]),
         Line::styled(
             format!(
@@ -95,7 +101,7 @@ fn render_detail(frame: &mut Frame, area: Rect, detail: Option<&JobDetail>) {
                 short(s.tokens_in),
                 short(s.tokens_out)
             ),
-            Style::new().fg(MUTED),
+            Style::new().fg(t.muted),
         ),
         Line::raw(""),
         heading("prompt"),
@@ -111,29 +117,29 @@ fn render_detail(frame: &mut Frame, area: Rect, detail: Option<&JobDetail>) {
     if let Some(review) = &d.review {
         lines.push(Line::raw(""));
         lines.push(heading("review"));
-        lines.extend(review_lines(review));
+        lines.extend(review_lines(review, t));
     }
     if let Some(e) = &s.error {
         lines.push(Line::raw(""));
-        lines.push(Line::styled("error", Style::new().fg(RED)));
+        lines.push(Line::styled("error", Style::new().fg(t.error)));
         lines.extend(e.lines().map(|l| Line::raw(l.to_string())));
     }
     frame.render_widget(
         Paragraph::new(lines)
             .wrap(Wrap { trim: false })
-            .block(panel(format!(" job #{} ", s.job_id))),
+            .block(panel(t, format!(" job #{} ", s.job_id))),
         area,
     );
 }
 
 /// The review's outcome, its concerns and what it cost.
-fn review_lines(review: &ReviewState) -> Vec<Line<'static>> {
-    let cost = |c: f64| Span::styled(format!(" · ${c:.4}"), Style::new().fg(MUTED));
+fn review_lines(review: &ReviewState, t: &Theme) -> Vec<Line<'static>> {
+    let cost = |c: f64| Span::styled(format!(" · ${c:.4}"), Style::new().fg(t.muted));
     match review {
-        ReviewState::Requested => vec![Line::styled("requested", Style::new().fg(MUTED))],
+        ReviewState::Requested => vec![Line::styled("requested", Style::new().fg(t.muted))],
         ReviewState::Running { job } => vec![Line::styled(
             format!("running as job #{job}"),
-            Style::new().fg(MUTED),
+            Style::new().fg(t.muted),
         )],
         ReviewState::Done {
             review,
@@ -141,8 +147,8 @@ fn review_lines(review: &ReviewState) -> Vec<Line<'static>> {
             cost_usd,
         } => {
             let (text, color) = match review.verdict {
-                ReviewVerdict::Pass => ("passed", GREEN),
-                ReviewVerdict::Concerns => ("concerns", RED),
+                ReviewVerdict::Pass => ("passed", t.ok),
+                ReviewVerdict::Concerns => ("concerns", t.error),
             };
             let mut lines = vec![Line::from(vec![
                 Span::styled(text, Style::new().fg(color)),
@@ -156,14 +162,14 @@ fn review_lines(review: &ReviewState) -> Vec<Line<'static>> {
                 review
                     .concerns
                     .iter()
-                    .map(|c| Line::styled(format!("- {c}"), Style::new().fg(RED))),
+                    .map(|c| Line::styled(format!("- {c}"), Style::new().fg(t.error))),
             );
             lines
         }
         ReviewState::Failed {
             error, cost_usd, ..
         } => vec![Line::from(vec![
-            Span::styled(format!("review failed: {error}"), Style::new().fg(RED)),
+            Span::styled(format!("review failed: {error}"), Style::new().fg(t.error)),
             cost(*cost_usd),
         ])],
     }

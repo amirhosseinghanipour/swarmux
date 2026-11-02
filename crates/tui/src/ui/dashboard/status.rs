@@ -8,14 +8,15 @@ use swarmux_domain::{JobStatus, ReviewState};
 
 use super::View;
 use super::guard::thousands;
-use super::widgets::label;
+use super::parts::label;
 use crate::app::App;
-use crate::ui::{LABEL, short};
+use crate::theme::Theme;
+use crate::ui::short;
 
 /// `| step [plan] effort [—] subagents [2/3 active] lead [ctx 15.1k] …`
-pub fn line(app: &App, view: &View) -> Line<'static> {
-    let value = |s: String| Span::styled(s, Style::new().add_modifier(Modifier::BOLD));
-    let pair = |name: &str, v: String| [label(format!(" {name} [")), value(v), label("]")];
+pub fn line(app: &App, view: &View, t: &Theme) -> Line<'static> {
+    let value = |s: String| Span::styled(s, Style::new().fg(t.text).add_modifier(Modifier::BOLD));
+    let pair = |name: &str, v: String| [label(t, format!(" {name} [")), value(v), label(t, "]")];
     let job = view.job;
     let step = job.map_or("—".into(), |j| j.phase().as_str().to_string());
     let subagents = job.map_or("—".into(), |j| {
@@ -37,7 +38,7 @@ pub fn line(app: &App, view: &View) -> Line<'static> {
         Some(ReviewState::Failed { .. }) => "failed".into(),
     };
     let decisions = format!("{} decisions", thousands(app.guard.stats().total()));
-    let mut spans = vec![Span::styled(" |", Style::new().fg(LABEL))];
+    let mut spans = vec![Span::styled(" |", Style::new().fg(t.label))];
     spans.extend(pair("step", step));
     spans.extend(pair("effort", "—".into()));
     spans.extend(pair("subagents", subagents));

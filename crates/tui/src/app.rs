@@ -1,14 +1,14 @@
 //! UI state and key handling. All work goes through application use cases.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::time::Duration;
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::DefaultTerminal;
 use swarmux_application::{
     AppError, AppResult, GuardService, HistoryService, JobService, PromptService, QueueEntry,
-    QueueStats, RoutingService, SessionService,
+    QueueStats, RoutingService, SessionService, UiSettings,
 };
 use swarmux_domain::{JobId, JobProgress, PromptId, Session, SessionId};
 
@@ -17,10 +17,13 @@ use crate::history::{HistoryAction, HistoryScreen};
 use crate::prompts::{FormAction, PendingDispatch, PromptForm, PromptsScreen};
 use crate::queue::{QueueAction, QueueScreen};
 use crate::routing::RoutePayload;
+use crate::telemetry::Telemetry;
+use crate::theme::ColorDepth;
+use crate::ui::anim::Anim;
+use crate::ui::grid::PanelId;
 use crate::ui::input::{Input, InputAction};
-
-/// Redraw budget: about 10 frames per second.
-const FRAME: Duration = Duration::from_millis(100);
+use crate::ui::look::Look;
+use crate::ui::splash::SplashInfo;
 
 /// The five top-level screens.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -101,7 +104,35 @@ pub struct App {
     /// Prompts being routed, by ticket.
     pub(crate) routes: HashMap<u64, RoutePayload>,
     cwd: PathBuf,
+    /// Theme, icons, layouts and frame rate.
+    pub look: Look,
+    /// Tweens and pulses; touched while rendering, driven by `frame`.
+    pub anim: RefCell<Anim>,
+    /// Data for the telemetry panels.
+    pub telemetry: Telemetry,
+    /// The dashboard panel `Tab` focused.
+    pub focus: Option<PanelId>,
+    /// A short message and the frame it disappears at.
+    toast: Option<(String, u64)>,
+    /// What the splash screen shows.
+    pub splash: SplashInfo,
 }
+
+/// What the composition root knows at start-up.
+#[derive(Clone, Debug, Default)]
+pub struct Launch {
+    /// The Claude Code executable, as configured.
+    pub claude: String,
+    /// `--no-splash`.
+    pub no_splash: bool,
+    /// Now, in milliseconds since the epoch (for "jobs today").
+    pub now_ms: i64,
+}
+
+/// How long the splash stays up, in milliseconds.
+const SPLASH_MS: u64 = 1500;
+/// How long a toast stays up, in milliseconds.
+const TOAST_MS: u64 = 2500;
 
 impl App {
     pub fn new(
@@ -135,10 +166,56 @@ impl App {
             routing,
             routes: HashMap::new(),
             cwd,
+            look: Look::default(),
+            anim: RefCell::new(Anim::default()),
+            telemetry: Telemetry::default(),
+            focus: None,
+            toast: None,
+            splash: SplashInfo::default(),
         };
         app.refresh_sessions(None);
         app.refresh_prompts(None);
         app
+    }
+
+    /// Applies the look-and-feel settings and shows the splash unless it is
+    /// turned off. Settings it can't use are reported in the status bar.
+    pub fn with_look(mut self, ui: &UiSettings, launch: Launch) -> App {
+        let (look, problems) = Look::from_settings(ui, ColorDepth::from_env());
+        self.look = look;
+        if let Some(p) = problems.into_iter().next() {
+            self.error = Some(p);
+        }
+        let day_start = launch.now_ms - launch.now_ms.rem_euclid(86_400_000);
+        let jobs_today = self.history_service.list("").map_or(0, |rows| {
+            rows.iter().filter(|r| r.created_at >= day_start).count()
+        });
+        self.splash = SplashInfo {
+            claude: launch.claude,
+            sessions: self.sessions.len(),
+            jobs_today,
+        };
+        if ui.splash && !launch.no_splash {
+            self.look.splash_until = Some(self.frame + self.look.frames(SPLASH_MS));
+        }
+        self
+    }
+
+    /// New data for the telemetry panels.
+    pub fn set_telemetry(&mut self, telemetry: Telemetry) {
+        self.telemetry = telemetry;
+    }
+
+    /// The toast showing now, if any.
+    pub fn toast(&self) -> Option<&str> {
+        self.toast
+            .as_ref()
+            .filter(|(_, until)| self.frame < *until)
+            .map(|(s, _)| s.as_str())
+    }
+
+    fn show_toast(&mut self, text: String) {
+        self.toast = Some((text, self.frame + self.look.frames(TOAST_MS)));
     }
 
     pub fn run(mut self, terminal: &mut DefaultTerminal) -> std::io::Result<()> {
@@ -146,7 +223,7 @@ impl App {
             self.update();
             terminal.draw(|frame| crate::ui::draw(frame, &self))?;
             self.frame = self.frame.wrapping_add(1);
-            if event::poll(FRAME)?
+            if event::poll(self.look.frame_time())?
                 && let Event::Key(key) = event::read()?
                 && key.kind == KeyEventKind::Press
             {
@@ -255,6 +332,11 @@ impl App {
             self.quit = true;
             return;
         }
+        if self.look.splash_at(self.frame) {
+            // Any key just dismisses the splash.
+            self.look.splash_until = None;
+            return;
+        }
         if let Mode::Input(purpose, input) = &mut self.mode {
             let purpose = *purpose;
             match input.handle(key) {
@@ -324,6 +406,18 @@ impl App {
                     self.refresh_history();
                 }
             }
+            KeyCode::Char('t') => {
+                let name = self.look.next_theme().name;
+                self.show_toast(format!("theme · {name}"));
+            }
+            KeyCode::Char('L') => {
+                let name = self.look.next_layout().name.clone();
+                self.show_toast(format!("layout · {name}"));
+            }
+            KeyCode::Tab | KeyCode::BackTab if self.screen == Screen::Dashboard => {
+                self.cycle_focus(key.code == KeyCode::Tab);
+            }
+            KeyCode::Esc if self.focus.is_some() => self.focus = None,
             code if self.screen == Screen::Queue => {
                 let result = self.queue_key(code);
                 self.show(result);
@@ -376,6 +470,24 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    /// Moves the focus highlight to the next (or previous) boxed panel of
+    /// the layout, then off.
+    fn cycle_focus(&mut self, forward: bool) {
+        let panels = self.look.layout_spec().panel_ids();
+        let boxed: Vec<PanelId> = panels.into_iter().filter(|p| p.panel().boxed()).collect();
+        if boxed.is_empty() {
+            return;
+        }
+        let at = self.focus.and_then(|f| boxed.iter().position(|p| *p == f));
+        self.focus = match (at, forward) {
+            (None, true) => boxed.first().copied(),
+            (None, false) => boxed.last().copied(),
+            (Some(i), true) => boxed.get(i + 1).copied(),
+            (Some(0), false) => None,
+            (Some(i), false) => boxed.get(i - 1).copied(),
+        };
     }
 
     fn show(&mut self, result: AppResult<()>) {

@@ -9,10 +9,11 @@ mod history;
 mod prompts;
 mod queue;
 mod routing;
+pub mod telemetry;
 pub mod theme;
 mod ui;
 
-pub use app::App;
+pub use app::{App, Launch};
 
 /// Takes over the terminal, runs the app until the user quits, then restores it.
 pub fn run(app: App) -> std::io::Result<()> {
