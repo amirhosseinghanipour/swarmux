@@ -12,6 +12,61 @@ pub struct Settings {
     pub guard: GuardSettings,
     pub jev: JevSettings,
     pub review: ReviewSettings,
+    /// Look and feel: theme, layout, icons, animation.
+    pub ui: UiSettings,
+}
+
+/// Look and feel, from the top-level `theme`, `layout`, `icons`, `gaps`,
+/// `fps`, `low_power` and `splash` keys and `[[layouts]]`. Names are kept
+/// as written; the interface resolves them and says when one is unknown.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UiSettings {
+    pub theme: String,
+    pub layout: String,
+    /// `"ascii"` or `"nerd"` (Nerd Font glyphs).
+    pub icons: String,
+    /// Blank cells between panels (0-4).
+    pub gaps: u16,
+    /// Frames per second (1-30).
+    pub fps: u16,
+    /// 4 fps, no tweens or pulses.
+    pub low_power: bool,
+    /// The start-up screen.
+    pub splash: bool,
+    /// User-defined layouts.
+    pub layouts: Vec<LayoutSettings>,
+}
+
+impl Default for UiSettings {
+    fn default() -> UiSettings {
+        UiSettings {
+            theme: "reference".into(),
+            layout: "command".into(),
+            icons: "ascii".into(),
+            gaps: 1,
+            fps: 10,
+            low_power: false,
+            splash: true,
+            layouts: Vec::new(),
+        }
+    }
+}
+
+/// One `[[layouts]]` entry: rows of panels, top to bottom.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LayoutSettings {
+    pub name: String,
+    pub rows: Vec<RowSettings>,
+}
+
+/// A row of a user layout. Panels are ids, optionally with a weight
+/// (`"timeline:2"`). A row is `height` rows tall, or shares the free
+/// space by `weight` (default 1).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RowSettings {
+    pub panels: Vec<String>,
+    pub height: Option<u16>,
+    pub weight: Option<u16>,
 }
 
 /// The `[review]` section.
@@ -54,6 +109,7 @@ impl Default for Settings {
             guard: GuardSettings::default(),
             jev: JevSettings::default(),
             review: ReviewSettings::default(),
+            ui: UiSettings::default(),
         }
     }
 }
@@ -165,6 +221,12 @@ mod tests {
             (120, 2)
         );
         assert_eq!((s.review.enabled, s.review.model.as_str()), (false, "opus"));
+        assert_eq!(
+            (s.ui.theme.as_str(), s.ui.layout.as_str()),
+            ("reference", "command")
+        );
+        assert_eq!((s.ui.icons.as_str(), s.ui.gaps, s.ui.fps), ("ascii", 1, 10));
+        assert!(s.ui.splash && !s.ui.low_power && s.ui.layouts.is_empty());
     }
 
     #[test]
