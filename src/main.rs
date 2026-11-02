@@ -1,8 +1,5 @@
-mod app;
-mod doctor;
-mod ui;
-
 use clap::{Parser, Subcommand};
+use swarmux::{app, doctor};
 
 /// swarmux — a prompt-first command center for Claude Code.
 #[derive(Parser)]
