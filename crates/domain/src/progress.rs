@@ -114,6 +114,7 @@ impl JobProgress {
                 cache_read,
                 context_window,
                 subagents_spawned,
+                text,
                 ..
             } => {
                 self.cost_usd = *cost_usd;
@@ -135,6 +136,7 @@ impl JobProgress {
                     duration_ms: *duration_ms,
                     outcome: subtype.clone(),
                     error: None,
+                    text: text.clone(),
                 })
             }
             _ => {
@@ -146,21 +148,50 @@ impl JobProgress {
 
     /// Ends the job as failed (unless it already finished). Returns the result to save.
     pub fn fail(&mut self, error: &str, tick: u32) -> Option<JobResult> {
+        self.end(JobStatus::Failed, "error", Some(error), tick)
+    }
+
+    /// Ends the job as cancelled (unless it already finished). Returns the result to save.
+    pub fn cancel(&mut self, tick: u32) -> Option<JobResult> {
+        self.end(JobStatus::Cancelled, "cancelled", None, tick)
+    }
+
+    fn end(
+        &mut self,
+        status: JobStatus,
+        kind: &str,
+        error: Option<&str>,
+        tick: u32,
+    ) -> Option<JobResult> {
         if self.status.is_finished() {
             return None;
         }
         self.last_tick = self.last_tick.max(tick);
-        self.status = JobStatus::Failed;
-        self.push_log(tick, "swarmux", "error", error);
+        self.status = status;
+        self.push_log(tick, "swarmux", kind, error.unwrap_or("by user"));
         Some(JobResult {
             tokens_in: self.tokens_in,
             tokens_out: self.tokens_out,
             cache_read: 0,
             cost_usd: self.cost_usd,
             duration_ms: u64::from(tick) * 100,
-            outcome: "failed".into(),
-            error: Some(error.to_string()),
+            outcome: status.as_str().into(),
+            error: error.map(str::to_string),
+            text: String::new(),
         })
+    }
+
+    /// Adds a stored event back (kind, actor key and text as saved), for
+    /// viewing a job from an earlier run.
+    pub fn replay(&mut self, actor_key: &str, kind: &str, text: &str, tick: u32) {
+        let actor = match actor_key {
+            "lead" => Actor::Lead,
+            id => Actor::Subagent(id.to_string()),
+        };
+        self.last_tick = self.last_tick.max(tick);
+        self.mark(&actor, tick);
+        let label = self.label_for(&actor);
+        self.push_log(tick, &label, kind, text);
     }
 
     fn mark(&mut self, actor: &Actor, tick: u32) {
@@ -249,6 +280,7 @@ mod tests {
             cache_read: 3,
             context_window: Some(1_000_000),
             subagents_spawned: 0,
+            text: "all good".into(),
         }
     }
 
@@ -261,6 +293,7 @@ mod tests {
         assert_eq!(r.cost_usd, 0.5);
         assert_eq!(r.cache_read, 3);
         assert_eq!(r.outcome, "success");
+        assert_eq!(r.text, "all good");
         assert!(p.log.back().unwrap().starts_with("00:01 lead"));
     }
 
@@ -287,6 +320,29 @@ mod tests {
         assert_eq!(r.error.as_deref(), Some("spawn failed: x"));
         assert_eq!(r.duration_ms, 3000);
         assert!(p.log.back().unwrap().contains("spawn failed"));
+    }
+
+    #[test]
+    fn cancel_ends_running_job_once() {
+        let mut p = progress();
+        let r = p.cancel(20).unwrap();
+        assert_eq!(p.status, JobStatus::Cancelled);
+        assert_eq!((r.outcome.as_str(), r.error), ("cancelled", None));
+        assert!(p.log.back().unwrap().contains("cancelled"));
+        assert_eq!(p.cancel(21), None);
+        assert_eq!(p.fail("late", 22), None);
+    }
+
+    #[test]
+    fn replay_rebuilds_log_and_lanes() {
+        let mut p = progress();
+        p.replay("lead", "text", "hello", 5);
+        p.replay("toolu_A", "tool_use", "Read a.rs", 12);
+        assert_eq!(p.lanes.len(), 2);
+        assert_eq!(p.lanes[1].marks, [12]);
+        assert_eq!(p.last_tick, 12);
+        assert!(p.log[0].starts_with("00:00 lead       text        hello"));
+        assert!(p.log[1].contains("toolu_A"));
     }
 
     #[test]

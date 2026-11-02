@@ -1,4 +1,4 @@
-use swarmux_domain::DomainError;
+use swarmux_domain::{DomainError, JobId};
 
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
@@ -14,8 +14,14 @@ pub enum AppError {
     Workspace(String),
     #[error("prompt not found")]
     PromptNotFound,
-    #[error("session {0} is still running a job")]
-    SessionBusy(String),
+    #[error("job not found")]
+    JobNotFound,
+    #[error("job #{0} has already finished")]
+    JobFinished(JobId),
+    #[error("job #{0} hasn't finished yet")]
+    JobNotFinished(JobId),
+    #[error("job #{0} is no longer queued")]
+    JobNotQueued(JobId),
 }
 
 pub type AppResult<T> = Result<T, AppError>;

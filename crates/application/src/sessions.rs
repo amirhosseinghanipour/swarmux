@@ -10,11 +10,22 @@ use crate::ports::{Clock, SessionRepository};
 pub struct SessionService {
     repo: Rc<dyn SessionRepository>,
     clock: Rc<dyn Clock>,
+    default_model: String,
 }
 
 impl SessionService {
     pub fn new(repo: Rc<dyn SessionRepository>, clock: Rc<dyn Clock>) -> SessionService {
-        SessionService { repo, clock }
+        SessionService {
+            repo,
+            clock,
+            default_model: DEFAULT_MODEL.to_string(),
+        }
+    }
+
+    /// Model for sessions created from now on.
+    pub fn with_default_model(mut self, model: &str) -> SessionService {
+        self.default_model = model.to_string();
+        self
     }
 
     pub fn create(&self, name: &str, cwd: PathBuf) -> AppResult<Session> {
@@ -22,7 +33,7 @@ impl SessionService {
             SessionId::random(),
             name,
             cwd,
-            DEFAULT_MODEL,
+            &self.default_model,
             self.clock.now(),
         )?;
         self.repo.insert(&session)?;
@@ -54,6 +65,13 @@ mod tests {
         svc.create("b", "/w".into()).unwrap();
         let names: Vec<_> = svc.list().unwrap().into_iter().map(|s| s.name).collect();
         assert_eq!(names, ["b", "a"]);
+    }
+
+    #[test]
+    fn new_sessions_use_the_default_model() {
+        let (svc, _) = service();
+        let svc = svc.with_default_model("opus");
+        assert_eq!(svc.create("a", "/w".into()).unwrap().model, "opus");
     }
 
     #[test]

@@ -17,6 +17,11 @@ impl SessionId {
     pub fn random() -> SessionId {
         SessionId(Uuid::new_v4())
     }
+
+    /// Parses Claude Code's textual session id.
+    pub fn parse(s: &str) -> Option<SessionId> {
+        Uuid::parse_str(s.trim()).ok().map(SessionId)
+    }
 }
 
 impl fmt::Display for SessionId {
@@ -66,6 +71,14 @@ impl Session {
         })
     }
 
+    /// Name for a session forked from this one, kept within the length limit.
+    pub fn fork_name(&self) -> String {
+        const SUFFIX: &str = " fork";
+        let keep = NAME_MAX - SUFFIX.len();
+        let base: String = self.name.chars().take(keep).collect();
+        format!("{}{SUFFIX}", base.trim_end())
+    }
+
     /// When the session was last active (used for ordering).
     pub fn activity(&self) -> Millis {
         self.last_used_at.unwrap_or(self.created_at)
@@ -86,6 +99,21 @@ mod tests {
         assert_eq!(s.name, "demo");
         assert_eq!(s.permission_mode, "default");
         assert_eq!(s.activity(), 5);
+    }
+
+    #[test]
+    fn fork_name_fits_the_limit() {
+        assert_eq!(make("demo").unwrap().fork_name(), "demo fork");
+        let long = make(&"x".repeat(64)).unwrap().fork_name();
+        assert_eq!(long.chars().count(), 64);
+        assert!(long.ends_with(" fork"));
+    }
+
+    #[test]
+    fn parse_session_id() {
+        let id = SessionId::random();
+        assert_eq!(SessionId::parse(&id.to_string()), Some(id));
+        assert_eq!(SessionId::parse("nope"), None);
     }
 
     #[test]

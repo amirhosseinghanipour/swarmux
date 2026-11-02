@@ -5,14 +5,15 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use swarmux_domain::{
-    JobId, JobResult, JobStatus, Millis, PromptDraft, PromptId, PromptTemplate, Session, SessionId,
+    Job, JobId, JobResult, JobStatus, Millis, PromptDraft, PromptId, PromptTemplate, Session,
+    SessionId,
 };
 
 use crate::ports::{
-    AgentRunner, Clock, JobRepository, PromptRepository, RunRequest, RunSink, RunnerMsg,
-    SessionRepository, Workspace,
+    AgentRunner, Clock, JobRepository, NewJob, PromptRepository, RunRequest, RunSink, RunnerMsg,
+    SessionRepository, StoredEvent, SystemMonitor, Workspace,
 };
-use crate::{AppError, AppResult};
+use crate::{AppError, AppResult, JobSummary};
 
 /// A clock that only moves when told to.
 pub struct FixedClock(Cell<Millis>);
@@ -35,11 +36,10 @@ impl Clock for FixedClock {
 
 #[derive(Clone)]
 struct JobRow {
-    session: SessionId,
-    prompt_id: Option<PromptId>,
-    status: JobStatus,
+    job: Job,
+    started_at: Option<Millis>,
     result: Option<JobResult>,
-    events: Vec<(String, String, String)>,
+    events: Vec<StoredEvent>,
 }
 
 /// Sessions, jobs and prompts in memory.
@@ -54,7 +54,11 @@ pub struct InMemoryStore {
 
 impl InMemoryStore {
     pub fn status_of(&self, id: JobId) -> JobStatus {
-        self.jobs.borrow()[&id.0].status
+        self.jobs.borrow()[&id.0].job.status
+    }
+
+    pub fn job_of(&self, id: JobId) -> Job {
+        self.jobs.borrow()[&id.0].job.clone()
     }
 
     pub fn result_of(&self, id: JobId) -> Option<JobResult> {
@@ -62,11 +66,46 @@ impl InMemoryStore {
     }
 
     pub fn events_of(&self, id: JobId) -> Vec<(String, String, String)> {
-        self.jobs.borrow()[&id.0].events.clone()
+        self.jobs.borrow()[&id.0]
+            .events
+            .iter()
+            .map(|e| (e.kind.clone(), e.actor.clone(), e.payload.clone()))
+            .collect()
     }
 
     pub fn prompt_of(&self, id: JobId) -> Option<PromptId> {
-        self.jobs.borrow()[&id.0].prompt_id
+        self.jobs.borrow()[&id.0].job.prompt_id
+    }
+
+    fn summarize(&self, row: &JobRow) -> JobSummary {
+        let session_name = self
+            .sessions
+            .borrow()
+            .iter()
+            .find(|s| s.id == row.job.session_id)
+            .map_or_else(String::new, |s| s.name.clone());
+        let r = row.result.as_ref();
+        JobSummary {
+            job_id: row.job.id,
+            session_id: row.job.session_id,
+            session_name,
+            prompt: row.job.prompt.clone(),
+            model: row.job.model.clone(),
+            status: row.job.status,
+            cost_usd: r.map_or(0.0, |r| r.cost_usd),
+            tokens_in: r.map_or(0, |r| r.tokens_in),
+            tokens_out: r.map_or(0, |r| r.tokens_out),
+            duration_ms: r.map(|r| r.duration_ms),
+            created_at: row.job.created_at,
+            started_at: row.started_at,
+            error: r.and_then(|r| r.error.clone()),
+        }
+    }
+
+    fn with_job<T>(&self, id: JobId, f: impl FnOnce(&mut JobRow) -> T) -> AppResult<T> {
+        let mut jobs = self.jobs.borrow_mut();
+        let row = jobs.get_mut(&id.0).ok_or(AppError::JobNotFound)?;
+        Ok(f(row))
     }
 }
 
@@ -104,50 +143,78 @@ impl SessionRepository for InMemoryStore {
             .jobs
             .borrow()
             .values()
-            .any(|j| j.session == id && j.events.iter().any(|(kind, _, _)| kind == "init")))
+            .any(|j| j.job.session_id == id && j.events.iter().any(|e| e.kind == "init")))
     }
 }
 
 impl JobRepository for InMemoryStore {
-    fn insert(
-        &self,
-        session: SessionId,
-        prompt_id: Option<PromptId>,
-        _prompt: &str,
-        _model: &str,
-        _now: Millis,
-    ) -> AppResult<JobId> {
-        let id = self.next_job.get() + 1;
-        self.next_job.set(id);
-        self.jobs.borrow_mut().insert(
+    fn insert(&self, new: &NewJob, now: Millis) -> AppResult<JobId> {
+        let id = JobId(self.next_job.get() + 1);
+        self.next_job.set(id.0);
+        let job = Job {
             id,
+            session_id: new.session_id,
+            prompt_id: new.prompt_id,
+            prompt: new.prompt.clone(),
+            model: new.model.clone(),
+            priority: new.priority,
+            fork: new.fork,
+            status: JobStatus::Queued,
+            created_at: now,
+        };
+        self.jobs.borrow_mut().insert(
+            id.0,
             JobRow {
-                session,
-                prompt_id,
-                status: JobStatus::Queued,
+                job,
+                started_at: None,
                 result: None,
                 events: Vec::new(),
             },
         );
-        Ok(JobId(id))
+        Ok(id)
     }
 
-    fn set_status(&self, id: JobId, status: JobStatus, _now: Millis) -> AppResult<()> {
-        self.jobs.borrow_mut().get_mut(&id.0).unwrap().status = status;
-        Ok(())
+    fn get(&self, id: JobId) -> AppResult<Option<Job>> {
+        Ok(self.jobs.borrow().get(&id.0).map(|r| r.job.clone()))
+    }
+
+    fn queued(&self) -> AppResult<Vec<Job>> {
+        Ok(self
+            .jobs
+            .borrow()
+            .values()
+            .filter(|r| r.job.status == JobStatus::Queued)
+            .map(|r| r.job.clone())
+            .collect())
+    }
+
+    fn set_status(&self, id: JobId, status: JobStatus, now: Millis) -> AppResult<()> {
+        self.with_job(id, |r| {
+            r.job.status = status;
+            if status == JobStatus::Running {
+                r.started_at = Some(now);
+            }
+        })
     }
 
     fn status(&self, id: JobId) -> AppResult<JobStatus> {
-        Ok(self.status_of(id))
+        self.with_job(id, |r| r.job.status)
+    }
+
+    fn set_priority(&self, id: JobId, priority: i32) -> AppResult<()> {
+        self.with_job(id, |r| r.job.priority = priority)
+    }
+
+    fn set_session(&self, id: JobId, session: SessionId) -> AppResult<()> {
+        self.with_job(id, |r| r.job.session_id = session)
     }
 
     fn save_result(&self, id: JobId, result: &JobResult) -> AppResult<()> {
-        self.jobs.borrow_mut().get_mut(&id.0).unwrap().result = Some(result.clone());
-        Ok(())
+        self.with_job(id, |r| r.result = Some(result.clone()))
     }
 
     fn result(&self, id: JobId) -> AppResult<Option<JobResult>> {
-        Ok(self.result_of(id))
+        self.with_job(id, |r| r.result.clone())
     }
 
     fn append_event(
@@ -156,25 +223,46 @@ impl JobRepository for InMemoryStore {
         kind: &str,
         actor: &str,
         payload: &str,
-        _now: Millis,
+        now: Millis,
     ) -> AppResult<()> {
-        self.jobs.borrow_mut().get_mut(&id.0).unwrap().events.push((
-            kind.into(),
-            actor.into(),
-            payload.into(),
-        ));
-        Ok(())
+        self.with_job(id, |r| {
+            r.events.push(StoredEvent {
+                ts: now,
+                kind: kind.into(),
+                actor: actor.into(),
+                payload: payload.into(),
+            })
+        })
+    }
+
+    fn events(&self, id: JobId) -> AppResult<Vec<StoredEvent>> {
+        self.with_job(id, |r| r.events.clone())
     }
 
     fn interrupt_running(&self, _now: Millis) -> AppResult<usize> {
         let mut n = 0;
-        for job in self.jobs.borrow_mut().values_mut() {
-            if job.status == JobStatus::Running {
-                job.status = JobStatus::Interrupted;
+        for row in self.jobs.borrow_mut().values_mut() {
+            if row.job.status == JobStatus::Running {
+                row.job.status = JobStatus::Interrupted;
                 n += 1;
             }
         }
         Ok(n)
+    }
+
+    fn summaries(&self, limit: usize) -> AppResult<Vec<JobSummary>> {
+        let jobs = self.jobs.borrow();
+        let mut rows: Vec<&JobRow> = jobs.values().collect();
+        rows.sort_by_key(|r| std::cmp::Reverse((r.job.created_at, r.job.id)));
+        Ok(rows
+            .into_iter()
+            .take(limit)
+            .map(|r| self.summarize(r))
+            .collect())
+    }
+
+    fn summary(&self, id: JobId) -> AppResult<Option<JobSummary>> {
+        Ok(self.jobs.borrow().get(&id.0).map(|r| self.summarize(r)))
     }
 }
 
@@ -208,9 +296,9 @@ impl PromptRepository for InMemoryStore {
 
     fn delete(&self, id: PromptId) -> AppResult<()> {
         self.prompts.borrow_mut().retain(|p| p.id != id);
-        for job in self.jobs.borrow_mut().values_mut() {
-            if job.prompt_id == Some(id) {
-                job.prompt_id = None;
+        for row in self.jobs.borrow_mut().values_mut() {
+            if row.job.prompt_id == Some(id) {
+                row.job.prompt_id = None;
             }
         }
         Ok(())
@@ -254,11 +342,12 @@ impl Workspace for FakeWorkspace {
     }
 }
 
-/// Records requests; tests push messages through the captured sinks.
+/// Records requests and cancels; tests push messages through the captured sinks.
 #[derive(Default)]
 pub struct FakeRunner {
     requests: RefCell<Vec<RunRequest>>,
     sinks: RefCell<Vec<RunSink>>,
+    cancelled: RefCell<Vec<JobId>>,
 }
 
 impl FakeRunner {
@@ -274,11 +363,35 @@ impl FakeRunner {
     pub fn emit(&self, i: usize, msg: RunnerMsg) {
         (self.sinks.borrow()[i])(msg);
     }
+
+    pub fn cancelled(&self) -> Vec<JobId> {
+        self.cancelled.borrow().clone()
+    }
 }
 
 impl AgentRunner for FakeRunner {
     fn start(&self, request: RunRequest, sink: RunSink) {
         self.requests.borrow_mut().push(request);
         self.sinks.borrow_mut().push(sink);
+    }
+
+    fn cancel(&self, job: JobId) {
+        self.cancelled.borrow_mut().push(job);
+    }
+}
+
+/// Reports whatever free memory the test sets (unknown by default).
+#[derive(Default)]
+pub struct FakeMonitor(Cell<Option<u64>>);
+
+impl FakeMonitor {
+    pub fn set(&self, free: Option<u64>) {
+        self.0.set(free);
+    }
+}
+
+impl SystemMonitor for FakeMonitor {
+    fn free_memory_bytes(&self) -> Option<u64> {
+        self.0.get()
     }
 }

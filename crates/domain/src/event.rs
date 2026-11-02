@@ -59,6 +59,8 @@ pub enum AgentEvent {
         cache_read: u64,
         context_window: Option<u64>,
         subagents_spawned: u32,
+        /// The final answer.
+        text: String,
     },
     /// Known noise (hook progress, rate-limit info, …).
     Ignored {

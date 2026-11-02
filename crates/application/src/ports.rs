@@ -3,11 +3,11 @@
 use std::path::{Path, PathBuf};
 
 use swarmux_domain::{
-    AgentEvent, JobId, JobResult, JobStatus, Millis, PromptDraft, PromptId, PromptTemplate,
+    AgentEvent, Job, JobId, JobResult, JobStatus, Millis, PromptDraft, PromptId, PromptTemplate,
     Session, SessionId,
 };
 
-use crate::AppResult;
+use crate::{AppResult, JobSummary};
 
 pub trait SessionRepository {
     fn insert(&self, session: &Session) -> AppResult<()>;
@@ -19,18 +19,37 @@ pub trait SessionRepository {
     fn has_started(&self, id: SessionId) -> AppResult<bool>;
 }
 
+/// A job about to be stored; it starts `queued`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NewJob {
+    pub session_id: SessionId,
+    /// The template the prompt was rendered from, if any.
+    pub prompt_id: Option<PromptId>,
+    pub prompt: String,
+    pub model: String,
+    pub priority: i32,
+    pub fork: bool,
+}
+
+/// An event as stored for a job.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StoredEvent {
+    pub ts: Millis,
+    pub kind: String,
+    pub actor: String,
+    pub payload: String,
+}
+
 pub trait JobRepository {
-    /// `prompt_id` is the template the prompt was rendered from, if any.
-    fn insert(
-        &self,
-        session: SessionId,
-        prompt_id: Option<PromptId>,
-        prompt: &str,
-        model: &str,
-        now: Millis,
-    ) -> AppResult<JobId>;
+    fn insert(&self, job: &NewJob, now: Millis) -> AppResult<JobId>;
+    fn get(&self, id: JobId) -> AppResult<Option<Job>>;
+    /// Every `queued` job, in no particular order.
+    fn queued(&self) -> AppResult<Vec<Job>>;
     fn set_status(&self, id: JobId, status: JobStatus, now: Millis) -> AppResult<()>;
     fn status(&self, id: JobId) -> AppResult<JobStatus>;
+    fn set_priority(&self, id: JobId, priority: i32) -> AppResult<()>;
+    /// Moves the job to another session (a fork's job belongs to the new session).
+    fn set_session(&self, id: JobId, session: SessionId) -> AppResult<()>;
     fn save_result(&self, id: JobId, result: &JobResult) -> AppResult<()>;
     fn result(&self, id: JobId) -> AppResult<Option<JobResult>>;
     fn append_event(
@@ -41,8 +60,13 @@ pub trait JobRepository {
         payload: &str,
         now: Millis,
     ) -> AppResult<()>;
+    /// Oldest first.
+    fn events(&self, id: JobId) -> AppResult<Vec<StoredEvent>>;
     /// Marks jobs left `running` (crash or quit) as `interrupted`. Returns how many.
     fn interrupt_running(&self, now: Millis) -> AppResult<usize>;
+    /// The newest `limit` jobs, newest first.
+    fn summaries(&self, limit: usize) -> AppResult<Vec<JobSummary>>;
+    fn summary(&self, id: JobId) -> AppResult<Option<JobSummary>>;
 }
 
 pub trait PromptRepository {
@@ -65,6 +89,7 @@ pub trait Workspace {
 /// What to run: one prompt in one Claude Code session.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RunRequest {
+    pub job_id: JobId,
     pub cwd: PathBuf,
     pub session_id: SessionId,
     /// Continue the existing Claude session instead of creating it.
@@ -94,6 +119,14 @@ pub trait AgentRunner {
     /// Starts the job and returns at once; messages arrive through `sink`,
     /// ending with exactly one `Exited` or `SpawnFailed`.
     fn start(&self, request: RunRequest, sink: RunSink);
+    /// Stops a started job. Its sink may receive nothing more afterwards.
+    fn cancel(&self, job: JobId);
+}
+
+/// The machine swarmux runs on.
+pub trait SystemMonitor {
+    /// Memory available to new processes; `None` when it can't be read.
+    fn free_memory_bytes(&self) -> Option<u64>;
 }
 
 pub trait Clock {
