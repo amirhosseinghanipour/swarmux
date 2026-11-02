@@ -38,6 +38,8 @@ struct RawConfig {
     guard: Option<RawGuard>,
     jev: Option<RawJev>,
     review: Option<RawReview>,
+    telemetry: Option<crate::config_telemetry::RawTelemetry>,
+    pricing: Option<crate::config_telemetry::RawPricing>,
 }
 
 #[derive(Deserialize)]
@@ -127,6 +129,12 @@ pub fn parse_settings(text: &str, path: &Path) -> Result<Settings, ConfigError> 
     }
     if let Some(review) = raw.review {
         settings.review = parse_review(review, text, path)?;
+    }
+    if let Some(telemetry) = raw.telemetry {
+        settings.telemetry = crate::config_telemetry::parse_telemetry(telemetry, text, path)?;
+    }
+    if let Some(pricing) = raw.pricing {
+        settings.pricing = crate::config_telemetry::parse_pricing(pricing, text, path)?;
     }
     Ok(settings)
 }
@@ -258,7 +266,7 @@ fn line_at(text: &str, at: usize) -> usize {
 }
 
 /// 1-based line where `key` is set.
-fn key_line(text: &str, key: &str) -> Option<usize> {
+pub(crate) fn key_line(text: &str, key: &str) -> Option<usize> {
     text.lines()
         .position(|l| {
             l.trim_start()

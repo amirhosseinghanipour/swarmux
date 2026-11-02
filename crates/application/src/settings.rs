@@ -1,3 +1,6 @@
+use std::path::PathBuf;
+
+use swarmux_domain::telemetry::PriceTable;
 use swarmux_domain::{DEFAULT_MODEL, GuardPolicy, Limits, Pattern, Unmatched};
 
 /// User settings (`config.toml`); every field has a default.
@@ -12,6 +15,44 @@ pub struct Settings {
     pub guard: GuardSettings,
     pub jev: JevSettings,
     pub review: ReviewSettings,
+    pub telemetry: TelemetrySettings,
+    /// Built-in model prices with the `[pricing]` overrides applied.
+    pub pricing: PriceTable,
+}
+
+/// The `[telemetry]` section: which background sources run and how often.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TelemetrySettings {
+    /// Spend and sessions from Claude Code transcripts.
+    pub usage: bool,
+    /// CPU, memory, network, disk, battery and processes.
+    pub system: bool,
+    pub git: bool,
+    /// Pull requests and CI through the `gh` CLI.
+    pub github: bool,
+    pub usage_secs: u64,
+    pub system_secs: u64,
+    pub git_secs: u64,
+    pub github_secs: u64,
+    /// Where transcripts are read from; `None` means `~/.claude/projects`
+    /// (or `$CLAUDE_CONFIG_DIR/projects`).
+    pub transcripts_path: Option<PathBuf>,
+}
+
+impl Default for TelemetrySettings {
+    fn default() -> TelemetrySettings {
+        TelemetrySettings {
+            usage: true,
+            system: true,
+            git: true,
+            github: true,
+            usage_secs: 15,
+            system_secs: 1,
+            git_secs: 5,
+            github_secs: 60,
+            transcripts_path: None,
+        }
+    }
 }
 
 /// The `[review]` section.
@@ -54,6 +95,8 @@ impl Default for Settings {
             guard: GuardSettings::default(),
             jev: JevSettings::default(),
             review: ReviewSettings::default(),
+            telemetry: TelemetrySettings::default(),
+            pricing: PriceTable::builtin(),
         }
     }
 }
@@ -165,6 +208,13 @@ mod tests {
             (120, 2)
         );
         assert_eq!((s.review.enabled, s.review.model.as_str()), (false, "opus"));
+        let t = &s.telemetry;
+        assert!(t.usage && t.system && t.git && t.github);
+        assert_eq!(
+            (t.system_secs, t.git_secs, t.usage_secs, t.github_secs),
+            (1, 5, 15, 60)
+        );
+        assert_eq!(s.pricing, PriceTable::builtin());
     }
 
     #[test]

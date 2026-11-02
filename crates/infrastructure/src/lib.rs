@@ -5,6 +5,7 @@ pub mod claude_cli;
 mod clock;
 pub mod config;
 pub mod config_edit;
+mod config_telemetry;
 pub mod git;
 pub mod hook;
 pub mod jev;

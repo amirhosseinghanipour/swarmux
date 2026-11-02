@@ -29,7 +29,9 @@ pub use jobs::{JobService, PumpReport, QueueEntry, QueueStats};
 pub use prompts::{BUILTIN_VARIABLES, PromptService, RenderedPrompt};
 pub use routing::{ROUTE_PROMPT_MAX, RouteReport, Routed, RoutingService};
 pub use sessions::SessionService;
-pub use settings::{GuardSettings, JevProvider, JevSettings, ReviewSettings, Settings};
+pub use settings::{
+    GuardSettings, JevProvider, JevSettings, ReviewSettings, Settings, TelemetrySettings,
+};
 pub use telemetry::{
     ActivityView, Battery, CiRun, Collected, Commit, DiffStat, DiskUsage, ENVIRONMENTS,
     EnvironmentView, GitStatus, GithubStatus, LimitView, ProcessStat, PullRequest, SystemStats,
