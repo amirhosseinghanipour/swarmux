@@ -6,6 +6,14 @@ pub enum DomainError {
     SessionNameTooLong { max: usize },
     #[error("prompt can't be empty")]
     EmptyPrompt,
+    #[error("prompt name can't be empty")]
+    EmptyPromptName,
+    #[error("prompt name is longer than {max} characters")]
+    PromptNameTooLong { max: usize },
+    #[error("prompt body can't be empty")]
+    EmptyPromptBody,
+    #[error("no value for {{{{{0}}}}}")]
+    MissingVariable(String),
     #[error("unknown job status {0:?}")]
     UnknownJobStatus(String),
 }

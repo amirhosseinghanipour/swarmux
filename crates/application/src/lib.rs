@@ -6,10 +6,12 @@
 mod error;
 mod jobs;
 pub mod ports;
+mod prompts;
 mod sessions;
 #[cfg(any(test, feature = "test-support"))]
 pub mod testing;
 
 pub use error::{AppError, AppResult};
 pub use jobs::JobService;
+pub use prompts::{BUILTIN_VARIABLES, PromptService, RenderedPrompt};
 pub use sessions::SessionService;

@@ -1,7 +1,7 @@
 use rusqlite::{OptionalExtension, params};
 use swarmux_application::AppResult;
 use swarmux_application::ports::JobRepository;
-use swarmux_domain::{JobId, JobResult, JobStatus, Millis, SessionId};
+use swarmux_domain::{JobId, JobResult, JobStatus, Millis, PromptId, SessionId};
 
 use super::{OrStorage, SqliteStore};
 
@@ -24,15 +24,17 @@ impl JobRepository for SqliteStore {
     fn insert(
         &self,
         session: SessionId,
+        prompt_id: Option<PromptId>,
         prompt: &str,
         model: &str,
         now: Millis,
     ) -> AppResult<JobId> {
         self.conn
             .execute(
-                "INSERT INTO jobs (body_rendered, session_id, model, status, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                "INSERT INTO jobs (prompt_id, body_rendered, session_id, model, status, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params![
+                    prompt_id.map(|p| p.0),
                     prompt,
                     session.to_string(),
                     model,
@@ -152,6 +154,14 @@ impl SqliteStore {
                 [id.0],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
+            .unwrap()
+    }
+
+    pub(crate) fn job_prompt(&self, id: JobId) -> Option<i64> {
+        self.conn
+            .query_row("SELECT prompt_id FROM jobs WHERE id = ?1", [id.0], |r| {
+                r.get(0)
+            })
             .unwrap()
     }
 

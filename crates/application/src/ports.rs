@@ -1,8 +1,11 @@
 //! Ports: what the use cases need from the outside world.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use swarmux_domain::{AgentEvent, JobId, JobResult, JobStatus, Millis, Session, SessionId};
+use swarmux_domain::{
+    AgentEvent, JobId, JobResult, JobStatus, Millis, PromptDraft, PromptId, PromptTemplate,
+    Session, SessionId,
+};
 
 use crate::AppResult;
 
@@ -17,9 +20,11 @@ pub trait SessionRepository {
 }
 
 pub trait JobRepository {
+    /// `prompt_id` is the template the prompt was rendered from, if any.
     fn insert(
         &self,
         session: SessionId,
+        prompt_id: Option<PromptId>,
         prompt: &str,
         model: &str,
         now: Millis,
@@ -38,6 +43,23 @@ pub trait JobRepository {
     ) -> AppResult<()>;
     /// Marks jobs left `running` (crash or quit) as `interrupted`. Returns how many.
     fn interrupt_running(&self, now: Millis) -> AppResult<usize>;
+}
+
+pub trait PromptRepository {
+    fn insert(&self, draft: &PromptDraft, now: Millis) -> AppResult<PromptId>;
+    /// Fails with `PromptNotFound` if there is no such prompt.
+    fn update(&self, id: PromptId, draft: &PromptDraft, now: Millis) -> AppResult<()>;
+    /// Jobs rendered from the prompt keep their text but lose the link.
+    fn delete(&self, id: PromptId) -> AppResult<()>;
+    fn get(&self, id: PromptId) -> AppResult<Option<PromptTemplate>>;
+    /// Most recently updated first.
+    fn list(&self) -> AppResult<Vec<PromptTemplate>>;
+}
+
+/// The project folder a session works in.
+pub trait Workspace {
+    /// Uncommitted changes as `git diff` prints them; empty outside a git repository.
+    fn git_diff(&self, cwd: &Path) -> AppResult<String>;
 }
 
 /// What to run: one prompt in one Claude Code session.

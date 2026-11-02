@@ -9,6 +9,11 @@ pub enum AppError {
     Storage(String),
     #[error("session not found")]
     SessionNotFound,
+    /// The workspace adapter (git) failed.
+    #[error("workspace error: {0}")]
+    Workspace(String),
+    #[error("prompt not found")]
+    PromptNotFound,
     #[error("session {0} is still running a job")]
     SessionBusy(String),
 }

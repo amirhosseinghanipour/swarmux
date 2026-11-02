@@ -1,6 +1,7 @@
 //! SQLite adapter for the storage ports.
 
 mod jobs;
+mod prompts;
 mod sessions;
 
 use std::path::Path;
@@ -150,7 +151,7 @@ mod tests {
         let s = SqliteStore::open_in_memory().unwrap();
         let sess = session("a", 1);
         SessionRepository::insert(&s, &sess).unwrap();
-        let job = JobRepository::insert(&s, sess.id, "hi", "sonnet", 2).unwrap();
+        let job = JobRepository::insert(&s, sess.id, None, "hi", "sonnet", 2).unwrap();
         (s, sess, job)
     }
 

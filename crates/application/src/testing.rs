@@ -2,13 +2,17 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
-use swarmux_domain::{JobId, JobResult, JobStatus, Millis, Session, SessionId};
-
-use crate::AppResult;
-use crate::ports::{
-    AgentRunner, Clock, JobRepository, RunRequest, RunSink, RunnerMsg, SessionRepository,
+use swarmux_domain::{
+    JobId, JobResult, JobStatus, Millis, PromptDraft, PromptId, PromptTemplate, Session, SessionId,
 };
+
+use crate::ports::{
+    AgentRunner, Clock, JobRepository, PromptRepository, RunRequest, RunSink, RunnerMsg,
+    SessionRepository, Workspace,
+};
+use crate::{AppError, AppResult};
 
 /// A clock that only moves when told to.
 pub struct FixedClock(Cell<Millis>);
@@ -32,17 +36,20 @@ impl Clock for FixedClock {
 #[derive(Clone)]
 struct JobRow {
     session: SessionId,
+    prompt_id: Option<PromptId>,
     status: JobStatus,
     result: Option<JobResult>,
     events: Vec<(String, String, String)>,
 }
 
-/// Sessions and jobs in memory.
+/// Sessions, jobs and prompts in memory.
 #[derive(Default)]
 pub struct InMemoryStore {
     sessions: RefCell<Vec<Session>>,
     jobs: RefCell<HashMap<i64, JobRow>>,
     next_job: Cell<i64>,
+    prompts: RefCell<Vec<PromptTemplate>>,
+    next_prompt: Cell<i64>,
 }
 
 impl InMemoryStore {
@@ -56,6 +63,10 @@ impl InMemoryStore {
 
     pub fn events_of(&self, id: JobId) -> Vec<(String, String, String)> {
         self.jobs.borrow()[&id.0].events.clone()
+    }
+
+    pub fn prompt_of(&self, id: JobId) -> Option<PromptId> {
+        self.jobs.borrow()[&id.0].prompt_id
     }
 }
 
@@ -101,6 +112,7 @@ impl JobRepository for InMemoryStore {
     fn insert(
         &self,
         session: SessionId,
+        prompt_id: Option<PromptId>,
         _prompt: &str,
         _model: &str,
         _now: Millis,
@@ -111,6 +123,7 @@ impl JobRepository for InMemoryStore {
             id,
             JobRow {
                 session,
+                prompt_id,
                 status: JobStatus::Queued,
                 result: None,
                 events: Vec::new(),
@@ -162,6 +175,82 @@ impl JobRepository for InMemoryStore {
             }
         }
         Ok(n)
+    }
+}
+
+impl PromptRepository for InMemoryStore {
+    fn insert(&self, draft: &PromptDraft, now: Millis) -> AppResult<PromptId> {
+        let id = PromptId(self.next_prompt.get() + 1);
+        self.next_prompt.set(id.0);
+        self.prompts.borrow_mut().push(PromptTemplate {
+            id,
+            name: draft.name.clone(),
+            body: draft.body.clone(),
+            tags: draft.tags.clone(),
+            created_at: now,
+            updated_at: now,
+        });
+        Ok(id)
+    }
+
+    fn update(&self, id: PromptId, draft: &PromptDraft, now: Millis) -> AppResult<()> {
+        let mut prompts = self.prompts.borrow_mut();
+        let p = prompts
+            .iter_mut()
+            .find(|p| p.id == id)
+            .ok_or(AppError::PromptNotFound)?;
+        p.name = draft.name.clone();
+        p.body = draft.body.clone();
+        p.tags = draft.tags.clone();
+        p.updated_at = now;
+        Ok(())
+    }
+
+    fn delete(&self, id: PromptId) -> AppResult<()> {
+        self.prompts.borrow_mut().retain(|p| p.id != id);
+        for job in self.jobs.borrow_mut().values_mut() {
+            if job.prompt_id == Some(id) {
+                job.prompt_id = None;
+            }
+        }
+        Ok(())
+    }
+
+    fn get(&self, id: PromptId) -> AppResult<Option<PromptTemplate>> {
+        Ok(self.prompts.borrow().iter().find(|p| p.id == id).cloned())
+    }
+
+    fn list(&self) -> AppResult<Vec<PromptTemplate>> {
+        let mut list = self.prompts.borrow().clone();
+        list.sort_by_key(|p| std::cmp::Reverse((p.updated_at, p.id)));
+        Ok(list)
+    }
+}
+
+/// Returns a fixed diff and records which folders were asked about.
+#[derive(Default)]
+pub struct FakeWorkspace {
+    diff: String,
+    calls: RefCell<Vec<PathBuf>>,
+}
+
+impl FakeWorkspace {
+    pub fn with_diff(diff: &str) -> FakeWorkspace {
+        FakeWorkspace {
+            diff: diff.to_string(),
+            calls: RefCell::default(),
+        }
+    }
+
+    pub fn calls(&self) -> Vec<PathBuf> {
+        self.calls.borrow().clone()
+    }
+}
+
+impl Workspace for FakeWorkspace {
+    fn git_diff(&self, cwd: &Path) -> AppResult<String> {
+        self.calls.borrow_mut().push(cwd.to_path_buf());
+        Ok(self.diff.clone())
     }
 }
 

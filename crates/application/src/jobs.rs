@@ -1,12 +1,14 @@
 use std::rc::Rc;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
-use swarmux_domain::{DomainError, JobId, JobProgress, JobStatus, Millis, SessionId, describe};
+use swarmux_domain::{
+    DomainError, JobId, JobProgress, JobStatus, Millis, PromptId, SessionId, describe,
+};
 
 use crate::ports::{
     AgentRunner, Clock, JobRepository, RunRequest, RunSink, RunnerMsg, SessionRepository,
 };
-use crate::{AppError, AppResult};
+use crate::{AppError, AppResult, RenderedPrompt};
 
 struct Tracked {
     progress: JobProgress,
@@ -51,6 +53,24 @@ impl JobService {
 
     /// Sends `prompt` to the session as a new job. A session runs one job at a time.
     pub fn dispatch(&mut self, session_id: SessionId, prompt: &str) -> AppResult<JobId> {
+        self.start(session_id, prompt, None)
+    }
+
+    /// Like [`JobService::dispatch`], and records which template the job came from.
+    pub fn dispatch_template(
+        &mut self,
+        session_id: SessionId,
+        rendered: &RenderedPrompt,
+    ) -> AppResult<JobId> {
+        self.start(session_id, rendered.text(), Some(rendered.prompt_id()))
+    }
+
+    fn start(
+        &mut self,
+        session_id: SessionId,
+        prompt: &str,
+        prompt_id: Option<PromptId>,
+    ) -> AppResult<JobId> {
         let prompt = prompt.trim();
         if prompt.is_empty() {
             return Err(DomainError::EmptyPrompt.into());
@@ -69,7 +89,9 @@ impl JobService {
 
         let now = self.clock.now();
         let resume = self.sessions.has_started(session_id)?;
-        let job_id = self.jobs.insert(session_id, prompt, &session.model, now)?;
+        let job_id = self
+            .jobs
+            .insert(session_id, prompt_id, prompt, &session.model, now)?;
         self.jobs.set_status(job_id, JobStatus::Running, now)?;
         self.sessions.touch(session_id, now)?;
         self.tracked.push(Tracked {
@@ -361,6 +383,30 @@ mod tests {
                 "hello".to_string()
             )]
         );
+    }
+
+    #[test]
+    fn plain_dispatch_has_no_template() {
+        let mut f = fixture();
+        let job = f.svc.dispatch(f.session.id, "hi").unwrap();
+        assert_eq!(f.store.prompt_of(job), None);
+    }
+
+    #[test]
+    fn template_dispatch_records_the_prompt() {
+        let mut f = fixture();
+        let prompts = crate::PromptService::new(
+            f.store.clone(),
+            f.store.clone(),
+            Rc::new(crate::testing::FakeWorkspace::default()),
+            f.clock.clone(),
+        );
+        let id = prompts.create("t", "fix {{what}}", vec![]).unwrap();
+        let values = [("what".to_string(), "bug".to_string())].into();
+        let rendered = prompts.render(id, f.session.id, &values).unwrap();
+        let job = f.svc.dispatch_template(f.session.id, &rendered).unwrap();
+        assert_eq!(f.runner.request(0).prompt, "fix bug");
+        assert_eq!(f.store.prompt_of(job), Some(id));
     }
 
     #[test]
