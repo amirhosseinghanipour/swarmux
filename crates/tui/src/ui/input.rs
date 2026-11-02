@@ -16,6 +16,14 @@ pub enum InputAction {
 }
 
 impl Input {
+    /// Starts with `text` and the cursor at its end.
+    pub fn with_text(text: &str) -> Input {
+        Input {
+            text: text.to_string(),
+            cursor: text.chars().count(),
+        }
+    }
+
     pub fn handle(&mut self, key: KeyEvent) -> InputAction {
         match key.code {
             KeyCode::Enter => return InputAction::Submit(self.text.clone()),

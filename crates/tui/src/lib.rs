@@ -4,6 +4,7 @@
 //! SQLite, processes or the `claude` CLI.
 
 mod app;
+mod prompts;
 mod ui;
 
 pub use app::App;

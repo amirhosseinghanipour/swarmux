@@ -6,8 +6,8 @@ use std::rc::Rc;
 
 use anyhow::Context;
 use clap::{Parser, Subcommand};
-use swarmux_application::{JobService, SessionService};
-use swarmux_infrastructure::{ClaudeCli, Paths, SqliteStore, SystemClock};
+use swarmux_application::{JobService, PromptService, SessionService};
+use swarmux_infrastructure::{ClaudeCli, GitCli, Paths, SqliteStore, SystemClock};
 use swarmux_tui::App;
 
 /// swarmux — a prompt-first command center for Claude Code.
@@ -45,9 +45,12 @@ fn run_tui() -> anyhow::Result<()> {
         .build()?;
     let runner = Rc::new(ClaudeCli::new(doctor::claude_bin(), rt.handle().clone()));
 
+    let workspace = Rc::new(GitCli::default());
+
     let sessions = SessionService::new(store.clone(), clock.clone());
+    let prompts = PromptService::new(store.clone(), store.clone(), workspace, clock.clone());
     let jobs = JobService::new(store.clone(), store, runner, clock);
     jobs.recover()?;
-    let app = App::new(sessions, jobs, std::env::current_dir()?);
+    let app = App::new(sessions, jobs, prompts, std::env::current_dir()?);
     Ok(swarmux_tui::run(app)?)
 }

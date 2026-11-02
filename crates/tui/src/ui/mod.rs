@@ -1,7 +1,10 @@
-//! Rendering. Reads `App`, never mutates it or does I/O.
+//! Rendering. Reads `App` and does no I/O; the only state it touches is the
+//! editor's scroll offset.
 
 pub mod dashboard;
+pub mod editor;
 pub mod input;
+pub mod prompts;
 pub mod sessions;
 
 use ratatui::{
@@ -41,6 +44,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
 
     match app.screen {
         Screen::Dashboard => dashboard::render(frame, body, app),
+        Screen::Prompts => prompts::render(frame, body, app),
         Screen::Sessions => sessions::render(frame, body, app),
         other => placeholder(frame, body, other),
     }
@@ -86,6 +90,14 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
                     "prompt → {}",
                     app.selected_session().map_or("?", |s| s.name.as_str())
                 ),
+                InputPurpose::Variable => format!(
+                    "var {}",
+                    app.prompts
+                        .pending
+                        .as_ref()
+                        .and_then(|p| p.asking())
+                        .unwrap_or("?")
+                ),
             };
             let (before, at, after) = input.split_at_cursor();
             Line::from(vec![
@@ -96,17 +108,30 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
                 Span::styled("   enter send · esc cancel", Style::new().fg(MUTED)),
             ])
         }
-        Mode::Normal => match &app.error {
-            Some(e) => Line::from(Span::styled(format!(" ! {e}"), Style::new().fg(RED))),
-            None => Line::from(Span::styled(hints(app.screen), Style::new().fg(MUTED))),
+        Mode::Normal => match (&app.error, app.prompts.selected_prompt()) {
+            (Some(e), _) => Line::from(Span::styled(format!(" ! {e}"), Style::new().fg(RED))),
+            (None, Some(p)) if app.prompts.confirm_delete => Line::from(Span::styled(
+                format!(
+                    " press x again to delete \"{}\" · any other key keeps it",
+                    p.name
+                ),
+                Style::new().fg(ORANGE),
+            )),
+            _ => Line::from(Span::styled(hints(app), Style::new().fg(MUTED))),
         },
     };
     frame.render_widget(line, area);
 }
 
-fn hints(screen: Screen) -> &'static str {
-    match screen {
+fn hints(app: &App) -> &'static str {
+    if app.prompts.form.is_some() {
+        return " tab next field · ctrl+s save · esc cancel";
+    }
+    match app.screen {
         Screen::Dashboard => " p prompt · ↑↓ session · 1-5 screens · q quit",
+        Screen::Prompts => {
+            " n new · e edit · x delete · d dispatch · ↑↓ select · 1-5 screens · q quit"
+        }
         Screen::Sessions => " n new session · ↑↓ select · 1-5 screens · q quit",
         _ => " 1-5 screens · q quit",
     }
