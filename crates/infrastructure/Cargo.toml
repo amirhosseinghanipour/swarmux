@@ -1,6 +1,6 @@
 [package]
 name = "swarmux-infrastructure"
-description = "swarmux adapters: SQLite storage, the claude CLI runner, system clock, paths."
+description = "swarmux adapters: SQLite storage, the claude and git CLIs, system clock, paths."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
