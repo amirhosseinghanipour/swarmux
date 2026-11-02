@@ -1,5 +1,6 @@
 //! SQLite adapter for the storage ports.
 
+mod consents;
 mod decisions;
 mod jobs;
 mod prompts;
@@ -100,8 +101,16 @@ const SCHEMA_V4: &str = "
 ALTER TABLE sessions ADD COLUMN lean INTEGER NOT NULL DEFAULT 0;
 ";
 
+/// JEV providers the user agreed to send decision context to.
+const SCHEMA_V5: &str = "
+CREATE TABLE jev_consent (
+    provider TEXT PRIMARY KEY,
+    granted_at INTEGER NOT NULL
+);
+";
+
 /// Migrations in order; index + 1 is the resulting `user_version`.
-const MIGRATIONS: &[&str] = &[SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4];
+const MIGRATIONS: &[&str] = &[SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5];
 
 /// Maps adapter errors into the application's error type.
 pub(crate) trait OrStorage<T> {

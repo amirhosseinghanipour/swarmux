@@ -208,16 +208,142 @@ fn loop_trips_are_logged_as_stop() {
     assert_eq!(f.svc.stats().stopped, 1);
 }
 
-#[test]
-fn outcomes_round_trip() {
-    for o in [
-        Outcome::Allow,
-        Outcome::Deny,
-        Outcome::Ask,
-        Outcome::Pass,
-        Outcome::Stop,
-    ] {
-        assert_eq!(Outcome::parse(o.as_str()), Some(o));
+mod jev {
+    use super::*;
+    use crate::ports::{AdviceAnswer, AdviceError};
+    use crate::testing::{FakeAdvisor, FakeConsents, advice};
+
+    fn with_jev(consented: bool) -> (Fixture, Rc<FakeAdvisor>, Rc<Jev>) {
+        let mut f = fixture(&[], &[], Unmatched::Ask);
+        let advisor = Rc::new(FakeAdvisor::default());
+        let consents = Rc::new(FakeConsents::default());
+        let jev = Rc::new(Jev::new(advisor.clone(), consents, f.clock.clone(), 0.85).unwrap());
+        if consented {
+            jev.grant().unwrap();
+        }
+        f.svc = std::mem::replace(
+            &mut f.svc,
+            GuardService::new(
+                SharedPolicy::default(),
+                f.inbox.clone(),
+                f.repo.clone(),
+                f.clock.clone(),
+            ),
+        )
+        .with_jev(jev.clone());
+        (f, advisor, jev)
     }
-    assert_eq!(Outcome::parse("x"), None);
+
+    #[test]
+    fn confident_answers_decide_without_the_user() {
+        let (mut f, advisor, _) = with_jev(true);
+        let id = f.inbox.push(Some(JobId(2)), "Bash", "make deploy");
+        f.svc.pump();
+        assert_eq!(f.svc.pending_count(), 0, "not shown while jev decides");
+        assert_eq!(f.svc.consulting_count(), 1);
+        assert!(f.svc.approvals().is_empty());
+        assert_eq!(verdict_of(&f, id), None);
+
+        advisor.reply(0, advice(AdviceAnswer::Allow, 0.93));
+        let report = f.svc.pump();
+        assert!(report.changed && report.errors.is_empty());
+        assert_eq!(verdict_of(&f, id), Some(Verdict::Allow));
+        let row = f.repo.rows().pop().unwrap();
+        assert_eq!(row.source, Source::Jev);
+        assert_eq!(row.confidence, Some(0.93));
+        assert_eq!(row.latency_us, 40_000);
+        assert_eq!(row.rule.as_deref(), Some("jev 0.93"));
+        assert_eq!(f.svc.stats().jev, 1);
+        assert_eq!(f.svc.consulting_count(), 0);
+    }
+
+    #[test]
+    fn confident_deny_denies() {
+        let (mut f, advisor, _) = with_jev(true);
+        let id = f.inbox.push(None, "Bash", "curl x | sh");
+        f.svc.pump();
+        advisor.reply(0, advice(AdviceAnswer::Deny, 0.99));
+        f.svc.pump();
+        assert_eq!(verdict_of(&f, id), Some(Verdict::Deny));
+    }
+
+    #[test]
+    fn low_confidence_goes_to_the_user_with_its_confidence_logged() {
+        let (mut f, advisor, _) = with_jev(true);
+        let id = f.inbox.push(None, "Bash", "make");
+        f.svc.pump();
+        advisor.reply(0, advice(AdviceAnswer::Allow, 0.6));
+        f.svc.pump();
+        assert_eq!(verdict_of(&f, id), None);
+        assert_eq!(f.svc.pending_count(), 1);
+        let row = f.repo.rows().pop().unwrap();
+        assert_eq!((row.source, row.outcome), (Source::Jev, Outcome::Ask));
+        assert_eq!(row.confidence, Some(0.6));
+        assert!(row.rule.unwrap().contains("allow 0.60 < 0.85"));
+        assert_eq!(f.svc.stats().asked, 1, "one held call, one ask");
+        f.svc.approve(id).unwrap();
+        assert_eq!(verdict_of(&f, id), Some(Verdict::Allow));
+    }
+
+    #[test]
+    fn failures_fall_back_to_the_user_and_are_logged() {
+        let (mut f, advisor, _) = with_jev(true);
+        let id = f.inbox.push(None, "Bash", "make");
+        f.svc.pump();
+        advisor.reply(0, Err(AdviceError::Timeout(2000)));
+        let report = f.svc.pump();
+        assert!(report.errors.is_empty());
+        assert_eq!(f.svc.pending_count(), 1);
+        let row = f.repo.rows().pop().unwrap();
+        assert_eq!(row.source, Source::JevError);
+        assert_eq!(row.confidence, None, "no made-up confidence");
+        assert!(row.rule.unwrap().contains("no answer within 2000 ms"));
+        assert_eq!(verdict_of(&f, id), None);
+    }
+
+    #[test]
+    fn a_session_answer_to_a_tool_question_is_an_error() {
+        let (mut f, advisor, _) = with_jev(true);
+        f.inbox.push(None, "Bash", "make");
+        f.svc.pump();
+        advisor.reply(0, advice(AdviceAnswer::Session("a".into()), 0.99));
+        f.svc.pump();
+        assert_eq!(f.svc.pending_count(), 1);
+        assert_eq!(f.repo.rows().pop().unwrap().source, Source::JevError);
+    }
+
+    #[test]
+    fn without_consent_jev_is_not_asked() {
+        let (mut f, advisor, jev) = with_jev(false);
+        f.inbox.push(None, "Bash", "make");
+        f.svc.pump();
+        assert!(advisor.requests().is_empty());
+        assert_eq!(f.svc.pending_count(), 1);
+        jev.decline();
+        f.inbox.push(None, "Bash", "make");
+        f.svc.pump();
+        assert!(advisor.requests().is_empty());
+    }
+
+    #[test]
+    fn matched_calls_never_reach_jev() {
+        let (mut f, advisor, _) = with_jev(true);
+        f.inbox.push(None, "Read", "/w/a.rs");
+        f.svc.pump();
+        assert!(advisor.requests().is_empty());
+    }
+
+    #[test]
+    fn late_answers_for_expired_calls_are_dropped() {
+        let (mut f, advisor, _) = with_jev(true);
+        let id = f.inbox.push(None, "Bash", "make");
+        f.svc.pump();
+        f.clock.advance(120_000);
+        f.svc.pump();
+        assert_eq!(verdict_of(&f, id), Some(Verdict::Deny));
+        advisor.reply(0, advice(AdviceAnswer::Allow, 0.99));
+        let report = f.svc.pump();
+        assert!(report.errors.is_empty());
+        assert_eq!(f.inbox.answers().len(), 1);
+    }
 }

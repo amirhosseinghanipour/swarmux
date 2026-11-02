@@ -199,6 +199,11 @@ impl JobProgress {
         self.push_log(tick, &label, kind, text);
     }
 
+    /// Adds a line from swarmux itself, such as why a prompt came here.
+    pub fn note(&mut self, kind: &str, text: &str) {
+        self.push_log(self.last_tick, "swarmux", kind, text);
+    }
+
     fn mark(&mut self, actor: &Actor, tick: u32) {
         let label = self.label_for(actor);
         match self.lanes.iter_mut().find(|l| &l.actor == actor) {
@@ -405,6 +410,14 @@ mod tests {
         );
         assert_eq!(p.context_used, 112);
         assert!(p.log.is_empty(), "usage is not logged");
+    }
+
+    #[test]
+    fn notes_are_logged_as_swarmux() {
+        let mut p = progress();
+        p.note("route", "routed → web");
+        assert_eq!(p.log[0], "00:00 swarmux    route       routed → web");
+        assert_eq!(p.lanes.len(), 1, "no lane for swarmux");
     }
 
     #[test]

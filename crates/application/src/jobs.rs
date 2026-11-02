@@ -235,6 +235,13 @@ impl JobService {
         report
     }
 
+    /// Adds a swarmux line to a job's log (this run only).
+    pub fn note(&mut self, id: JobId, kind: &str, text: &str) {
+        if let Some(i) = self.find(id) {
+            self.tracked[i].progress.note(kind, text);
+        }
+    }
+
     /// The most recently dispatched job.
     pub fn latest(&self) -> Option<&JobProgress> {
         self.tracked.last().map(|t| &t.progress)

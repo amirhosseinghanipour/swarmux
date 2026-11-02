@@ -48,7 +48,7 @@ pub fn render_panel(frame: &mut Frame, area: Rect, app: &App) {
 
 fn decision_line(d: &DecisionRecord) -> Line<'_> {
     let color = match d.outcome {
-        Outcome::Allow => GREEN,
+        Outcome::Allow | Outcome::Route => GREEN,
         Outcome::Deny | Outcome::Stop => RED,
         Outcome::Ask => ORANGE,
         Outcome::Pass => MUTED,

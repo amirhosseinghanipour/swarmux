@@ -1,7 +1,7 @@
 use swarmux_domain::{DEFAULT_MODEL, GuardPolicy, Limits, Pattern, Unmatched};
 
 /// User settings (`config.toml`); every field has a default.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Settings {
     /// Jobs that may run at the same time.
     pub max_concurrent: usize,
@@ -10,6 +10,7 @@ pub struct Settings {
     /// Model for new sessions.
     pub default_model: String,
     pub guard: GuardSettings,
+    pub jev: JevSettings,
 }
 
 /// The `[guard]` section.
@@ -32,7 +33,72 @@ impl Default for Settings {
             min_free_ram_mb: 1536,
             default_model: DEFAULT_MODEL.to_string(),
             guard: GuardSettings::default(),
+            jev: JevSettings::default(),
         }
+    }
+}
+
+/// Which hosted JEV provider to ask, if any.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum JevProvider {
+    #[default]
+    Off,
+    TypeSafe,
+    OpenRouter,
+}
+
+impl JevProvider {
+    pub const ALL: [JevProvider; 3] = [
+        JevProvider::Off,
+        JevProvider::TypeSafe,
+        JevProvider::OpenRouter,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            JevProvider::Off => "off",
+            JevProvider::TypeSafe => "typesafe",
+            JevProvider::OpenRouter => "openrouter",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<JevProvider> {
+        JevProvider::ALL.into_iter().find(|p| p.as_str() == s)
+    }
+
+    /// How long a decision may take before swarmux stops waiting.
+    pub fn default_timeout_ms(self) -> u64 {
+        match self {
+            JevProvider::OpenRouter => 5_000,
+            JevProvider::Off | JevProvider::TypeSafe => 2_000,
+        }
+    }
+}
+
+/// The `[jev]` section: the optional hosted decision model.
+#[derive(Clone, Debug, PartialEq)]
+pub struct JevSettings {
+    pub provider: JevProvider,
+    /// Answers below this confidence go to the user (or to Haiku) instead.
+    pub threshold: f64,
+    /// `None` uses the provider's default.
+    pub timeout_ms: Option<u64>,
+}
+
+impl Default for JevSettings {
+    fn default() -> JevSettings {
+        JevSettings {
+            provider: JevProvider::Off,
+            threshold: 0.85,
+            timeout_ms: None,
+        }
+    }
+}
+
+impl JevSettings {
+    pub fn timeout_ms(&self) -> u64 {
+        self.timeout_ms
+            .unwrap_or_else(|| self.provider.default_timeout_ms())
     }
 }
 
@@ -78,6 +144,26 @@ mod tests {
             (s.guard.approval_timeout_secs, s.guard.loop_repeats),
             (120, 2)
         );
+    }
+
+    #[test]
+    fn jev_is_off_by_default_with_provider_timeouts() {
+        let j = JevSettings::default();
+        assert_eq!((j.provider, j.threshold), (JevProvider::Off, 0.85));
+        let typesafe = JevSettings {
+            provider: JevProvider::TypeSafe,
+            ..j.clone()
+        };
+        assert_eq!(typesafe.timeout_ms(), 2_000);
+        let openrouter = JevSettings {
+            provider: JevProvider::OpenRouter,
+            ..j
+        };
+        assert_eq!(openrouter.timeout_ms(), 5_000);
+        for p in JevProvider::ALL {
+            assert_eq!(JevProvider::parse(p.as_str()), Some(p));
+        }
+        assert_eq!(JevProvider::parse("x"), None);
     }
 
     #[test]

@@ -181,3 +181,116 @@ pub trait RuleWriter {
     /// Adds `rule` to the allow list of the user's settings.
     fn add_allow_rule(&self, rule: &str) -> AppResult<()>;
 }
+
+/// A fuzzy decision put to a hosted decision model (JEV). Texts are already
+/// shortened to what may leave the machine.
+#[derive(Clone, Debug, PartialEq)]
+pub enum AdviceRequest {
+    /// Should a tool call no rule matched run without asking the user?
+    ToolCall { tool: String, summary: String },
+    /// Which of these sessions should take the prompt?
+    Session {
+        prompt: String,
+        candidates: Vec<String>,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum AdviceAnswer {
+    Allow,
+    Deny,
+    /// One of the candidate session names.
+    Session(String),
+}
+
+/// A typed answer and how sure the model is (0 to 1).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Advice {
+    pub answer: AdviceAnswer,
+    pub confidence: f64,
+}
+
+/// Why no advice came back. Messages never contain the API key.
+#[derive(Clone, Debug, PartialEq, thiserror::Error)]
+pub enum AdviceError {
+    #[error("no {0} API key: run `swarmux jev set-key {0}`")]
+    NoKey(String),
+    #[error("no answer within {0} ms")]
+    Timeout(u64),
+    #[error("HTTP {0}")]
+    Status(u16),
+    #[error("request failed: {0}")]
+    Network(String),
+    #[error("invalid reply: {0}")]
+    Invalid(String),
+}
+
+/// An advisor's answer and how long it took.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AdviceReply {
+    pub result: Result<Advice, AdviceError>,
+    pub latency_ms: u64,
+}
+
+/// Receives an advisor's reply, from any thread.
+pub type AdviceSink = Box<dyn FnOnce(AdviceReply) + Send + 'static>;
+
+/// A hosted decision model for fuzzy forks. Answers always arrive through
+/// the sink, bounded by the provider's timeout; `advise` itself never blocks.
+pub trait DecisionAdvisor {
+    /// Provider name, e.g. "typesafe".
+    fn provider(&self) -> &str;
+    /// The host requests go to, for the consent screen.
+    fn host(&self) -> &str;
+    fn has_key(&self) -> bool;
+    fn advise(&self, request: AdviceRequest, sink: AdviceSink);
+}
+
+/// Remembers which JEV providers the user agreed to send data to.
+pub trait ConsentStore {
+    fn has_consent(&self, provider: &str) -> AppResult<bool>;
+    fn grant_consent(&self, provider: &str, now: Millis) -> AppResult<()>;
+}
+
+/// A session the router may pick.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RouteCandidate {
+    pub name: String,
+    pub cwd: String,
+    pub model: String,
+    /// Previews of its latest prompts, newest first.
+    pub recent: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct RouteRequest {
+    /// The start of the prompt.
+    pub prompt: String,
+    pub candidates: Vec<RouteCandidate>,
+}
+
+/// The router's pick.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RouteAnswer {
+    /// A candidate name.
+    pub session: String,
+    /// "haiku", "sonnet" or "opus", when the router suggests one.
+    pub model: Option<String>,
+    pub reason: String,
+}
+
+/// A router's answer (or why there is none) and what asking cost.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RouteReply {
+    pub result: Result<RouteAnswer, String>,
+    pub cost_usd: f64,
+}
+
+/// Receives a router's reply, from any thread.
+pub type RouteSink = Box<dyn FnOnce(RouteReply) + Send + 'static>;
+
+/// Picks the session a prompt should go to. Never blocks; the reply arrives
+/// through the sink.
+pub trait PromptRouter {
+    fn route(&self, request: RouteRequest, sink: RouteSink);
+}

@@ -2,7 +2,7 @@
 
 use rusqlite::{Row, params};
 use swarmux_application::ports::DecisionRepository;
-use swarmux_application::{AppResult, DecisionRecord, Outcome};
+use swarmux_application::{AppResult, DecisionRecord, Outcome, Source};
 use swarmux_domain::JobId;
 
 use super::{OrStorage, SqliteStore};
@@ -37,26 +37,26 @@ fn from_row(r: &Row) -> rusqlite::Result<DecisionRecord> {
         rule: r.get(4)?,
         latency_us: r.get::<_, i64>(5)?.max(0) as u64,
         ts: r.get(6)?,
+        // Unknown sources (from a newer swarmux) read as the guard's.
+        source: Source::parse(&r.get::<_, String>(7)?).unwrap_or_default(),
+        confidence: r.get(8)?,
     })
 }
 
 impl DecisionRepository for SqliteStore {
     fn record(&self, d: &DecisionRecord) -> AppResult<()> {
-        let source = if d.outcome == Outcome::Stop {
-            "loop"
-        } else {
-            "guard"
-        };
         let subject: String = d.subject.chars().take(SUBJECT_MAX).collect();
         self.conn
             .execute(
                 // A job id that isn't stored (another process's job) is kept as NULL.
                 "INSERT INTO decisions
-                   (job_id, fork, input_hash, output, rule, latency_us, ts, tool, subject)
-                 VALUES ((SELECT id FROM jobs WHERE id = ?1), ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                   (job_id, fork, input_hash, output, rule, latency_us, ts, tool, subject,
+                    confidence)
+                 VALUES ((SELECT id FROM jobs WHERE id = ?1), ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9,
+                    ?10)",
                 params![
                     d.job_id.map(|j| j.0),
-                    source,
+                    d.source.as_str(),
                     input_hash(&d.tool, &d.subject),
                     d.outcome.as_str(),
                     d.rule,
@@ -64,6 +64,7 @@ impl DecisionRepository for SqliteStore {
                     d.ts,
                     d.tool,
                     subject,
+                    d.confidence,
                 ],
             )
             .or_storage()?;
@@ -74,7 +75,8 @@ impl DecisionRepository for SqliteStore {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT job_id, tool, subject, output, rule, latency_us, ts FROM decisions
+                "SELECT job_id, tool, subject, output, rule, latency_us, ts, fork, confidence
+                 FROM decisions
                  ORDER BY ts DESC, id DESC LIMIT ?1",
             )
             .or_storage()?;
@@ -101,6 +103,8 @@ mod tests {
             rule: Some("Bash(cargo test:*)".into()),
             latency_us: 42,
             ts,
+            source: Source::Guard,
+            confidence: None,
         }
     }
 
@@ -111,14 +115,38 @@ mod tests {
         SessionRepository::insert(&s, &sess).unwrap();
         let job = JobRepository::insert(&s, &new_job(sess.id, "p"), 2).unwrap();
         s.record(&record(Some(job), Outcome::Allow, 10)).unwrap();
-        s.record(&record(Some(JobId(999)), Outcome::Stop, 20))
-            .unwrap();
+        let stop = DecisionRecord {
+            source: Source::Loop,
+            ..record(Some(JobId(999)), Outcome::Stop, 20)
+        };
+        s.record(&stop).unwrap();
         let rows = s.recent_decisions(10).unwrap();
         assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0].outcome, Outcome::Stop);
+        assert_eq!(
+            (rows[0].outcome, rows[0].source),
+            (Outcome::Stop, Source::Loop)
+        );
         assert_eq!(rows[0].job_id, None, "unknown jobs are kept as NULL");
         assert_eq!(rows[1], record(Some(job), Outcome::Allow, 10));
         assert_eq!(s.recent_decisions(1).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn jev_records_keep_source_and_confidence() {
+        let s = SqliteStore::open_in_memory().unwrap();
+        let jev = DecisionRecord {
+            source: Source::Jev,
+            confidence: Some(0.91),
+            ..record(None, Outcome::Allow, 5)
+        };
+        let route = DecisionRecord {
+            tool: "route".into(),
+            source: Source::Haiku,
+            ..record(None, Outcome::Route, 6)
+        };
+        s.record(&jev).unwrap();
+        s.record(&route).unwrap();
+        assert_eq!(s.recent_decisions(10).unwrap(), [route, jev]);
     }
 
     #[test]

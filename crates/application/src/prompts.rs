@@ -82,6 +82,20 @@ impl PromptService {
             .collect()
     }
 
+    /// The template with the user's values, for routing before a session is
+    /// chosen: `{{git_diff}}` stays a placeholder, since it depends on the session.
+    pub fn routing_text(
+        &self,
+        prompt_id: PromptId,
+        user_values: &HashMap<String, String>,
+    ) -> AppResult<String> {
+        let prompt = self.get(prompt_id)?;
+        let mut values = user_values.clone();
+        values.insert("date".into(), iso_date(self.clock.now()));
+        values.insert("git_diff".into(), "(the session's git diff)".into());
+        Ok(render(&prompt.body, &values)?)
+    }
+
     /// Fills the template for `session_id`: built-ins first, then `user_values`.
     pub fn render(
         &self,
@@ -208,6 +222,30 @@ mod tests {
         assert_eq!(out.text(), "on 2026-11-02 review main.rs:\n+added line");
         assert_eq!(out.prompt_id(), id);
         assert_eq!(f.workspace.calls(), std::slice::from_ref(&f.session.cwd));
+    }
+
+    #[test]
+    fn routing_text_needs_no_session_or_git() {
+        let f = fixture();
+        let id = f
+            .svc
+            .create(
+                "r",
+                "fix {{file}} on {{date}}
+{{git_diff}}",
+                vec![],
+            )
+            .unwrap();
+        let text = f
+            .svc
+            .routing_text(id, &values(&[("file", "a.rs")]))
+            .unwrap();
+        assert_eq!(
+            text,
+            "fix a.rs on 2026-11-02
+(the session's git diff)"
+        );
+        assert!(f.workspace.calls().is_empty());
     }
 
     #[test]
