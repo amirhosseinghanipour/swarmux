@@ -468,6 +468,20 @@ pub fn describe(ev: &AgentEvent) -> String {
             "${cost_usd:.4} · {:.1}s · {num_turns} turns",
             *duration_ms as f64 / 1000.0
         ),
+        AgentEvent::RateLimit(l) => {
+            let used = l
+                .utilization
+                .map_or_else(|| "?".to_string(), |u| format!("{:.0}%", u * 100.0));
+            format!("{} {used} ({})", l.window, l.status)
+        }
+        AgentEvent::Environment(env) => env.summary(),
+        AgentEvent::Todos { todos, .. } => {
+            let (done, doing, open) = crate::telemetry::todo_counts(todos);
+            format!(
+                "{} todos: {done} done, {doing} in progress, {open} open",
+                todos.len()
+            )
+        }
         AgentEvent::Ignored { kind } | AgentEvent::Unknown { kind, .. } => kind.clone(),
         AgentEvent::Malformed { raw } => raw.clone(),
     };

@@ -1,3 +1,5 @@
+use crate::telemetry::{Environment, RateLimit, Todo};
+
 /// Who did something inside a job: the lead session or one of its subagents.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Actor {
@@ -62,7 +64,16 @@ pub enum AgentEvent {
         /// The final answer.
         text: String,
     },
-    /// Known noise (hook progress, rate-limit info, …).
+    /// A subscription usage limit reading (`rate_limit_event`), one per window.
+    RateLimit(RateLimit),
+    /// The session's tools, MCP servers, plugins and versions (`system/init`).
+    Environment(Box<Environment>),
+    /// The todo list an agent wrote with `TodoWrite` (follows its `ToolUse`).
+    Todos {
+        todos: Vec<Todo>,
+        actor: Actor,
+    },
+    /// Known noise (hook progress, stream deltas, …).
     Ignored {
         kind: String,
     },
@@ -86,6 +97,9 @@ impl AgentEvent {
             AgentEvent::ToolResult { .. } => "tool_result",
             AgentEvent::Usage { .. } => "usage",
             AgentEvent::Result { .. } => "result",
+            AgentEvent::RateLimit(_) => "rate_limit",
+            AgentEvent::Environment(_) => "environment",
+            AgentEvent::Todos { .. } => "todos",
             AgentEvent::Ignored { .. } => "ignored",
             AgentEvent::Unknown { .. } => "unknown",
             AgentEvent::Malformed { .. } => "malformed",
@@ -97,7 +111,8 @@ impl AgentEvent {
             AgentEvent::Text { actor, .. }
             | AgentEvent::ToolUse { actor, .. }
             | AgentEvent::ToolResult { actor, .. }
-            | AgentEvent::Usage { actor, .. } => actor,
+            | AgentEvent::Usage { actor, .. }
+            | AgentEvent::Todos { actor, .. } => actor,
             _ => &Actor::Lead,
         }
     }

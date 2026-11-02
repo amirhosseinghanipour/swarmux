@@ -17,10 +17,11 @@ mod review;
 mod schedule;
 mod session;
 mod subagent;
+pub mod telemetry;
 mod template;
 mod tokens;
 
-pub use date::{iso_date, iso_minute};
+pub use date::{iso_date, iso_minute, parse_iso_millis};
 pub use error::DomainError;
 pub use event::{Actor, AgentEvent};
 pub use guard::{
