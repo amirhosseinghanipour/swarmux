@@ -6,8 +6,10 @@ use std::rc::Rc;
 
 use anyhow::Context;
 use clap::{Parser, Subcommand};
-use swarmux_application::{JobService, PromptService, SessionService};
-use swarmux_infrastructure::{ClaudeCli, GitCli, Paths, SqliteStore, SystemClock};
+use swarmux_application::{HistoryService, JobService, PromptService, SessionService};
+use swarmux_infrastructure::{
+    ClaudeCli, GitCli, Paths, SqliteStore, SysinfoMonitor, SystemClock, load_settings,
+};
 use swarmux_tui::App;
 
 /// swarmux — a prompt-first command center for Claude Code.
@@ -37,6 +39,7 @@ fn run_tui() -> anyhow::Result<()> {
     let paths = Paths::default_home()?;
     std::fs::create_dir_all(&paths.data_dir)
         .with_context(|| format!("cannot create {}", paths.data_dir.display()))?;
+    let settings = load_settings(&paths.config)?;
     let store = Rc::new(SqliteStore::open(&paths.db)?);
     let clock = Rc::new(SystemClock);
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -47,10 +50,14 @@ fn run_tui() -> anyhow::Result<()> {
 
     let workspace = Rc::new(GitCli::default());
 
-    let sessions = SessionService::new(store.clone(), clock.clone());
+    let sessions = SessionService::new(store.clone(), clock.clone())
+        .with_default_model(&settings.default_model);
     let prompts = PromptService::new(store.clone(), store.clone(), workspace, clock.clone());
-    let jobs = JobService::new(store.clone(), store, runner, clock);
+    let history = HistoryService::new(store.clone());
+    let mut jobs = JobService::new(store.clone(), store, runner, clock)
+        .with_limits(settings.limits())
+        .with_monitor(Rc::new(SysinfoMonitor::new()));
     jobs.recover()?;
-    let app = App::new(sessions, jobs, prompts, std::env::current_dir()?);
+    let app = App::new(sessions, jobs, prompts, history, std::env::current_dir()?);
     Ok(swarmux_tui::run(app)?)
 }

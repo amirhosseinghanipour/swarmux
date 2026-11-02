@@ -5,10 +5,16 @@ use std::time::Duration;
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::DefaultTerminal;
-use swarmux_application::{AppError, AppResult, JobService, PromptService, SessionService};
-use swarmux_domain::{JobProgress, PromptId, Session};
+use swarmux_application::{
+    AppError, AppResult, HistoryService, JobService, PromptService, QueueEntry, QueueStats,
+    SessionService,
+};
+use swarmux_domain::{JobId, JobProgress, PromptId, Session};
 
+use crate::dashboard::DashboardState;
+use crate::history::{HistoryAction, HistoryScreen};
 use crate::prompts::{FormAction, PendingDispatch, PromptForm, PromptsScreen};
+use crate::queue::{QueueAction, QueueScreen};
 use crate::ui::input::{Input, InputAction};
 
 /// Redraw budget: about 10 frames per second.
@@ -51,6 +57,8 @@ pub enum InputPurpose {
     Prompt,
     /// A value for the template variable `prompts.pending` is asking for.
     Variable,
+    /// The history search; applied as it is typed.
+    Search,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -68,9 +76,13 @@ pub struct App {
     /// Last error, shown in the status bar until the next key press.
     pub error: Option<String>,
     pub prompts: PromptsScreen,
+    pub queue: QueueScreen,
+    pub history: HistoryScreen,
+    pub dashboard: DashboardState,
     session_service: SessionService,
     jobs: JobService,
     prompt_service: PromptService,
+    history_service: HistoryService,
     cwd: PathBuf,
 }
 
@@ -79,6 +91,7 @@ impl App {
         session_service: SessionService,
         jobs: JobService,
         prompt_service: PromptService,
+        history_service: HistoryService,
         cwd: PathBuf,
     ) -> App {
         let mut app = App {
@@ -89,9 +102,13 @@ impl App {
             selected: 0,
             error: None,
             prompts: PromptsScreen::default(),
+            queue: QueueScreen::default(),
+            history: HistoryScreen::default(),
+            dashboard: DashboardState::default(),
             session_service,
             jobs,
             prompt_service,
+            history_service,
             cwd,
         };
         app.refresh_sessions(None);
@@ -113,10 +130,18 @@ impl App {
         Ok(())
     }
 
-    /// Applies pending job updates.
+    /// Applies pending job updates and starts queued jobs.
     pub fn update(&mut self) {
-        if let Some(e) = self.jobs.pump().into_iter().last() {
+        let report = self.jobs.pump();
+        if let Some(e) = report.errors.into_iter().last() {
             self.error = Some(e.to_string());
+        }
+        if !report.new_sessions.is_empty() {
+            let current = self.selected_session().cloned();
+            self.refresh_sessions(current.as_ref());
+        }
+        if report.changed && self.screen == Screen::History {
+            self.refresh_history();
         }
     }
 
@@ -124,8 +149,23 @@ impl App {
         self.sessions.get(self.selected)
     }
 
+    /// The job the dashboard follows, else the most recent one.
     pub fn current_job(&self) -> Option<&JobProgress> {
+        if let Some(id) = self.dashboard.followed
+            && let Some(p) = self.jobs.progress(id).or(self.dashboard.replayed())
+        {
+            return Some(p);
+        }
         self.jobs.latest()
+    }
+
+    /// Running, queued and recently finished jobs.
+    pub fn queue_rows(&self) -> Vec<QueueEntry> {
+        self.jobs.queue()
+    }
+
+    pub fn stats(&self) -> QueueStats {
+        self.jobs.stats()
     }
 
     /// The timeline's "now" for the current job.
@@ -142,10 +182,19 @@ impl App {
         if let Mode::Input(purpose, input) = &mut self.mode {
             let purpose = *purpose;
             match input.handle(key) {
-                InputAction::None => {}
+                InputAction::None => {
+                    if purpose == InputPurpose::Search {
+                        self.history.query = input.text.clone();
+                        self.refresh_history();
+                    }
+                }
                 InputAction::Cancel => {
                     self.mode = Mode::Normal;
                     self.prompts.pending = None;
+                    if purpose == InputPurpose::Search {
+                        self.history.query.clear();
+                        self.refresh_history();
+                    }
                 }
                 InputAction::Submit(text) => {
                     self.mode = Mode::Normal;
@@ -153,6 +202,7 @@ impl App {
                         InputPurpose::NewSession => self.create_session(&text),
                         InputPurpose::Prompt => self.dispatch(&text),
                         InputPurpose::Variable => self.answer_variable(text),
+                        InputPurpose::Search => Ok(()),
                     };
                     self.show(result);
                 }
@@ -178,6 +228,17 @@ impl App {
             KeyCode::Char('q') => self.quit = true,
             KeyCode::Char(c @ '1'..='5') => {
                 self.screen = Screen::ALL[(c as u8 - b'1') as usize];
+                if self.screen == Screen::History {
+                    self.refresh_history();
+                }
+            }
+            code if self.screen == Screen::Queue => {
+                let result = self.queue_key(code);
+                self.show(result);
+            }
+            code if self.screen == Screen::History => {
+                let result = self.history_key(code);
+                self.show(result);
             }
             KeyCode::Up if self.screen == Screen::Prompts => self.prompts.up(),
             KeyCode::Down if self.screen == Screen::Prompts => self.prompts.down(),
@@ -204,6 +265,74 @@ impl App {
     fn show(&mut self, result: AppResult<()>) {
         if let Err(e) = result {
             self.error = Some(e.to_string());
+        }
+    }
+
+    fn queue_key(&mut self, code: KeyCode) -> AppResult<()> {
+        let rows = self.jobs.queue();
+        match self.queue.handle(code, &rows) {
+            QueueAction::None => {}
+            QueueAction::Cancel(id) => self.jobs.cancel(id)?,
+            QueueAction::Retry(id) => {
+                let new = self.jobs.retry(id)?;
+                self.queue.selected = Some(new);
+            }
+            QueueAction::Priority(id, delta) => {
+                self.jobs.change_priority(id, delta)?;
+            }
+            QueueAction::View(id) => self.view(id)?,
+        }
+        Ok(())
+    }
+
+    fn history_key(&mut self, code: KeyCode) -> AppResult<()> {
+        match self.history.handle(code) {
+            HistoryAction::None => {}
+            HistoryAction::Moved => self.load_detail(),
+            HistoryAction::Search => {
+                let input = Input::with_text(&self.history.query);
+                self.mode = Mode::Input(InputPurpose::Search, input);
+            }
+            HistoryAction::Rerun(id) => {
+                self.jobs.retry(id)?;
+                self.refresh_history();
+            }
+            HistoryAction::Fork(id) => {
+                self.jobs.fork(id)?;
+                self.refresh_history();
+            }
+            HistoryAction::View(id) => self.view(id)?,
+        }
+        Ok(())
+    }
+
+    /// Shows `job` on the dashboard, rebuilding it from history if it is
+    /// not from this run.
+    fn view(&mut self, job: JobId) -> AppResult<()> {
+        let replay = match self.jobs.progress(job) {
+            Some(_) => None,
+            None => Some(self.history_service.replay(job)?),
+        };
+        self.dashboard.follow(job, replay);
+        self.screen = Screen::Dashboard;
+        Ok(())
+    }
+
+    fn refresh_history(&mut self) {
+        match self.history_service.list(&self.history.query) {
+            Ok(rows) => self.history.set_rows(rows),
+            Err(e) => self.error = Some(e.to_string()),
+        }
+        self.load_detail();
+    }
+
+    fn load_detail(&mut self) {
+        self.history.detail = None;
+        if let Some(id) = self.history.selected_row().map(|r| r.job_id) {
+            match self.history_service.detail(id) {
+                Ok(d) => self.history.detail = Some(d),
+                Err(e) => self.error = Some(e.to_string()),
+            }
         }
     }
 
@@ -287,7 +416,8 @@ impl App {
         let rendered =
             self.prompt_service
                 .render(pending.prompt_id, pending.session_id, &pending.values)?;
-        self.jobs.dispatch_template(pending.session_id, &rendered)?;
+        let job = self.jobs.dispatch_template(pending.session_id, &rendered)?;
+        self.dashboard.follow(job, None);
         let session = self
             .sessions
             .iter()
@@ -316,7 +446,8 @@ impl App {
             .selected_session()
             .cloned()
             .ok_or(AppError::SessionNotFound)?;
-        self.jobs.dispatch(session.id, prompt)?;
+        let job = self.jobs.dispatch(session.id, prompt)?;
+        self.dashboard.follow(job, None);
         self.refresh_sessions(Some(&session));
         Ok(())
     }
@@ -339,9 +470,12 @@ impl App {
 pub(crate) mod tests_support {
     use std::rc::Rc;
 
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use swarmux_application::ports::PromptRepository;
-    use swarmux_application::testing::{FakeRunner, FakeWorkspace, FixedClock, InMemoryStore};
-    use swarmux_application::{JobService, PromptService, SessionService};
+    use swarmux_application::testing::{
+        FakeMonitor, FakeRunner, FakeWorkspace, FixedClock, InMemoryStore,
+    };
+    use swarmux_application::{HistoryService, JobService, PromptService, SessionService};
     use swarmux_domain::PromptDraft;
 
     use super::App;
@@ -351,27 +485,56 @@ pub(crate) mod tests_support {
         pub store: Rc<InMemoryStore>,
         pub runner: Rc<FakeRunner>,
         pub clock: Rc<FixedClock>,
+        pub monitor: Rc<FakeMonitor>,
     }
 
     /// An app wired to in-memory fakes.
     pub(crate) fn test_app() -> TestApp {
-        let store = Rc::new(InMemoryStore::default());
+        test_app_with_store(Rc::new(InMemoryStore::default()))
+    }
+
+    /// An app over an existing store, like a restart.
+    pub(crate) fn test_app_with_store(store: Rc<InMemoryStore>) -> TestApp {
         let runner = Rc::new(FakeRunner::default());
         let clock = Rc::new(FixedClock::new(1_000));
+        let monitor = Rc::new(FakeMonitor::default());
         let workspace = Rc::new(FakeWorkspace::with_diff("+diff"));
         let sessions = SessionService::new(store.clone(), clock.clone());
-        let jobs = JobService::new(store.clone(), store.clone(), runner.clone(), clock.clone());
+        let jobs = JobService::new(store.clone(), store.clone(), runner.clone(), clock.clone())
+            .with_monitor(monitor.clone());
         let prompts = PromptService::new(store.clone(), store.clone(), workspace, clock.clone());
+        let history = HistoryService::new(store.clone());
         TestApp {
-            app: App::new(sessions, jobs, prompts, "/work".into()),
+            app: App::new(sessions, jobs, prompts, history, "/work".into()),
             store,
             runner,
             clock,
+            monitor,
         }
     }
 
     impl TestApp {
         /// Saves a prompt straight to the store and reloads the list.
+        fn keys(&mut self, codes: impl IntoIterator<Item = KeyCode>) {
+            for code in codes {
+                self.app.on_key(KeyEvent::new(code, KeyModifiers::NONE));
+            }
+        }
+
+        /// Creates a session through the sessions screen, then goes back to the dashboard.
+        pub(crate) fn with_session(&mut self, name: &str) {
+            self.keys([KeyCode::Char('5'), KeyCode::Char('n')]);
+            self.keys(name.chars().map(KeyCode::Char));
+            self.keys([KeyCode::Enter, KeyCode::Char('1')]);
+        }
+
+        /// Sends a prompt to the selected session from the dashboard.
+        pub(crate) fn send(&mut self, prompt: &str) {
+            self.keys([KeyCode::Char('1'), KeyCode::Char('p')]);
+            self.keys(prompt.chars().map(KeyCode::Char));
+            self.keys([KeyCode::Enter]);
+        }
+
         pub(crate) fn add_prompt(&mut self, name: &str, body: &str, tags: &[&str]) {
             let tags = tags.iter().map(|t| t.to_string()).collect();
             let draft = PromptDraft::new(name, body, tags).unwrap();
@@ -482,15 +645,23 @@ mod tests {
     }
 
     #[test]
-    fn busy_session_error_is_shown() {
+    fn second_prompt_to_busy_session_is_queued() {
         let mut t = test_app();
         with_session(&mut t.app);
-        for _ in 0..2 {
+        for p in ["one", "two"] {
             press(&mut t.app, KeyCode::Char('p'));
-            type_str(&mut t.app, "x");
+            type_str(&mut t.app, p);
             press(&mut t.app, KeyCode::Enter);
         }
-        assert!(t.app.error.as_deref().unwrap().contains("still running"));
+        assert_eq!(t.app.error, None);
+        assert_eq!(t.runner.started(), 1);
+        let job = t.app.current_job().unwrap();
+        assert_eq!(
+            job.status,
+            JobStatus::Queued,
+            "dashboard follows the new job"
+        );
+        assert_eq!(t.app.stats().queued, 1);
     }
 
     fn ctrl_s(app: &mut App) {

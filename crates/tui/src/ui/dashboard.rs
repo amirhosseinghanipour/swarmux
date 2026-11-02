@@ -6,8 +6,8 @@ use ratatui::{
     widgets::{Block, Paragraph},
 };
 
-use super::{BLUE, GREEN, MUTED, ORANGE, RED};
-use swarmux_domain::{Actor, JobProgress, JobStatus};
+use super::{BLUE, MUTED, ORANGE, short, status_span};
+use swarmux_domain::{Actor, JobProgress};
 
 use crate::app::App;
 
@@ -60,20 +60,13 @@ pub fn render_job(frame: &mut Frame, area: Rect, job: &JobProgress, now_tick: u3
 }
 
 fn status_line(job: &JobProgress) -> Line<'_> {
-    let (status, color) = match job.status {
-        JobStatus::Running => ("running", ORANGE),
-        JobStatus::Done => ("done", GREEN),
-        JobStatus::Failed => ("failed", RED),
-        JobStatus::Interrupted => ("interrupted", RED),
-        JobStatus::Queued => ("queued", MUTED),
-    };
     let ctx = match job.context_window {
         Some(limit) => format!("ctx {}/{}", short(job.context_used), short(limit)),
         None => format!("ctx {}", short(job.context_used)),
     };
     Line::from(vec![
-        Span::raw(format!(" {} · ", job.session_name)),
-        Span::styled(status, color),
+        Span::raw(format!(" #{} {} · ", job.job_id, job.session_name)),
+        status_span(job.status),
         Span::raw(format!(
             " · {} · ${:.4} · in {} / out {} · {ctx}",
             job.model,
@@ -108,15 +101,6 @@ fn timeline_lines(job: &JobProgress, now_tick: u32, width: usize) -> Vec<Line<'_
             ])
         })
         .collect()
-}
-
-/// 1234 → "1.2k", 1_000_000 → "1.0M".
-fn short(n: u64) -> String {
-    match n {
-        0..1_000 => n.to_string(),
-        1_000..1_000_000 => format!("{:.1}k", n as f64 / 1e3),
-        _ => format!("{:.1}M", n as f64 / 1e6),
-    }
 }
 
 #[cfg(test)]
@@ -161,12 +145,5 @@ mod tests {
         let t = crate::app::tests_support::test_app();
         let out = crate::ui::render_to_string(&t.app, 100, 10);
         assert!(out.contains("press 5 then n"), "{out}");
-    }
-
-    #[test]
-    fn short_numbers() {
-        assert_eq!(short(999), "999");
-        assert_eq!(short(15_100), "15.1k");
-        assert_eq!(short(1_000_000), "1.0M");
     }
 }

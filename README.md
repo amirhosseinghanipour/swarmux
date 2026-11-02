@@ -26,7 +26,17 @@ Single Rust binary. Windows, macOS, Linux. Works with Claude Code only.
 
 ```sh
 cargo run              # TUI: 1-5 switch screens, q quits
-cargo run -- doctor    # checks Claude Code is installed
+cargo run -- doctor    # checks Claude Code is installed and prints the settings
+```
+
+## Configuration
+
+Optional `~/.swarmux/config.toml` (these are the defaults):
+
+```toml
+max_concurrent = 3       # jobs running at the same time
+min_free_ram_mb = 1536   # queued jobs wait while free memory is lower
+default_model = "sonnet" # model for new sessions
 ```
 
 ## License
