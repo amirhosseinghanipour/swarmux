@@ -11,7 +11,7 @@ mod monitor;
 pub mod paths;
 pub mod sqlite;
 
-pub use claude_cli::{ClaudeCli, GuardHook};
+pub use claude_cli::{ClaudeCli, GuardHook, HaikuRouter};
 pub use clock::SystemClock;
 pub use config::{ConfigError, load_settings};
 pub use config_edit::ConfigRuleWriter;

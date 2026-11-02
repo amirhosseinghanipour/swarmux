@@ -2,6 +2,8 @@
 
 pub mod command;
 pub mod parse;
+pub mod router;
 mod runner;
 
+pub use router::HaikuRouter;
 pub use runner::{ClaudeCli, GuardHook};
