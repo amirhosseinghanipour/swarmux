@@ -29,7 +29,7 @@ Single Rust binary. Windows, macOS, Linux. Works with Claude Code only.
 ## Try it
 
 ```sh
-cargo run              # TUI: 1-5 switch screens, p sends a prompt, q quits
+cargo run              # TUI: 1-5 switch screens, p sends a prompt, t theme, L layout, q quits
 cargo run -- doctor    # checks Claude Code, the settings and the Guard hook
 ```
 
@@ -80,6 +80,50 @@ doesn't report the effort level, for example). Spinners turn only while
 something runs. The layout collapses as the window shrinks (who sees what
 goes first, then the reviewer becomes one line and the cards a list); below
 80×24 it asks for a bigger window.
+
+## Themes & layouts
+
+swarmux paints its own background (the default `reference` theme is OLED
+black, with orange for Opus/Sonnet and the lead, blue for Haiku and green for
+the Guard), so your terminal's colour scheme never shows through.
+
+| Key | Does |
+| --- | --- |
+| `t` | next theme: `reference`, `catppuccin-mocha`, `tokyo-night`, `gruvbox-dark`, `rose-pine`, `nord`, `dracula` |
+| `L` | next layout: `command` (the dashboard above), `btop` (a dense grid of small panels), `minimal` (lead and log), then yours |
+| `Tab` / `Shift+Tab` | move the focus highlight between panels (`Esc` clears it) |
+
+```toml
+theme = "tokyo-night"   # any name above
+layout = "btop"         # command, btop, minimal or one of [[layouts]]
+icons = "nerd"          # "ascii" (default) or "nerd" for Nerd Font glyphs
+gaps = 1                # blank cells between panels, 0-4
+fps = 10                # frames per second, 1-30
+low_power = false       # true: 4 fps, no easing or pulses
+splash = true           # the start-up screen (or run with --no-splash)
+
+[[layouts]]             # your own: rows top to bottom
+name = "focus"
+rows = [
+  { panels = ["steps"], height = 1 },
+  { panels = ["lead:2", "guard", "usage"], height = 8 },
+  { panels = ["timeline:3", "who:2"], weight = 1 },
+  { panels = ["log"], weight = 2 },
+]
+```
+
+A row is `height` rows tall, or shares what is left by `weight`; `"id:n"`
+gives a panel `n` shares of its row. Panel ids: `legend`, `command`, `steps`,
+`target`, `reviewer`, `lead`, `guard`, `delegate`, `subagents`, `back`,
+`timeline`, `who`, `log`, `mix` (tokens by model as a ring), and the
+telemetry panels `usage`, `burn`, `tokens`, `context`, `agents`, `todos`,
+`tools`, `files`, `git`, `ci`, `system`, `wall`, `calendar`, `env`, which
+show "waiting for data" until their feed is connected. A panel too small for
+its full view collapses to one line; when even that doesn't fit, the least
+important panels are hidden first.
+
+Colours are truecolor when `COLORTERM` is `truecolor` or `24bit` (or inside
+Windows Terminal) and fall back to the 256-colour palette otherwise.
 
 ## Review step
 
