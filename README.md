@@ -16,7 +16,8 @@ review live in one terminal.
 - **Guard**: one permission policy across all sessions and an automatic loop
   breaker, settled in code in under a millisecond so the models never see it
 - **JEV (optional, bring your own key)**: the hosted Jev model for fuzzy
-  decisions such as unmatched tool calls and which agent should take a prompt
+  decisions such as unmatched tool calls and which session should take a prompt
+- **Let swarmux route**: one cheap Haiku call picks the session for a prompt
 - **Review step**: a reviewer model checks each job's diff before it is done
 - **History**: every prompt with cost and outcome; re-run or fork from any point
 
@@ -106,6 +107,64 @@ Press `l` on the Sessions screen to make a session lean. Its jobs run with
 (hooks, plugins) don't run inside them, which makes jobs start much faster.
 Project and local settings and swarmux's own Guard hook still apply. Lean
 sessions are marked `lean` in the list.
+
+## Let swarmux route
+
+Press `P` on the Dashboard (instead of `p`) or `D` on the Prompts screen
+(instead of `d`) and swarmux picks the session. The status bar says
+`routing…`, then the chosen session and a one-line reason, and the job's log
+and the guard / JEV panel record it before the prompt is queued.
+
+Routing makes one cheap `claude -p --model haiku` call with no tools, no
+session file and none of your user-level settings. It reads the first 2000
+characters of the prompt and, for each session, its name, folder, model and
+latest three prompts, and answers with a session and a model suggestion
+(shown, not applied). The call's cost (usually well under $0.001) is shown
+next to the reason. If Haiku fails or names an unknown session, the selected
+session takes the prompt and swarmux says why. Routing uses your Claude plan.
+
+## JEV (optional, bring your own key)
+
+JEV is a hosted decision model from TypeSafe AI, called the way the
+open-source [jev-layer](https://github.com/typakon4/jev-layer) project calls
+it. swarmux can ask it two fuzzy questions:
+
+- a tool call no Guard rule matches: allow or deny, with a confidence;
+- "let swarmux route": which session, with a confidence (Haiku is only asked
+  when JEV isn't sure).
+
+Answers at or above `threshold` are applied and logged as `jev` with their
+confidence and latency; anything else (lower confidence, no key, a timeout,
+an HTTP error, an invalid reply) falls back to asking you, or to Haiku, and is
+logged too. JEV is asked off the UI thread and never holds up the screen.
+
+```toml
+[jev]
+provider = "typesafe"   # "off" (default), "typesafe" or "openrouter"
+threshold = 0.85        # answers below this go to you instead
+# timeout_ms = 2000     # default: 2000 for typesafe, 5000 for openrouter
+```
+
+| Provider | Endpoint | Model | Key |
+| --- | --- | --- | --- |
+| `typesafe` | `https://api.typesafe.ai/v1/systemone` | `jev-1.14.0` | `TYPESAFE_API_KEY` |
+| `openrouter` | `https://openrouter.ai/api/alpha/decisions` | `typesafe/jev-1.14` | `OPENROUTER_API_KEY` |
+
+Keys are read only from those environment variables or the OS keychain,
+never from `config.toml`, and are never written to the database or logs.
+
+```sh
+swarmux jev set-key typesafe   # asks for the key without echoing it, keeps it in the keychain
+swarmux jev test               # one sample decision: verdict, confidence, latency
+swarmux doctor                 # shows the provider and whether a key is found
+```
+
+**Privacy.** With JEV on, decision context goes to the chosen provider: the
+tool name and a summary of its command, path or URL (at most 200
+characters), or the first 200 characters of a prompt and your session names.
+Never file contents, diffs or folders. The first time a provider is enabled,
+swarmux shows exactly this and the host, and uses JEV only after you press
+`y`; the answer is remembered per provider.
 
 ## License
 
