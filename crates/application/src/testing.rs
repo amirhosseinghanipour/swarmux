@@ -14,9 +14,10 @@ use crate::ports::{
     AgentProfile, AgentRunner, Clock, ConsentStore, DecisionAdvisor, DecisionRepository, HookInbox,
     HookRequest, InboxItem, JobRepository, NewJob, PromptRepository, PromptRouter, RouteAnswer,
     RouteReply, RouteRequest, RouteSink, RuleWriter, RunRequest, RunSink, RunnerMsg,
-    SessionRepository, StoredEvent, SystemMonitor, Workspace,
+    SessionRepository, StoredEvent, SystemMonitor, TelemetryFeed, TelemetryStore, Workspace,
 };
-use crate::{AppError, AppResult, DecisionRecord, JobSummary};
+use crate::{AppError, AppResult, DecisionRecord, JobSummary, TelemetrySnapshot};
+use swarmux_domain::telemetry::{Environment, RateLimit};
 
 /// A clock that only moves when told to.
 pub struct FixedClock(Cell<Millis>);
@@ -735,5 +736,70 @@ impl PromptRouter for FakeRouter {
             }
             None => self.sinks.borrow_mut().push(Some(sink)),
         }
+    }
+}
+
+/// A telemetry feed that returns whatever snapshot it was given.
+#[derive(Default)]
+pub struct FakeTelemetry {
+    snapshot: RefCell<TelemetrySnapshot>,
+    focused: RefCell<Vec<PathBuf>>,
+}
+
+impl FakeTelemetry {
+    pub fn set(&self, snapshot: TelemetrySnapshot) {
+        *self.snapshot.borrow_mut() = snapshot;
+    }
+
+    /// Folders `focus` was called with, oldest first.
+    pub fn focused(&self) -> Vec<PathBuf> {
+        self.focused.borrow().clone()
+    }
+}
+
+impl TelemetryFeed for FakeTelemetry {
+    fn snapshot(&self) -> TelemetrySnapshot {
+        self.snapshot.borrow().clone()
+    }
+
+    fn focus(&self, cwd: &Path) {
+        self.focused.borrow_mut().push(cwd.to_path_buf());
+    }
+}
+
+/// Limit readings and environments in memory.
+#[derive(Default)]
+pub struct FakeTelemetryStore {
+    limits: RefCell<Vec<(RateLimit, Millis)>>,
+    environments: RefCell<Vec<(Environment, Millis)>>,
+}
+
+impl TelemetryStore for FakeTelemetryStore {
+    fn save_limit(&self, limit: &RateLimit, observed_at: Millis) -> AppResult<()> {
+        let mut limits = self.limits.borrow_mut();
+        limits.retain(|(l, _)| l.window != limit.window);
+        limits.push((limit.clone(), observed_at));
+        Ok(())
+    }
+
+    fn limits(&self) -> AppResult<Vec<(RateLimit, Millis)>> {
+        Ok(self.limits.borrow().clone())
+    }
+
+    fn save_environment(&self, env: &Environment, seen_at: Millis) -> AppResult<()> {
+        let mut envs = self.environments.borrow_mut();
+        envs.retain(|(e, _)| e.session_id != env.session_id);
+        envs.insert(0, (env.clone(), seen_at));
+        Ok(())
+    }
+
+    fn environments(&self, limit: usize) -> AppResult<Vec<(Environment, Millis)>> {
+        Ok(self
+            .environments
+            .borrow()
+            .iter()
+            .take(limit)
+            .cloned()
+            .collect())
     }
 }

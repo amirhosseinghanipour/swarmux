@@ -2,6 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
+use swarmux_domain::telemetry::{Environment, RateLimit};
 use swarmux_domain::{
     AgentEvent, Decision, Job, JobId, JobResult, JobStatus, Millis, PromptDraft, PromptId,
     PromptTemplate, ReviewState, Session, SessionId,
@@ -323,4 +324,26 @@ pub type RouteSink = Box<dyn FnOnce(RouteReply) + Send + 'static>;
 /// through the sink.
 pub trait PromptRouter {
     fn route(&self, request: RouteRequest, sink: RouteSink);
+}
+
+/// Machine-wide telemetry collected in the background (transcripts, system,
+/// git, GitHub). Both calls are cheap and never block on a collector.
+pub trait TelemetryFeed {
+    /// The latest data of every source. Job-derived parts are left empty;
+    /// [`crate::TelemetryService`] fills them in.
+    fn snapshot(&self) -> crate::TelemetrySnapshot;
+    /// The folder the git and GitHub sources follow (the selected session's).
+    fn focus(&self, cwd: &Path);
+}
+
+/// Keeps usage-limit readings and session environments across runs.
+pub trait TelemetryStore {
+    /// Replaces the stored reading of the limit's window.
+    fn save_limit(&self, limit: &RateLimit, observed_at: Millis) -> AppResult<()>;
+    /// The latest reading of every window.
+    fn limits(&self) -> AppResult<Vec<(RateLimit, Millis)>>;
+    /// Replaces the stored environment of the session.
+    fn save_environment(&self, env: &Environment, seen_at: Millis) -> AppResult<()>;
+    /// The latest environment of every session, newest first.
+    fn environments(&self, limit: usize) -> AppResult<Vec<(Environment, Millis)>>;
 }

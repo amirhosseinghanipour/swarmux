@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
+use swarmux_domain::telemetry::{AgentNode, JobActivity, SwarmActivity, agent_tree};
 use swarmux_domain::{
     AgentEvent, DomainError, Job, JobId, JobProgress, JobResult, JobStatus, Limits, LoopBreaker,
     LoopTrip, Millis, PromptId, ReviewState, Session, SessionId, describe, plan, run_order,
@@ -11,7 +12,7 @@ use swarmux_domain::{
 
 use crate::ports::{
     AgentCatalog, AgentRunner, Clock, JobRepository, NewJob, RunRequest, RunSink, RunnerMsg,
-    SessionRepository, SystemMonitor, Workspace,
+    SessionRepository, SystemMonitor, TelemetryStore, Workspace,
 };
 use crate::{AppError, AppResult, RenderedPrompt, ReviewSettings, Settings};
 
@@ -29,6 +30,7 @@ struct Tracked {
     breaker: LoopBreaker,
     /// The session folder, once started.
     cwd: Option<PathBuf>,
+    activity: JobActivity,
 }
 
 /// One row of the queue screen.
@@ -94,7 +96,14 @@ pub struct JobService {
     /// Where review jobs read the diff; without it there are no reviews.
     workspace: Option<Rc<dyn Workspace>>,
     review: ReviewSettings,
+    /// Token flow, tool calls, limits and environments across jobs.
+    activity: SwarmActivity,
+    /// Where limit readings and environments outlive the run.
+    telemetry: Option<Rc<dyn TelemetryStore>>,
 }
+
+/// Environments restored at start.
+const RESTORE_ENVIRONMENTS: usize = 50;
 
 impl JobService {
     pub fn new(
@@ -119,7 +128,32 @@ impl JobService {
             catalog: None,
             workspace: None,
             review: ReviewSettings::default(),
+            activity: SwarmActivity::default(),
+            telemetry: None,
         }
+    }
+
+    /// Keeps usage-limit readings and session environments in `store`;
+    /// [`JobService::recover`] loads the stored ones.
+    pub fn with_telemetry_store(mut self, store: Rc<dyn TelemetryStore>) -> JobService {
+        self.telemetry = Some(store);
+        self
+    }
+
+    /// Activity across the jobs of this run, plus restored limits and environments.
+    pub fn activity(&self) -> &SwarmActivity {
+        &self.activity
+    }
+
+    /// Token flow, tool calls, todos and environment of a job of this run.
+    pub fn job_activity(&self, id: JobId) -> Option<&JobActivity> {
+        self.find(id).map(|i| &self.tracked[i].activity)
+    }
+
+    /// The job's lead, its subagents and what each is running now.
+    pub fn agent_tree(&self, id: JobId) -> Option<AgentNode> {
+        self.find(id)
+            .map(|i| agent_tree(&self.tracked[i].progress, &self.tracked[i].activity))
     }
 
     /// Reviews finished jobs (when asked for) with `settings.model`, reading
@@ -177,6 +211,14 @@ impl JobService {
     /// Marks jobs a previous run left `running` as `interrupted` and picks up
     /// jobs still queued. Returns how many were interrupted.
     pub fn recover(&mut self) -> AppResult<usize> {
+        if let Some(store) = &self.telemetry {
+            for (limit, at) in store.limits()? {
+                self.activity.record_limit(limit, at);
+            }
+            for (env, at) in store.environments(RESTORE_ENVIRONMENTS)? {
+                self.activity.record_environment(env, at);
+            }
+        }
         let interrupted = self.jobs.interrupt_running(self.clock.now())?;
         let mut queued = self.jobs.queued()?;
         queued.sort_by_key(|j| (j.created_at, j.id));
@@ -436,6 +478,7 @@ impl JobService {
             started_at: None,
             breaker: LoopBreaker::new(self.loop_repeats),
             cwd: None,
+            activity: JobActivity::default(),
         });
     }
 
@@ -637,6 +680,7 @@ impl JobService {
                         now,
                     )?;
                 }
+                self.observe_telemetry(i, job_id, &ev, now)?;
                 let finished = self.tracked[i].progress.apply(&ev, tick);
                 if let AgentEvent::ToolUse { id, .. } = &ev
                     && ev.starts_subagent()
@@ -685,6 +729,24 @@ impl JobService {
             self.after_finish(i, &result)?;
         }
         Ok(applied)
+    }
+
+    /// Feeds an event to the job's and the run's activity, and stores limit
+    /// readings and environments.
+    fn observe_telemetry(
+        &mut self,
+        i: usize,
+        job_id: JobId,
+        ev: &AgentEvent,
+        now: Millis,
+    ) -> AppResult<()> {
+        let usage = self.tracked[i].activity.observe(job_id, ev, now);
+        self.activity.observe(job_id, ev, now, usage);
+        match (ev, &self.telemetry) {
+            (AgentEvent::RateLimit(limit), Some(store)) => store.save_limit(limit, now),
+            (AgentEvent::Environment(env), Some(store)) => store.save_environment(env, now),
+            _ => Ok(()),
+        }
     }
 
     /// Sets a new subagent's model from its definition ("inherit" means the lead's).

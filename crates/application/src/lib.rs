@@ -14,6 +14,7 @@ mod prompts;
 mod routing;
 mod sessions;
 mod settings;
+mod telemetry;
 #[cfg(any(test, feature = "test-support"))]
 pub mod testing;
 
@@ -29,3 +30,8 @@ pub use prompts::{BUILTIN_VARIABLES, PromptService, RenderedPrompt};
 pub use routing::{ROUTE_PROMPT_MAX, RouteReport, Routed, RoutingService};
 pub use sessions::SessionService;
 pub use settings::{GuardSettings, JevProvider, JevSettings, ReviewSettings, Settings};
+pub use telemetry::{
+    ActivityView, Battery, CiRun, Collected, Commit, DiffStat, DiskUsage, ENVIRONMENTS,
+    EnvironmentView, GitStatus, GithubStatus, LimitView, ProcessStat, PullRequest, SystemStats,
+    TICKER_LEN, TOP_FILES, TelemetryService, TelemetrySnapshot,
+};
