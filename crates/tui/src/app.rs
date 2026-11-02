@@ -271,6 +271,10 @@ impl App {
             KeyCode::Char('n') if self.screen == Screen::Sessions => {
                 self.mode = Mode::Input(InputPurpose::NewSession, Input::default());
             }
+            KeyCode::Char('l') if self.screen == Screen::Sessions => {
+                let result = self.toggle_lean();
+                self.show(result);
+            }
             KeyCode::Char(c) if self.screen == Screen::Prompts => {
                 let result = self.prompts_key(c, confirming_delete);
                 self.show(result);
@@ -481,6 +485,24 @@ impl App {
         }
     }
 
+    /// Lean on or off for the selected session's next jobs.
+    fn toggle_lean(&mut self) -> AppResult<()> {
+        let Some(session) = self.selected_session().cloned() else {
+            return Ok(());
+        };
+        let lean = self.session_service.toggle_lean(session.id)?;
+        self.notice = Some(if lean {
+            format!(
+                "{} is lean: its jobs skip your user-level Claude Code settings",
+                session.name
+            )
+        } else {
+            format!("{} uses all your Claude Code settings again", session.name)
+        });
+        self.refresh_sessions(Some(&session));
+        Ok(())
+    }
+
     fn create_session(&mut self, name: &str) -> AppResult<()> {
         let session = self.session_service.create(name, self.cwd.clone())?;
         self.refresh_sessions(Some(&session));
@@ -662,6 +684,26 @@ mod tests {
         assert_eq!(names, ["demo"]);
         assert_eq!(t.app.sessions[0].cwd, PathBuf::from("/work"));
         assert_eq!(t.app.mode, Mode::Normal);
+    }
+
+    #[test]
+    fn l_toggles_lean_and_jobs_follow() {
+        let mut t = test_app();
+        with_session(&mut t.app);
+        press(&mut t.app, KeyCode::Char('5'));
+        press(&mut t.app, KeyCode::Char('l'));
+        assert!(t.app.sessions[0].lean);
+        assert!(t.app.notice.as_deref().unwrap().contains("is lean"));
+        let out = crate::ui::render_to_string(&t.app, 100, 8);
+        assert!(out.contains("lean"), "{out}");
+        press(&mut t.app, KeyCode::Char('1'));
+        press(&mut t.app, KeyCode::Char('p'));
+        type_str(&mut t.app, "hi");
+        press(&mut t.app, KeyCode::Enter);
+        assert!(t.runner.request(0).lean);
+        press(&mut t.app, KeyCode::Char('5'));
+        press(&mut t.app, KeyCode::Char('l'));
+        assert!(!t.app.sessions[0].lean);
     }
 
     #[test]

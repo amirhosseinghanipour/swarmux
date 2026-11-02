@@ -6,7 +6,7 @@ use ratatui::{
     widgets::{Block, List, ListItem, ListState, Paragraph},
 };
 
-use super::{MUTED, ORANGE};
+use super::{GREEN, MUTED, ORANGE};
 use crate::app::App;
 
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
@@ -29,6 +29,10 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
             ListItem::new(Line::from(vec![
                 Span::raw(format!("{:<20} ", s.name)),
                 Span::styled(format!("{:<8} ", s.model), Style::new().fg(ORANGE)),
+                Span::styled(
+                    if s.lean { "lean " } else { "     " },
+                    Style::new().fg(GREEN),
+                ),
                 Span::styled(s.cwd.display().to_string(), Style::new().fg(MUTED)),
             ]))
         })

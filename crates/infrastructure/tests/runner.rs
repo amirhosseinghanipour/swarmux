@@ -28,6 +28,7 @@ fn request(cwd: PathBuf, prompt: &str) -> RunRequest {
         model: "sonnet".into(),
         permission_mode: "default".into(),
         prompt: prompt.into(),
+        lean: false,
     }
 }
 

@@ -208,7 +208,7 @@ fn hints(app: &App) -> &'static str {
         Screen::Prompts => {
             " n new · e edit · x delete · d dispatch · ↑↓ select · 1-5 screens · q quit"
         }
-        Screen::Sessions => " n new session · ↑↓ select · 1-5 screens · q quit",
+        Screen::Sessions => " n new session · l lean on/off · ↑↓ select · 1-5 screens · q quit",
     }
 }
 

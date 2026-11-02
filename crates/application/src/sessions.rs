@@ -3,8 +3,8 @@ use std::rc::Rc;
 
 use swarmux_domain::{DEFAULT_MODEL, Session, SessionId};
 
-use crate::AppResult;
 use crate::ports::{Clock, SessionRepository};
+use crate::{AppError, AppResult};
 
 /// Use cases for sessions.
 pub struct SessionService {
@@ -43,6 +43,13 @@ impl SessionService {
     pub fn list(&self) -> AppResult<Vec<Session>> {
         self.repo.list_active()
     }
+
+    /// Turns lean mode on or off for the session's next jobs. Returns the new value.
+    pub fn toggle_lean(&self, id: SessionId) -> AppResult<bool> {
+        let session = self.repo.get(id)?.ok_or(AppError::SessionNotFound)?;
+        self.repo.set_lean(id, !session.lean)?;
+        Ok(!session.lean)
+    }
 }
 
 #[cfg(test)]
@@ -72,6 +79,19 @@ mod tests {
         let (svc, _) = service();
         let svc = svc.with_default_model("opus");
         assert_eq!(svc.create("a", "/w".into()).unwrap().model, "opus");
+    }
+
+    #[test]
+    fn toggle_lean_flips_and_persists() {
+        let (svc, _) = service();
+        let s = svc.create("a", "/w".into()).unwrap();
+        assert!(svc.toggle_lean(s.id).unwrap());
+        assert!(svc.list().unwrap()[0].lean);
+        assert!(!svc.toggle_lean(s.id).unwrap());
+        assert!(matches!(
+            svc.toggle_lean(SessionId::random()),
+            Err(crate::AppError::SessionNotFound)
+        ));
     }
 
     #[test]

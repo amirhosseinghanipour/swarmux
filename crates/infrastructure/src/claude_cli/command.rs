@@ -26,6 +26,11 @@ pub fn build_args(req: &RunRequest) -> Vec<String> {
     }
     args.extend(["--model".into(), req.model.clone()]);
     args.extend(["--permission-mode".into(), req.permission_mode.clone()]);
+    if req.lean {
+        // Skips the user's own settings (their hooks and plugins); swarmux's
+        // own `--settings` still apply.
+        args.extend(["--setting-sources".into(), "project,local".into()]);
+    }
     args
 }
 
@@ -54,6 +59,7 @@ mod tests {
             model: "sonnet".into(),
             permission_mode: "default".into(),
             prompt: "hi".into(),
+            lean: false,
         }
     }
 
@@ -98,6 +104,20 @@ mod tests {
         assert!(has_pair(&args, "--model", "sonnet"));
         assert!(has_pair(&args, "--permission-mode", "default"));
         assert!(args.contains(&"--forward-subagent-text".to_string()));
+    }
+
+    #[test]
+    fn lean_skips_user_settings() {
+        assert!(!build_args(&req(false, false)).contains(&"--setting-sources".to_string()));
+        let lean = RunRequest {
+            lean: true,
+            ..req(false, false)
+        };
+        assert!(has_pair(
+            &build_args(&lean),
+            "--setting-sources",
+            "project,local"
+        ));
     }
 
     #[test]

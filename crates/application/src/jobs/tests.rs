@@ -85,6 +85,7 @@ fn first_dispatch_creates_the_claude_session() {
     assert_eq!(req.prompt, "hello");
     assert_eq!(req.session_id, f.session.id);
     assert_eq!(req.cwd, f.session.cwd);
+    assert!(!req.lean);
     assert_eq!(f.store.status_of(job), JobStatus::Running);
 }
 
@@ -551,4 +552,12 @@ fn loop_guard_can_be_turned_off() {
     }
     assert!(f.svc.pump().loop_trips.is_empty());
     assert_eq!(f.store.status_of(job), JobStatus::Running);
+}
+
+#[test]
+fn lean_sessions_run_lean_jobs() {
+    let mut f = fixture();
+    f.store.set_lean(f.session.id, true).unwrap();
+    f.svc.dispatch(f.session.id, "hi").unwrap();
+    assert!(f.runner.request(0).lean);
 }

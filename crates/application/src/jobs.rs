@@ -443,6 +443,7 @@ impl JobService {
             model: t.job.model.clone(),
             permission_mode: session.permission_mode,
             prompt: t.job.prompt.clone(),
+            lean: session.lean,
         };
         let tx = self.tx.clone();
         let sink: RunSink = Box::new(move |msg| {
@@ -550,13 +551,14 @@ impl JobService {
             .sessions
             .get(original_id)?
             .ok_or(AppError::SessionNotFound)?;
-        let session = Session::new(
+        let mut session = Session::new(
             new_id,
             &original.fork_name(),
             original.cwd.clone(),
             &original.model,
             self.clock.now(),
         )?;
+        session.lean = original.lean;
         self.sessions.insert(&session)?;
         let t = &mut self.tracked[i];
         self.jobs.set_session(t.job.id, new_id)?;

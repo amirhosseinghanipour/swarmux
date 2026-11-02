@@ -15,6 +15,7 @@ pub trait SessionRepository {
     fn list_active(&self) -> AppResult<Vec<Session>>;
     fn get(&self, id: SessionId) -> AppResult<Option<Session>>;
     fn touch(&self, id: SessionId, now: Millis) -> AppResult<()>;
+    fn set_lean(&self, id: SessionId, lean: bool) -> AppResult<()>;
     /// True once Claude Code has created the session (some job reported `init`).
     fn has_started(&self, id: SessionId) -> AppResult<bool>;
 }
@@ -99,6 +100,8 @@ pub struct RunRequest {
     pub model: String,
     pub permission_mode: String,
     pub prompt: String,
+    /// Load only project and local Claude Code settings, not the user's.
+    pub lean: bool,
 }
 
 /// What a running job reports back.

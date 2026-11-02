@@ -95,8 +95,13 @@ ALTER TABLE decisions ADD COLUMN subject TEXT NOT NULL DEFAULT '';
 CREATE INDEX decisions_ts ON decisions(ts);
 ";
 
+/// Lean sessions (jobs without the user's own Claude Code settings).
+const SCHEMA_V4: &str = "
+ALTER TABLE sessions ADD COLUMN lean INTEGER NOT NULL DEFAULT 0;
+";
+
 /// Migrations in order; index + 1 is the resulting `user_version`.
-const MIGRATIONS: &[&str] = &[SCHEMA_V1, SCHEMA_V2, SCHEMA_V3];
+const MIGRATIONS: &[&str] = &[SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4];
 
 /// Maps adapter errors into the application's error type.
 pub(crate) trait OrStorage<T> {
@@ -240,6 +245,9 @@ pub(crate) mod tests {
         let got = SessionRepository::get(&s, a.id).unwrap().unwrap();
         assert_eq!(got.last_used_at, Some(30));
         assert_eq!(got.cwd, a.cwd);
+        assert!(!got.lean);
+        s.set_lean(a.id, true).unwrap();
+        assert!(SessionRepository::get(&s, a.id).unwrap().unwrap().lean);
         assert_eq!(
             SessionRepository::get(&s, SessionId::random()).unwrap(),
             None

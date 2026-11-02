@@ -139,6 +139,16 @@ impl SessionRepository for InMemoryStore {
         Ok(())
     }
 
+    fn set_lean(&self, id: SessionId, lean: bool) -> AppResult<()> {
+        let mut sessions = self.sessions.borrow_mut();
+        let s = sessions
+            .iter_mut()
+            .find(|s| s.id == id)
+            .ok_or(AppError::SessionNotFound)?;
+        s.lean = lean;
+        Ok(())
+    }
+
     fn has_started(&self, id: SessionId) -> AppResult<bool> {
         Ok(self
             .jobs

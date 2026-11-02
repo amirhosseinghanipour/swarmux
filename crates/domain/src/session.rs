@@ -41,6 +41,8 @@ pub struct Session {
     pub created_at: Millis,
     pub last_used_at: Option<Millis>,
     pub archived: bool,
+    /// Run jobs without the user's own Claude Code settings (hooks, plugins).
+    pub lean: bool,
 }
 
 impl Session {
@@ -68,6 +70,7 @@ impl Session {
             created_at: now,
             last_used_at: None,
             archived: false,
+            lean: false,
         })
     }
 
@@ -99,6 +102,7 @@ mod tests {
         assert_eq!(s.name, "demo");
         assert_eq!(s.permission_mode, "default");
         assert_eq!(s.activity(), 5);
+        assert!(!s.lean);
     }
 
     #[test]

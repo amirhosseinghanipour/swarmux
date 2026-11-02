@@ -8,7 +8,8 @@ use uuid::Uuid;
 
 use super::{OrStorage, SqliteStore};
 
-const COLS: &str = "id, name, cwd, model, permission_mode, created_at, last_used_at, archived";
+const COLS: &str =
+    "id, name, cwd, model, permission_mode, created_at, last_used_at, archived, lean";
 
 /// Reads a session id stored as text in column `idx`.
 pub(crate) fn session_id_at(r: &Row, idx: usize) -> rusqlite::Result<SessionId> {
@@ -29,6 +30,7 @@ fn from_row(r: &Row) -> rusqlite::Result<Session> {
         created_at: r.get(5)?,
         last_used_at: r.get(6)?,
         archived: r.get(7)?,
+        lean: r.get(8)?,
     })
 }
 
@@ -36,7 +38,9 @@ impl SessionRepository for SqliteStore {
     fn insert(&self, s: &Session) -> AppResult<()> {
         self.conn
             .execute(
-                &format!("INSERT INTO sessions ({COLS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)"),
+                &format!(
+                    "INSERT INTO sessions ({COLS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)"
+                ),
                 params![
                     s.id.to_string(),
                     s.name,
@@ -45,7 +49,8 @@ impl SessionRepository for SqliteStore {
                     s.permission_mode,
                     s.created_at,
                     s.last_used_at,
-                    s.archived
+                    s.archived,
+                    s.lean
                 ],
             )
             .or_storage()?;
@@ -80,6 +85,16 @@ impl SessionRepository for SqliteStore {
             .execute(
                 "UPDATE sessions SET last_used_at = ?1 WHERE id = ?2",
                 params![now, id.to_string()],
+            )
+            .or_storage()?;
+        Ok(())
+    }
+
+    fn set_lean(&self, id: SessionId, lean: bool) -> AppResult<()> {
+        self.conn
+            .execute(
+                "UPDATE sessions SET lean = ?1 WHERE id = ?2",
+                params![lean, id.to_string()],
             )
             .or_storage()?;
         Ok(())
