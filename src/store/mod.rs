@@ -207,6 +207,16 @@ mod tests {
     }
 
     #[test]
+    fn session_started_needs_an_init_event() {
+        let s = Store::open_in_memory().unwrap();
+        let sess = s.create_session("a", Path::new("/w"), "sonnet").unwrap();
+        let job = s.insert_job(sess.id, "x", "sonnet").unwrap();
+        assert!(!s.session_started(sess.id).unwrap());
+        s.insert_event(job, "init", "lead", "m").unwrap();
+        assert!(s.session_started(sess.id).unwrap());
+    }
+
+    #[test]
     fn event_payload_is_capped() {
         let (s, job) = store_with_job();
         s.insert_event(job, "text", "lead", &"x".repeat(20_000))

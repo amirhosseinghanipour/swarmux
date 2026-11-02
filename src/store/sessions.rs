@@ -93,6 +93,17 @@ impl Store {
         Ok(())
     }
 
+    /// True once Claude Code has actually created this session (a job saw `init`),
+    /// so later jobs must `--resume` it instead of passing `--session-id` again.
+    pub fn session_started(&self, id: Uuid) -> anyhow::Result<bool> {
+        Ok(self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM events e JOIN jobs j ON e.job_id = j.id
+                           WHERE j.session_id = ?1 AND e.kind = 'init')",
+            [id.to_string()],
+            |r| r.get(0),
+        )?)
+    }
+
     pub fn session_has_jobs(&self, id: Uuid) -> anyhow::Result<bool> {
         Ok(self.conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM jobs WHERE session_id = ?1)",
