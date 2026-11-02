@@ -131,9 +131,9 @@ mod tests {
 
     #[test]
     fn renders_header_and_active_tab() {
-        let (mut app, _rt) = test_app();
-        app.screen = Screen::Queue;
-        let out = render_to_string(&app, 80, 10);
+        let mut t = test_app();
+        t.app.screen = Screen::Queue;
+        let out = render_to_string(&t.app, 80, 10);
         assert!(out.contains("SWARMUX"));
         assert!(out.contains("3 queue"));
     }

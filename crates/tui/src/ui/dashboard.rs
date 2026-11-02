@@ -7,14 +7,15 @@ use ratatui::{
 };
 
 use super::{BLUE, GREEN, MUTED, ORANGE, RED};
-use crate::app::{App, JobView};
-use crate::store::JobStatus;
+use swarmux_domain::{Actor, JobProgress, JobStatus};
+
+use crate::app::App;
 
 const LANE_LABEL_W: usize = 10;
 
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     if let (false, Some(job)) = (app.sessions.is_empty(), app.current_job()) {
-        render_job(frame, area, job, job.tick());
+        render_job(frame, area, job, app.now_tick());
         return;
     }
     let hint = if app.sessions.is_empty() {
@@ -30,7 +31,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 /// Renders one job: status line, log tail (left) and timeline (right).
-pub fn render_job(frame: &mut Frame, area: Rect, job: &JobView, now_tick: u32) {
+pub fn render_job(frame: &mut Frame, area: Rect, job: &JobProgress, now_tick: u32) {
     let [status, panes] =
         Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(area);
     frame.render_widget(status_line(job), status);
@@ -58,7 +59,7 @@ pub fn render_job(frame: &mut Frame, area: Rect, job: &JobView, now_tick: u32) {
     frame.render_widget(Paragraph::new(lines).block(tl_block), timeline_area);
 }
 
-fn status_line(job: &JobView) -> Line<'_> {
+fn status_line(job: &JobProgress) -> Line<'_> {
     let (status, color) = match job.status {
         JobStatus::Running => ("running", ORANGE),
         JobStatus::Done => ("done", GREEN),
@@ -83,7 +84,7 @@ fn status_line(job: &JobView) -> Line<'_> {
     ])
 }
 
-fn timeline_lines(job: &JobView, now_tick: u32, width: usize) -> Vec<Line<'_>> {
+fn timeline_lines(job: &JobProgress, now_tick: u32, width: usize) -> Vec<Line<'_>> {
     let span = now_tick.max(1) as usize;
     job.lanes
         .iter()
@@ -95,7 +96,11 @@ fn timeline_lines(job: &JobView, now_tick: u32, width: usize) -> Vec<Line<'_>> {
                     row[x] = '|';
                 }
             }
-            let color = if lane.actor == "lead" { ORANGE } else { BLUE };
+            let color = if lane.actor == Actor::Lead {
+                ORANGE
+            } else {
+                BLUE
+            };
             let label: String = lane.label.chars().take(LANE_LABEL_W).collect();
             Line::from(vec![
                 Span::styled(format!("{label:<LANE_LABEL_W$} "), Style::new().fg(color)),
@@ -117,10 +122,10 @@ fn short(n: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::Lane;
     use ratatui::{Terminal, backend::TestBackend};
+    use swarmux_domain::{JobId, Lane};
 
-    fn render(job: &JobView) -> String {
+    fn render(job: &JobProgress) -> String {
         let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
         terminal.draw(|f| render_job(f, f.area(), job, 50)).unwrap();
         let buf = terminal.backend().buffer().clone();
@@ -132,13 +137,13 @@ mod tests {
 
     #[test]
     fn dashboard_renders_cost_and_lanes() {
-        let mut job = JobView::new(1, "demo", "claude-sonnet");
+        let mut job = JobProgress::new(JobId(1), "demo", "claude-sonnet");
         job.cost_usd = 0.5;
         job.context_used = 15_100;
         job.context_window = Some(1_000_000);
         job.lanes[0].marks = vec![0, 10, 50];
         job.lanes.push(Lane {
-            actor: "toolu_A".into(),
+            actor: Actor::Subagent("toolu_A".into()),
             label: "explorer".into(),
             marks: vec![20],
         });
@@ -153,8 +158,8 @@ mod tests {
 
     #[test]
     fn dashboard_empty_state_hint() {
-        let (app, _rt) = crate::app::tests_support::test_app();
-        let out = crate::ui::render_to_string(&app, 100, 10);
+        let t = crate::app::tests_support::test_app();
+        let out = crate::ui::render_to_string(&t.app, 100, 10);
         assert!(out.contains("press 5 then n"), "{out}");
     }
 

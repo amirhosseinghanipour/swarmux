@@ -1,25 +1,8 @@
-//! Builds the `claude -p` invocation for a job (spec section 4.1).
+//! Builds the `claude -p` invocation for a run request.
 
-use std::path::PathBuf;
+use swarmux_application::ports::RunRequest;
 
-use uuid::Uuid;
-
-#[derive(Clone, Debug)]
-pub struct JobSpec {
-    pub claude_bin: PathBuf,
-    pub cwd: PathBuf,
-    pub session_id: Uuid,
-    /// Continue an existing session (`--resume`) instead of starting one (`--session-id`).
-    pub resume: bool,
-    /// With `resume`, branch into a new session id (`--fork-session`).
-    pub fork: bool,
-    pub model: String,
-    pub permission_mode: String,
-    /// Extra environment for the child process.
-    pub env: Vec<(String, String)>,
-}
-
-pub fn build_args(spec: &JobSpec) -> Vec<String> {
+pub fn build_args(req: &RunRequest) -> Vec<String> {
     let mut args: Vec<String> = [
         "-p",
         "--output-format",
@@ -32,17 +15,17 @@ pub fn build_args(spec: &JobSpec) -> Vec<String> {
     .map(String::from)
     .to_vec();
 
-    let id = spec.session_id.to_string();
-    if spec.resume {
+    let id = req.session_id.to_string();
+    if req.resume {
         args.extend(["--resume".into(), id]);
-        if spec.fork {
+        if req.fork {
             args.push("--fork-session".into());
         }
     } else {
         args.extend(["--session-id".into(), id]);
     }
-    args.extend(["--model".into(), spec.model.clone()]);
-    args.extend(["--permission-mode".into(), spec.permission_mode.clone()]);
+    args.extend(["--model".into(), req.model.clone()]);
+    args.extend(["--permission-mode".into(), req.permission_mode.clone()]);
     args
 }
 
@@ -58,17 +41,18 @@ pub fn user_message(prompt: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use swarmux_domain::SessionId;
+    use uuid::Uuid;
 
-    fn spec(resume: bool, fork: bool) -> JobSpec {
-        JobSpec {
-            claude_bin: "claude".into(),
+    fn req(resume: bool, fork: bool) -> RunRequest {
+        RunRequest {
             cwd: "/w".into(),
-            session_id: Uuid::nil(),
+            session_id: SessionId(Uuid::nil()),
             resume,
             fork,
             model: "sonnet".into(),
             permission_mode: "default".into(),
-            env: Vec::new(),
+            prompt: "hi".into(),
         }
     }
 
@@ -78,27 +62,27 @@ mod tests {
 
     #[test]
     fn first_job_uses_session_id() {
-        let args = build_args(&spec(false, false));
+        let args = build_args(&req(false, false));
         assert!(has_pair(&args, "--session-id", &Uuid::nil().to_string()));
         assert!(!args.contains(&"--resume".to_string()));
     }
 
     #[test]
     fn later_job_resumes() {
-        let args = build_args(&spec(true, false));
+        let args = build_args(&req(true, false));
         assert!(has_pair(&args, "--resume", &Uuid::nil().to_string()));
         assert!(!args.contains(&"--session-id".to_string()));
     }
 
     #[test]
     fn fork_adds_fork_session_only_when_resuming() {
-        assert!(build_args(&spec(true, true)).contains(&"--fork-session".to_string()));
-        assert!(!build_args(&spec(false, true)).contains(&"--fork-session".to_string()));
+        assert!(build_args(&req(true, true)).contains(&"--fork-session".to_string()));
+        assert!(!build_args(&req(false, true)).contains(&"--fork-session".to_string()));
     }
 
     #[test]
     fn always_has_stream_flags_and_model() {
-        let args = build_args(&spec(false, false));
+        let args = build_args(&req(false, false));
         assert_eq!(
             args[..6],
             [

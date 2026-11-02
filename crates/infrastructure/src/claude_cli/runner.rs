@@ -1,34 +1,54 @@
-//! Runs one job: spawns `claude`, sends the prompt, streams parsed events back.
+//! `AgentRunner` adapter: runs each job as a `claude -p` child process.
 
+use std::path::PathBuf;
 use std::process::Stdio;
 
+use swarmux_application::ports::{AgentRunner, RunRequest, RunSink, RunnerMsg};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::runtime::Handle;
 
-use super::command::{JobSpec, build_args, user_message};
-use super::event::{Event, parse_line_all};
+use super::command::{build_args, user_message};
+use super::parse::parse_line;
 
 /// How much of the end of stderr is kept for error messages.
 const STDERR_TAIL: usize = 2048;
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum RunnerMsg {
-    Event(Event),
-    Exited {
-        code: Option<i32>,
-        stderr_tail: String,
-    },
-    SpawnFailed(String),
+pub struct ClaudeCli {
+    bin: PathBuf,
+    env: Vec<(String, String)>,
+    rt: Handle,
 }
 
-/// Runs the job to completion. Messages stop early if the receiver is dropped;
-/// the child is then killed (`kill_on_drop`).
-pub async fn run_job(spec: JobSpec, prompt: String, tx: UnboundedSender<RunnerMsg>) {
-    let mut cmd = Command::new(&spec.claude_bin);
-    cmd.args(build_args(&spec))
-        .envs(spec.env.iter().map(|(k, v)| (k, v)))
-        .current_dir(&spec.cwd)
+impl ClaudeCli {
+    pub fn new(bin: PathBuf, rt: Handle) -> ClaudeCli {
+        ClaudeCli {
+            bin,
+            env: Vec::new(),
+            rt,
+        }
+    }
+
+    /// Extra environment for every child (used by tests).
+    pub fn with_env(mut self, env: Vec<(String, String)>) -> ClaudeCli {
+        self.env = env;
+        self
+    }
+}
+
+impl AgentRunner for ClaudeCli {
+    fn start(&self, request: RunRequest, sink: RunSink) {
+        let bin = self.bin.clone();
+        let env = self.env.clone();
+        self.rt.spawn(run(bin, env, request, sink));
+    }
+}
+
+async fn run(bin: PathBuf, env: Vec<(String, String)>, req: RunRequest, sink: RunSink) {
+    let mut cmd = Command::new(&bin);
+    cmd.args(build_args(&req))
+        .envs(env)
+        .current_dir(&req.cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -39,19 +59,16 @@ pub async fn run_job(spec: JobSpec, prompt: String, tx: UnboundedSender<RunnerMs
     let mut child = match cmd.spawn() {
         Ok(child) => child,
         Err(e) => {
-            let _ = tx.send(RunnerMsg::SpawnFailed(format!(
-                "{}: {e}",
-                spec.claude_bin.display()
-            )));
+            sink(RunnerMsg::SpawnFailed(format!("{}: {e}", bin.display())));
             return;
         }
     };
 
     if let Some(mut stdin) = child.stdin.take() {
-        let msg = user_message(&prompt) + "\n";
-        // If the child already exited, the exit status explains why.
+        let msg = user_message(&req.prompt) + "\n";
+        // If the child already exited, its exit status explains why.
         let _ = stdin.write_all(msg.as_bytes()).await;
-    } // stdin dropped here: claude sees EOF after the one message
+    } // stdin dropped: claude sees EOF after the one message
 
     let stderr_task = child.stderr.take().map(|mut stderr| {
         tokio::spawn(async move {
@@ -66,7 +83,7 @@ pub async fn run_job(spec: JobSpec, prompt: String, tx: UnboundedSender<RunnerMs
                     tail.drain(..tail.len() - STDERR_TAIL);
                 }
             }
-            last_chars(&String::from_utf8_lossy(&tail), STDERR_TAIL)
+            last_bytes(&String::from_utf8_lossy(&tail), STDERR_TAIL)
         })
     });
 
@@ -78,10 +95,8 @@ pub async fn run_job(spec: JobSpec, prompt: String, tx: UnboundedSender<RunnerMs
             match reader.read_until(b'\n', &mut line).await {
                 Ok(0) | Err(_) => break,
                 Ok(_) => {
-                    for ev in parse_line_all(&String::from_utf8_lossy(&line)) {
-                        if tx.send(RunnerMsg::Event(ev)).is_err() {
-                            return; // app is gone; dropping `child` kills it
-                        }
+                    for ev in parse_line(&String::from_utf8_lossy(&line)) {
+                        sink(RunnerMsg::Event(ev));
                     }
                 }
             }
@@ -93,14 +108,14 @@ pub async fn run_job(spec: JobSpec, prompt: String, tx: UnboundedSender<RunnerMs
         Some(t) => t.await.unwrap_or_default(),
         None => String::new(),
     };
-    let _ = tx.send(RunnerMsg::Exited { code, stderr_tail });
+    sink(RunnerMsg::Exited { code, stderr_tail });
 }
 
-fn last_chars(s: &str, max_bytes: usize) -> String {
-    if s.len() <= max_bytes {
+fn last_bytes(s: &str, max: usize) -> String {
+    if s.len() <= max {
         return s.to_string();
     }
-    let mut start = s.len() - max_bytes;
+    let mut start = s.len() - max;
     while !s.is_char_boundary(start) {
         start += 1;
     }

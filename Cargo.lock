@@ -1450,16 +1450,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0d5d4b1981b8bbbb7aed204cae5726d683d5d6ac7e74ec54122ea28f315e7c8"
 
 [[package]]
-name = "socket2"
-version = "0.6.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
-dependencies = [
- "libc",
- "windows-sys",
-]
-
-[[package]]
 name = "sqlite-wasm-rs"
 version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1521,14 +1511,49 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
- "crossterm",
- "ratatui",
+ "swarmux-application",
+ "swarmux-infrastructure",
+ "swarmux-tui",
+ "tokio",
+]
+
+[[package]]
+name = "swarmux-application"
+version = "0.1.0"
+dependencies = [
+ "swarmux-domain",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "swarmux-domain"
+version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.21",
+ "uuid",
+]
+
+[[package]]
+name = "swarmux-infrastructure"
+version = "0.1.0"
+dependencies = [
  "rusqlite",
- "serde",
  "serde_json",
+ "swarmux-application",
+ "swarmux-domain",
  "tempfile",
  "tokio",
  "uuid",
+]
+
+[[package]]
+name = "swarmux-tui"
+version = "0.1.0"
+dependencies = [
+ "crossterm",
+ "ratatui",
+ "swarmux-application",
+ "swarmux-domain",
 ]
 
 [[package]]
@@ -1723,10 +1748,8 @@ dependencies = [
  "bytes",
  "libc",
  "mio",
- "parking_lot",
  "pin-project-lite",
  "signal-hook-registry",
- "socket2",
  "tokio-macros",
  "windows-sys",
 ]
@@ -1798,7 +1821,6 @@ dependencies = [
  "atomic",
  "getrandom 0.4.3",
  "js-sys",
- "serde_core",
  "wasm-bindgen",
 ]
 

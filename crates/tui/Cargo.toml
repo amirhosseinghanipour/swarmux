@@ -1,0 +1,16 @@
+[package]
+name = "swarmux-tui"
+description = "swarmux terminal interface (presentation layer)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+swarmux-domain.workspace = true
+swarmux-application.workspace = true
+crossterm.workspace = true
+ratatui.workspace = true
+
+[dev-dependencies]
+swarmux-application = { workspace = true, features = ["test-support"] }

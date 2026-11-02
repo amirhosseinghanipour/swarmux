@@ -1,100 +1,22 @@
-//! Parser for `claude -p --output-format stream-json` lines.
+//! Translates `claude -p --output-format stream-json` lines into domain events.
 //!
 //! Navigates `serde_json::Value` instead of strict structs, so new or unknown
 //! fields never break parsing.
 
 use serde_json::Value;
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum Event {
-    Init {
-        session_id: String,
-        model: String,
-        cwd: String,
-        permission_mode: String,
-    },
-    Text {
-        text: String,
-        parent: Option<String>,
-    },
-    ToolUse {
-        id: String,
-        name: String,
-        summary: String,
-        parent: Option<String>,
-    },
-    ToolResult {
-        tool_use_id: String,
-        is_error: bool,
-        preview: String,
-        parent: Option<String>,
-    },
-    Usage {
-        input: u64,
-        output: u64,
-        cache_read: u64,
-        cache_creation: u64,
-        parent: Option<String>,
-    },
-    Result {
-        is_error: bool,
-        subtype: String,
-        cost_usd: f64,
-        duration_ms: u64,
-        num_turns: u32,
-        tokens_in: u64,
-        tokens_out: u64,
-        cache_read: u64,
-        context_window: Option<u64>,
-        subagents_spawned: u32,
-    },
-    /// Known noise (hook progress, thinking token counts, rate-limit info, …).
-    Ignored { kind: String },
-    /// A type this version doesn't know yet; kept raw.
-    Unknown { kind: String, raw: String },
-    /// Not JSON at all (warnings, partial lines).
-    Malformed { raw: String },
-}
+use swarmux_domain::{Actor, AgentEvent};
 
 const SUMMARY_MAX: usize = 120;
 const PREVIEW_MAX: usize = 200;
 
-impl Event {
-    pub fn kind(&self) -> &'static str {
-        match self {
-            Event::Init { .. } => "init",
-            Event::Text { .. } => "text",
-            Event::ToolUse { .. } => "tool_use",
-            Event::ToolResult { .. } => "tool_result",
-            Event::Usage { .. } => "usage",
-            Event::Result { .. } => "result",
-            Event::Ignored { .. } => "ignored",
-            Event::Unknown { .. } => "unknown",
-            Event::Malformed { .. } => "malformed",
-        }
-    }
-
-    /// `"lead"` for the main session, or the parent `tool_use` id for subagent events.
-    pub fn actor(&self) -> String {
-        let parent = match self {
-            Event::Text { parent, .. }
-            | Event::ToolUse { parent, .. }
-            | Event::ToolResult { parent, .. }
-            | Event::Usage { parent, .. } => parent.as_deref(),
-            _ => None,
-        };
-        parent.unwrap_or("lead").to_string()
-    }
-}
-
 /// Parses one stdout line into zero or more events.
-pub fn parse_line_all(line: &str) -> Vec<Event> {
+pub fn parse_line(line: &str) -> Vec<AgentEvent> {
     let line = line.trim();
     if line.is_empty() {
         return Vec::new();
     }
     let Ok(v) = serde_json::from_str::<Value>(line) else {
-        return vec![Event::Malformed {
+        return vec![AgentEvent::Malformed {
             raw: line.to_string(),
         }];
     };
@@ -104,34 +26,35 @@ pub fn parse_line_all(line: &str) -> Vec<Event> {
         "assistant" => parse_assistant(&v),
         "user" => parse_user(&v),
         "result" => vec![parse_result(&v)],
-        "rate_limit_event" | "stream_event" => vec![Event::Ignored { kind }],
-        _ => vec![Event::Unknown {
+        "rate_limit_event" | "stream_event" => vec![AgentEvent::Ignored { kind }],
+        _ => vec![AgentEvent::Unknown {
             kind,
             raw: line.to_string(),
         }],
     }
 }
 
-fn parse_system(v: &Value) -> Event {
+fn parse_system(v: &Value) -> AgentEvent {
     let subtype = str_at(v, "subtype");
     if subtype == "init" {
-        Event::Init {
+        AgentEvent::Init {
             session_id: str_at(v, "session_id"),
             model: str_at(v, "model"),
             cwd: str_at(v, "cwd"),
             permission_mode: str_at(v, "permissionMode"),
         }
     } else {
-        Event::Ignored {
+        AgentEvent::Ignored {
             kind: format!("system/{subtype}"),
         }
     }
 }
 
-fn parent_of(v: &Value) -> Option<String> {
-    v.get("parent_tool_use_id")
-        .and_then(Value::as_str)
-        .map(str::to_string)
+fn actor_of(v: &Value) -> Actor {
+    match v.get("parent_tool_use_id").and_then(Value::as_str) {
+        Some(id) => Actor::Subagent(id.to_string()),
+        None => Actor::Lead,
+    }
 }
 
 fn content_blocks(v: &Value) -> &[Value] {
@@ -141,54 +64,54 @@ fn content_blocks(v: &Value) -> &[Value] {
         .unwrap_or(&[])
 }
 
-fn parse_assistant(v: &Value) -> Vec<Event> {
-    let parent = parent_of(v);
+fn parse_assistant(v: &Value) -> Vec<AgentEvent> {
+    let actor = actor_of(v);
     let mut out = Vec::new();
     for b in content_blocks(v) {
         match b.get("type").and_then(Value::as_str) {
-            Some("text") => out.push(Event::Text {
+            Some("text") => out.push(AgentEvent::Text {
                 text: str_at(b, "text"),
-                parent: parent.clone(),
+                actor: actor.clone(),
             }),
             Some("tool_use") => {
                 let name = str_at(b, "name");
-                out.push(Event::ToolUse {
+                out.push(AgentEvent::ToolUse {
                     id: str_at(b, "id"),
                     summary: tool_summary(&name, b.get("input").unwrap_or(&Value::Null)),
                     name,
-                    parent: parent.clone(),
+                    actor: actor.clone(),
                 });
             }
             _ => {} // thinking, redacted_thinking, …
         }
     }
     if let Some(u) = v.pointer("/message/usage") {
-        out.push(Event::Usage {
+        out.push(AgentEvent::Usage {
             input: u64_at(u, "input_tokens"),
             output: u64_at(u, "output_tokens"),
             cache_read: u64_at(u, "cache_read_input_tokens"),
             cache_creation: u64_at(u, "cache_creation_input_tokens"),
-            parent,
+            actor,
         });
     }
     out
 }
 
-fn parse_user(v: &Value) -> Vec<Event> {
-    let parent = parent_of(v);
+fn parse_user(v: &Value) -> Vec<AgentEvent> {
+    let actor = actor_of(v);
     content_blocks(v)
         .iter()
         .filter(|b| b.get("type").and_then(Value::as_str) == Some("tool_result"))
-        .map(|b| Event::ToolResult {
+        .map(|b| AgentEvent::ToolResult {
             tool_use_id: str_at(b, "tool_use_id"),
             is_error: b.get("is_error").and_then(Value::as_bool).unwrap_or(false),
             preview: truncate(&result_text(b.get("content")), PREVIEW_MAX),
-            parent: parent.clone(),
+            actor: actor.clone(),
         })
         .collect()
 }
 
-fn parse_result(v: &Value) -> Event {
+fn parse_result(v: &Value) -> AgentEvent {
     let usage = v.get("usage").unwrap_or(&Value::Null);
     let context_window = v
         .get("modelUsage")
@@ -198,7 +121,7 @@ fn parse_result(v: &Value) -> Event {
                 .filter_map(|x| x.get("contextWindow").and_then(Value::as_u64))
                 .max()
         });
-    Event::Result {
+    AgentEvent::Result {
         is_error: v.get("is_error").and_then(Value::as_bool).unwrap_or(false),
         subtype: str_at(v, "subtype"),
         cost_usd: v
@@ -272,17 +195,17 @@ fn truncate(s: &str, max_chars: usize) -> String {
 mod tests {
     use super::*;
 
-    fn fixture(name: &str) -> Vec<Event> {
+    fn fixture(name: &str) -> Vec<AgentEvent> {
         let path = format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"));
         std::fs::read_to_string(path)
             .unwrap()
             .lines()
-            .flat_map(parse_line_all)
+            .flat_map(parse_line)
             .collect()
     }
 
-    fn kinds(events: &[Event]) -> Vec<&'static str> {
-        events.iter().map(Event::kind).collect()
+    fn kinds(events: &[AgentEvent]) -> Vec<&'static str> {
+        events.iter().map(AgentEvent::kind).collect()
     }
 
     #[test]
@@ -305,7 +228,7 @@ mod tests {
         );
         assert_eq!(
             ev[1],
-            Event::Init {
+            AgentEvent::Init {
                 session_id: "00000000-0000-4000-8000-000000000001".into(),
                 model: "claude-haiku-5-5".into(),
                 cwd: "/work/demo".into(),
@@ -317,7 +240,7 @@ mod tests {
     #[test]
     fn result_carries_cost_and_context_window() {
         let ev = fixture("stream_basic.jsonl");
-        let Some(Event::Result {
+        let Some(AgentEvent::Result {
             cost_usd,
             duration_ms,
             num_turns,
@@ -338,43 +261,44 @@ mod tests {
     }
 
     #[test]
-    fn subagent_events_have_parent_actor() {
+    fn subagent_events_have_subagent_actor() {
         let ev = fixture("stream_subagent.jsonl");
-        let task = &ev[1];
-        assert_eq!(task.actor(), "lead");
-        assert!(matches!(task, Event::ToolUse { summary, .. } if summary == "explorer: map code"));
-        assert_eq!(ev[2].actor(), "toolu_A");
-        assert_eq!(ev[3].actor(), "toolu_A");
+        assert_eq!(ev[1].actor(), &Actor::Lead);
+        assert!(
+            matches!(&ev[1], AgentEvent::ToolUse { summary, .. } if summary == "explorer: map code")
+        );
+        assert_eq!(ev[2].actor(), &Actor::Subagent("toolu_A".into()));
+        assert_eq!(ev[3].actor(), &Actor::Subagent("toolu_A".into()));
         assert!(matches!(
             ev.last(),
-            Some(Event::Result {
+            Some(AgentEvent::Result {
                 subagents_spawned: 1,
                 ..
             })
         ));
         assert!(
-            matches!(&ev[4], Event::ToolResult { preview, .. } if preview == "src/main.rs has main")
+            matches!(&ev[4], AgentEvent::ToolResult { preview, .. } if preview == "src/main.rs has main")
         );
     }
 
     #[test]
     fn malformed_lines_do_not_stop_parsing() {
         assert_eq!(
-            parse_line_all("not json"),
-            [Event::Malformed {
+            parse_line("not json"),
+            [AgentEvent::Malformed {
                 raw: "not json".into()
             }]
         );
-        assert!(parse_line_all("").is_empty());
-        assert!(parse_line_all("   ").is_empty());
+        assert!(parse_line("").is_empty());
+        assert!(parse_line("   ").is_empty());
     }
 
     #[test]
     fn unknown_type_is_kept_raw() {
         let line = r#"{"type":"brand_new","x":1}"#;
         assert_eq!(
-            parse_line_all(line),
-            [Event::Unknown {
+            parse_line(line),
+            [AgentEvent::Unknown {
                 kind: "brand_new".into(),
                 raw: line.into()
             }]
@@ -385,7 +309,7 @@ mod tests {
     fn bash_tool_summary_is_command() {
         let line = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t","name":"Bash","input":{"command":"cargo test"}}]}}"#;
         assert!(
-            matches!(&parse_line_all(line)[0], Event::ToolUse { summary, .. } if summary == "cargo test")
+            matches!(&parse_line(line)[0], AgentEvent::ToolUse { summary, .. } if summary == "cargo test")
         );
     }
 
@@ -395,7 +319,7 @@ mod tests {
         let line = format!(
             r#"{{"type":"assistant","message":{{"content":[{{"type":"tool_use","id":"t","name":"Bash","input":{{"command":"{cmd}"}}}}]}}}}"#
         );
-        let Event::ToolUse { summary, .. } = &parse_line_all(&line)[0] else {
+        let AgentEvent::ToolUse { summary, .. } = &parse_line(&line)[0] else {
             panic!()
         };
         assert_eq!(summary.chars().count(), SUMMARY_MAX + 1);

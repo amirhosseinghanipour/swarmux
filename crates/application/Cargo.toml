@@ -1,0 +1,15 @@
+[package]
+name = "swarmux-application"
+description = "swarmux use cases and the ports (traits) adapters implement."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[features]
+# In-memory fakes of every port, for tests in this and other crates.
+test-support = []
+
+[dependencies]
+swarmux-domain.workspace = true
+thiserror.workspace = true

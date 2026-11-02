@@ -1,6 +1,5 @@
+use std::io;
 use std::path::{Path, PathBuf};
-
-use anyhow::Context;
 
 /// Where swarmux keeps its data. Injectable so tests never touch the real home.
 #[derive(Clone, Debug)]
@@ -16,9 +15,10 @@ impl Paths {
         Paths { data_dir, db }
     }
 
-    pub fn default_home() -> anyhow::Result<Paths> {
+    pub fn default_home() -> io::Result<Paths> {
         let var = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
-        let home = std::env::var_os(var).with_context(|| format!("{var} is not set"))?;
+        let home = std::env::var_os(var)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, format!("{var} is not set")))?;
         Ok(Paths::from_home(Path::new(&home)))
     }
 }

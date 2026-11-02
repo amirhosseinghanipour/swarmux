@@ -1,0 +1,29 @@
+[package]
+name = "swarmux-infrastructure"
+description = "swarmux adapters: SQLite storage, the claude CLI runner, system clock, paths."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[features]
+# Builds the test-only `fake_claude` binary used by tests/runner.rs.
+fake-claude = []
+
+[dependencies]
+swarmux-domain.workspace = true
+swarmux-application.workspace = true
+rusqlite.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[[bin]]
+name = "fake_claude"
+path = "src/bin/fake_claude.rs"
+required-features = ["fake-claude"]
+test = false
+doc = false

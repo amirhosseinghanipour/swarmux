@@ -1,0 +1,10 @@
+[package]
+name = "swarmux-domain"
+description = "swarmux domain: entities and pure rules. No I/O."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+uuid.workspace = true
