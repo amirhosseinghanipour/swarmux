@@ -29,10 +29,6 @@ cargo run              # TUI: 1-5 switch screens, q quits
 cargo run -- doctor    # checks Claude Code is installed
 ```
 
-## Design
-
-
-
 ## License
 
 MIT
