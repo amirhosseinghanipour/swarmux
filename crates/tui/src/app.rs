@@ -10,7 +10,7 @@ use swarmux_application::{
     AppError, AppResult, GuardService, HistoryService, JobService, PromptService, QueueEntry,
     QueueStats, RoutingService, SessionService,
 };
-use swarmux_domain::{JobId, JobProgress, PromptId, Session};
+use swarmux_domain::{JobId, JobProgress, PromptId, Session, SessionId};
 
 use crate::dashboard::DashboardState;
 use crate::history::{HistoryAction, HistoryScreen};
@@ -76,7 +76,12 @@ pub struct App {
     pub quit: bool,
     pub mode: Mode,
     pub sessions: Vec<Session>,
+    /// Index of the selected session in `sessions`; always re-resolved from
+    /// `selected_id` when the list changes.
     pub selected: usize,
+    /// The session prompts go to. The list re-sorts as sessions are used,
+    /// so the selection is kept by id, not by position.
+    selected_id: Option<SessionId>,
     /// Last error, shown in the status bar until the next key press.
     pub error: Option<String>,
     /// Last confirmation, shown like `error` but not as a problem.
@@ -112,6 +117,7 @@ impl App {
             mode: Mode::Normal,
             sessions: Vec::new(),
             selected: 0,
+            selected_id: None,
             error: None,
             notice: None,
             prompts: PromptsScreen::default(),
@@ -158,9 +164,9 @@ impl App {
         if let Some(e) = errors.into_iter().last() {
             self.error = Some(e.to_string());
         }
-        if !report.new_sessions.is_empty() {
-            let current = self.selected_session().cloned();
-            self.refresh_sessions(current.as_ref());
+        if report.changed || !report.new_sessions.is_empty() {
+            // Jobs touch their sessions, which re-sorts the list.
+            self.refresh_sessions(None);
         }
         if report.changed && self.screen == Screen::History {
             self.refresh_history();
@@ -285,8 +291,10 @@ impl App {
             }
             KeyCode::Up if self.screen == Screen::Prompts => self.prompts.up(),
             KeyCode::Down if self.screen == Screen::Prompts => self.prompts.down(),
-            KeyCode::Up => self.selected = self.selected.saturating_sub(1),
-            KeyCode::Down if self.selected + 1 < self.sessions.len() => self.selected += 1,
+            KeyCode::Up => self.select_index(self.selected.saturating_sub(1)),
+            KeyCode::Down if self.selected + 1 < self.sessions.len() => {
+                self.select_index(self.selected + 1);
+            }
             KeyCode::Char('n') if self.screen == Screen::Sessions => {
                 self.mode = Mode::Input(InputPurpose::NewSession, Input::default());
             }
@@ -551,17 +559,26 @@ impl App {
         Ok(())
     }
 
+    /// Reloads the session list. `select` becomes the selected session;
+    /// otherwise the selected session stays selected wherever it moved.
     pub(crate) fn refresh_sessions(&mut self, select: Option<&Session>) {
         match self.session_service.list() {
             Ok(list) => self.sessions = list,
             Err(e) => self.error = Some(e.to_string()),
         }
-        if let Some(target) = select
-            && let Some(i) = self.sessions.iter().position(|s| s.id == target.id)
-        {
-            self.selected = i;
+        if let Some(target) = select {
+            self.selected_id = Some(target.id);
         }
-        self.selected = self.selected.min(self.sessions.len().saturating_sub(1));
+        let found = self
+            .selected_id
+            .and_then(|id| self.sessions.iter().position(|s| s.id == id));
+        let i = found.unwrap_or(self.selected);
+        self.select_index(i.min(self.sessions.len().saturating_sub(1)));
+    }
+
+    fn select_index(&mut self, i: usize) {
+        self.selected = i;
+        self.selected_id = self.sessions.get(i).map(|s| s.id);
     }
 }
 
@@ -778,6 +795,51 @@ mod tests {
         press(&mut t.app, KeyCode::Char('5'));
         press(&mut t.app, KeyCode::Char('l'));
         assert!(!t.app.sessions[0].lean);
+    }
+
+    fn session_named(t: &super::tests_support::TestApp, name: &str) -> swarmux_domain::SessionId {
+        t.app.sessions.iter().find(|s| s.name == name).unwrap().id
+    }
+
+    #[test]
+    fn new_lean_session_takes_the_next_prompt() {
+        let mut t = test_app();
+        t.with_session("test session");
+        t.clock.advance(1_000);
+        t.with_session("demo-shop");
+        t.keys([KeyCode::Char('5'), KeyCode::Char('l'), KeyCode::Char('1')]);
+        assert!(t.app.selected_session().unwrap().lean);
+        t.send("hi");
+        assert_eq!(
+            t.runner.request(0).session_id,
+            session_named(&t, "demo-shop")
+        );
+        assert!(t.runner.request(0).lean);
+    }
+
+    #[test]
+    fn selection_follows_the_session_when_the_list_re_sorts() {
+        let mut t = test_app();
+        t.with_session("a");
+        t.clock.advance(1_000);
+        t.with_session("b");
+        let b = session_named(&t, "b");
+        t.clock.advance(1_000);
+        t.send("one");
+        // Another session's job finishing re-sorts the list under the cursor.
+        let a = session_named(&t, "a");
+        let id = t.app.jobs.dispatch(a, "elsewhere").unwrap();
+        assert_eq!(t.runner.request(1).session_id, a);
+        t.clock.advance(1_000);
+        for i in 0..2 {
+            t.runner.emit(i, RunnerMsg::SpawnFailed("x".into()));
+        }
+        t.app.update();
+        assert_eq!(t.app.sessions[0].id, a, "a was used last");
+        assert_eq!(t.app.selected_session().unwrap().id, b);
+        t.send("two");
+        assert_eq!(t.runner.request(2).session_id, b);
+        assert!(t.app.jobs.progress(id).is_some());
     }
 
     #[test]
