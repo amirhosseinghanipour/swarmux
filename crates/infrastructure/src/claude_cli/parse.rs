@@ -4,6 +4,7 @@
 //! fields never break parsing.
 
 use serde_json::Value;
+use swarmux_domain::telemetry::{Environment, McpServer, RateLimit, parse_todos};
 use swarmux_domain::{Actor, AgentEvent};
 
 const SUMMARY_MAX: usize = 120;
@@ -22,11 +23,12 @@ pub fn parse_line(line: &str) -> Vec<AgentEvent> {
     };
     let kind = str_at(&v, "type");
     match kind.as_str() {
-        "system" => vec![parse_system(&v)],
+        "system" => parse_system(&v),
         "assistant" => parse_assistant(&v),
         "user" => parse_user(&v),
         "result" => vec![parse_result(&v)],
-        "rate_limit_event" | "stream_event" => vec![AgentEvent::Ignored { kind }],
+        "rate_limit_event" => parse_rate_limits(&v),
+        "stream_event" => vec![AgentEvent::Ignored { kind }],
         _ => vec![AgentEvent::Unknown {
             kind,
             raw: line.to_string(),
@@ -34,20 +36,110 @@ pub fn parse_line(line: &str) -> Vec<AgentEvent> {
     }
 }
 
-fn parse_system(v: &Value) -> AgentEvent {
+fn parse_system(v: &Value) -> Vec<AgentEvent> {
     let subtype = str_at(v, "subtype");
     if subtype == "init" {
-        AgentEvent::Init {
-            session_id: str_at(v, "session_id"),
-            model: str_at(v, "model"),
-            cwd: str_at(v, "cwd"),
-            permission_mode: str_at(v, "permissionMode"),
-        }
+        vec![
+            AgentEvent::Init {
+                session_id: str_at(v, "session_id"),
+                model: str_at(v, "model"),
+                cwd: str_at(v, "cwd"),
+                permission_mode: str_at(v, "permissionMode"),
+            },
+            AgentEvent::Environment(Box::new(parse_environment(v))),
+        ]
     } else {
-        AgentEvent::Ignored {
+        vec![AgentEvent::Ignored {
             kind: format!("system/{subtype}"),
-        }
+        }]
     }
+}
+
+/// The session's tools, servers, plugins, skills and agents from `system/init`.
+fn parse_environment(v: &Value) -> Environment {
+    let names = |key: &str| -> Vec<String> {
+        v.get(key)
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|x| {
+                        x.as_str()
+                            .or_else(|| x.get("name").and_then(Value::as_str))
+                            .map(str::to_string)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let opt = |key: &str| Some(str_at(v, key)).filter(|s| !s.is_empty());
+    let mcp_servers = v
+        .get("mcp_servers")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .map(|x| McpServer {
+                    name: str_at(x, "name"),
+                    status: str_at(x, "status"),
+                })
+                .filter(|s| !s.name.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+    Environment {
+        session_id: str_at(v, "session_id"),
+        claude_code_version: opt("claude_code_version"),
+        model: str_at(v, "model"),
+        permission_mode: str_at(v, "permissionMode"),
+        output_style: opt("output_style"),
+        tools: names("tools"),
+        mcp_servers,
+        plugins: names("plugins"),
+        skills: names("skills"),
+        agents: names("agents"),
+    }
+}
+
+/// One reading per limit window: every entry of `unifiedWindows`, else the
+/// single `rateLimitType` window. A bare status is ignored.
+fn parse_rate_limits(v: &Value) -> Vec<AgentEvent> {
+    let ignored = || {
+        vec![AgentEvent::Ignored {
+            kind: "rate_limit_event".into(),
+        }]
+    };
+    let Some(info) = v.get("rate_limit_info") else {
+        return ignored();
+    };
+    let reading = |window: &str, x: &Value| RateLimit {
+        window: window.to_string(),
+        status: str_at(x, "status"),
+        utilization: x.get("utilization").and_then(Value::as_f64),
+        // Claude Code reports seconds since the epoch.
+        resets_at: x
+            .get("resetsAt")
+            .and_then(Value::as_f64)
+            .map(|s| (s * 1000.0) as i64),
+        surpassed_threshold: x.get("surpassedThreshold").and_then(Value::as_f64),
+    };
+    let windows: Vec<AgentEvent> = info
+        .get("unifiedWindows")
+        .and_then(Value::as_object)
+        .map(|m| {
+            m.iter()
+                .map(|(w, x)| AgentEvent::RateLimit(reading(w, x)))
+                .collect()
+        })
+        .unwrap_or_default();
+    if !windows.is_empty() {
+        return windows;
+    }
+    let window = str_at(info, "rateLimitType");
+    if window.is_empty() {
+        return ignored();
+    }
+    vec![AgentEvent::RateLimit(reading(&window, info))]
 }
 
 fn actor_of(v: &Value) -> Actor {
@@ -75,12 +167,22 @@ fn parse_assistant(v: &Value) -> Vec<AgentEvent> {
             }),
             Some("tool_use") => {
                 let name = str_at(b, "name");
+                let input = b.get("input").unwrap_or(&Value::Null);
+                let todos = (name == "TodoWrite")
+                    .then(|| parse_todos(&input.to_string()))
+                    .flatten();
                 out.push(AgentEvent::ToolUse {
                     id: str_at(b, "id"),
-                    summary: tool_summary(&name, b.get("input").unwrap_or(&Value::Null)),
+                    summary: tool_summary(&name, input),
                     name,
                     actor: actor.clone(),
                 });
+                if let Some(todos) = todos {
+                    out.push(AgentEvent::Todos {
+                        todos,
+                        actor: actor.clone(),
+                    });
+                }
             }
             _ => {} // thinking, redacted_thinking, …
         }
@@ -145,7 +247,15 @@ fn parse_result(v: &Value) -> AgentEvent {
 fn tool_summary(name: &str, input: &Value) -> String {
     let s = match name {
         "Bash" | "PowerShell" => str_at(input, "command"),
-        "Read" | "Edit" | "Write" | "NotebookEdit" => str_at(input, "file_path"),
+        "Read" | "Edit" | "Write" | "MultiEdit" => str_at(input, "file_path"),
+        "NotebookEdit" | "NotebookRead" => {
+            let path = str_at(input, "notebook_path");
+            if path.is_empty() {
+                str_at(input, "file_path")
+            } else {
+                path
+            }
+        }
         "Task" | "Agent" => format!(
             "{}: {}",
             str_at(input, "subagent_type"),
@@ -217,6 +327,7 @@ mod tests {
             [
                 "ignored",
                 "init",
+                "environment",
                 "tool_use",
                 "usage",
                 "ignored",
@@ -264,7 +375,10 @@ mod tests {
 
     #[test]
     fn subagent_events_have_subagent_actor() {
-        let ev = fixture("stream_subagent.jsonl");
+        let ev: Vec<AgentEvent> = fixture("stream_subagent.jsonl")
+            .into_iter()
+            .filter(|e| e.kind() != "environment")
+            .collect();
         assert_eq!(ev[1].actor(), &Actor::Lead);
         assert!(
             matches!(&ev[1], AgentEvent::ToolUse { summary, .. } if summary == "explorer: map code")
@@ -312,6 +426,94 @@ mod tests {
         let line = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t","name":"Bash","input":{"command":"cargo test"}}]}}"#;
         assert!(
             matches!(&parse_line(line)[0], AgentEvent::ToolUse { summary, .. } if summary == "cargo test")
+        );
+    }
+
+    /// Shaped like Claude Code 2.1's `rate_limit_event` (values made up).
+    const RATE_LIMIT: &str = r#"{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","resetsAt":1793786400,"rateLimitType":"seven_day","utilization":0.83,"overageStatus":"rejected","isUsingOverage":false,"surpassedThreshold":0.75,"unifiedWindows":{"seven_day":{"utilization":0.83,"resetsAt":1793786400,"status":"allowed_warning","surpassedThreshold":0.75},"five_hour":{"utilization":0.12,"resetsAt":1793700000,"status":"allowed"}}},"uuid":"u","session_id":"s"}"#;
+
+    #[test]
+    fn rate_limit_event_gives_one_reading_per_window() {
+        let ev = parse_line(RATE_LIMIT);
+        assert_eq!(ev.len(), 2);
+        let week = ev.iter().find_map(|e| match e {
+            AgentEvent::RateLimit(l) if l.window == "seven_day" => Some(l),
+            _ => None,
+        });
+        assert_eq!(
+            week,
+            Some(&RateLimit {
+                window: "seven_day".into(),
+                status: "allowed_warning".into(),
+                utilization: Some(0.83),
+                resets_at: Some(1_793_786_400_000),
+                surpassed_threshold: Some(0.75),
+            })
+        );
+    }
+
+    #[test]
+    fn rate_limit_without_windows() {
+        let single = r#"{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","rateLimitType":"five_hour","resetsAt":100,"utilization":0.5}}"#;
+        let ev = parse_line(single);
+        assert!(
+            matches!(&ev[..], [AgentEvent::RateLimit(l)] if l.window == "five_hour" && l.resets_at == Some(100_000)),
+            "{ev:?}"
+        );
+        let bare = r#"{"type":"rate_limit_event","rate_limit_info":{"status":"allowed"}}"#;
+        assert_eq!(parse_line(bare)[0].kind(), "ignored");
+    }
+
+    /// Shaped like Claude Code 2.1's `system/init` (names made up, lists shortened).
+    const INIT: &str = r#"{"type":"system","subtype":"init","cwd":"/work/demo","session_id":"00000000-0000-4000-8000-000000000009","tools":["Task","Bash","Read"],"mcp_servers":[{"name":"docs","status":"connected","source":"claudeai"},{"name":"mail","status":"needs-auth","source":"claudeai"},{"name":"local","status":"pending","source":"user"}],"model":"claude-haiku-5-5","permissionMode":"default","slash_commands":["review"],"apiKeySource":"none","claude_code_version":"2.1.316","output_style":"default","agents":["claude","explorer"],"skills":["pdf","docx"],"plugins":[{"name":"scholar","path":"/p/scholar","source":"scholar@scholar","version":"1.0.0"}],"capabilities":["x"],"uuid":"u"}"#;
+
+    #[test]
+    fn init_also_reports_the_environment() {
+        let ev = parse_line(INIT);
+        assert_eq!(kinds(&ev), ["init", "environment"]);
+        let AgentEvent::Environment(env) = &ev[1] else {
+            panic!("{ev:?}")
+        };
+        assert_eq!(env.session_id, "00000000-0000-4000-8000-000000000009");
+        assert_eq!(env.claude_code_version.as_deref(), Some("2.1.316"));
+        assert_eq!(env.output_style.as_deref(), Some("default"));
+        assert_eq!(env.tools, ["Task", "Bash", "Read"]);
+        assert_eq!(env.mcp_up(), (1, 3));
+        assert_eq!(env.plugins, ["scholar"]);
+        assert_eq!((env.skills.len(), env.agents.len()), (2, 2));
+    }
+
+    #[test]
+    fn todo_write_also_reports_the_todos() {
+        let line = r#"{"type":"assistant","parent_tool_use_id":"toolu_A","message":{"content":[{"type":"tool_use","id":"t","name":"TodoWrite","input":{"todos":[{"content":"Map code","status":"in_progress","activeForm":"Mapping code"},{"content":"Report","status":"pending","activeForm":"Reporting"}]}}]}}"#;
+        let ev = parse_line(line);
+        assert_eq!(kinds(&ev), ["tool_use", "todos"]);
+        let AgentEvent::Todos { todos, actor } = &ev[1] else {
+            panic!("{ev:?}")
+        };
+        assert_eq!(actor, &Actor::Subagent("toolu_A".into()));
+        assert_eq!(todos[0].active_form.as_deref(), Some("Mapping code"));
+        assert_eq!(todos.len(), 2);
+    }
+
+    #[test]
+    fn file_tools_summarize_to_their_path() {
+        let call = |name: &str, input: &str| {
+            let line = format!(
+                r#"{{"type":"assistant","message":{{"content":[{{"type":"tool_use","id":"t","name":"{name}","input":{input}}}]}}}}"#
+            );
+            match &parse_line(&line)[0] {
+                AgentEvent::ToolUse { summary, .. } => summary.clone(),
+                other => panic!("{other:?}"),
+            }
+        };
+        assert_eq!(
+            call("MultiEdit", r#"{"file_path":"src/a.rs","edits":[]}"#),
+            "src/a.rs"
+        );
+        assert_eq!(
+            call("NotebookEdit", r#"{"notebook_path":"n.ipynb"}"#),
+            "n.ipynb"
         );
     }
 
