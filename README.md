@@ -6,27 +6,30 @@ Write, template, refine and queue prompts. Dispatch them to several Claude Code
 sessions and their subagent teams. Watch every agent, model, token, decision and
 review live in one terminal.
 
-> Status: early development. Not usable yet.
+> Status: early development.
 
-## Planned
+## Features
 
-- **Prompt library** with `{{variables}}`, a real editor and one-key refinement
-- **Queue & dispatch** across sessions with a concurrency cap and RAM guard
-- **Live dashboard**: lead session, subagents, context, tokens, cost, timeline, log
+- **Prompt library** with `{{variables}}` and a real editor
+- **Queue & dispatch** across sessions with a concurrency cap, priorities and a RAM guard
+- **Live dashboard**: the lead, its subagents (model, context, activity), the
+  job's phase from plan to ship, the guard, the reviewer, a per-actor
+  timeline, token use per actor and the session log
 - **Guard**: one permission policy across all sessions and an automatic loop
-  breaker, settled in code in under a millisecond so the models never see it
+  breaker, settled in code in about a millisecond so the models never see it
 - **JEV (optional, bring your own key)**: the hosted Jev model for fuzzy
   decisions such as unmatched tool calls and which session should take a prompt
 - **Let swarmux route**: one cheap Haiku call picks the session for a prompt
-- **Review step**: a reviewer model checks each job's diff before it is done
-- **History**: every prompt with cost and outcome; re-run or fork from any point
+- **Review step**: a read-only reviewer model audits a finished job's diff
+- **History**: every prompt with cost, outcome and review; re-run or fork from any point
+- **Lean mode** per session: skip your user-level Claude Code settings
 
 Single Rust binary. Windows, macOS, Linux. Works with Claude Code only.
 
-## Try the skeleton
+## Try it
 
 ```sh
-cargo run              # TUI: 1-5 switch screens, q quits
+cargo run              # TUI: 1-5 switch screens, p sends a prompt, q quits
 cargo run -- doctor    # checks Claude Code, the settings and the Guard hook
 ```
 
@@ -38,6 +41,64 @@ Optional `~/.swarmux/config.toml` (these are the defaults):
 max_concurrent = 3       # jobs running at the same time
 min_free_ram_mb = 1536   # queued jobs wait while free memory is lower
 default_model = "sonnet" # model for new sessions
+```
+
+## Dashboard
+
+Screen 1 follows the job you last sent (or the one you open from the queue or
+history). From top to bottom:
+
+- **Header**: which model orchestrates and which audits, a legend of the
+  actors in this job (Haiku shows its output tokens per second), the exact
+  `claude` command line and how many subagents are mounted.
+- **Steps**: `plan · fork · delegate · parallel · merge · audit · ship`, the
+  current one highlighted. The step comes from what the job did: the first
+  guard or routing decision is *fork*, a Task/Agent call is *delegate*, two
+  subagents at once is *parallel*, all of them back is *merge*, the review
+  is *audit*, done (and passed) is *ship*.
+- **Where prompts go**: the selected session, highlighted, with its model,
+  lean flag and folder (`↑↓` changes it).
+- **Reviewer** (dashed, left): its model, what it checks, loop-breaker stops
+  (`<error again>`) and its verdict (`<before done>`), with its calls, tokens
+  and activity.
+- **Lead**: model, context used of the window, cost and the tokens served
+  from cache.
+- **Guard / JEV**: decisions this run and their p95 latency, the routing
+  pick (with JEV's confidence when JEV decided), the tool-gate verdict mix,
+  stops and calls handed to you, and the latest decision.
+- **Subagent cards**: one per subagent, orange for Sonnet/Opus and blue for
+  Haiku (from `model:` in `.claude/agents/<type>.md` of the session folder or
+  `~/.claude/agents`; `—` when unknown), with its task, activity, isolated
+  context and latest tool result. **Back to lead** shows which have reported
+  back and the review's verdict.
+- **Session timeline** (one row per actor, phases on the x-axis, a "now"
+  cursor), **who sees what** (tokens each actor read or wrote, from Claude
+  Code's usage reports) and `tail -f session.log`.
+
+Nothing is made up: a figure that isn't known yet shows as `—` (Claude Code
+doesn't report the effort level, for example). Spinners turn only while
+something runs. The layout collapses as the window shrinks (who sees what
+goes first, then the reviewer becomes one line and the cards a list); below
+80×24 it asks for a bigger window.
+
+## Review step
+
+Press `v` on the Dashboard to have the next jobs reviewed (or set
+`[review] enabled = true`). When a reviewed job succeeds, swarmux queues a
+second, lean, read-only run in the same folder: `claude -p --model <review
+model> --tools Read,Grep,Glob --no-session-persistence --setting-sources
+project,local --strict-mcp-config`. It gets the prompt, the job's answer
+and the `git diff` (uncommitted changes in tracked files, capped at 48 KB)
+and must answer `{"verdict": "pass" | "concerns", "concerns": [...],
+"diffs_checked": n}`. The verdict and its cost are stored with the job and
+shown on the Dashboard and in History. A review that fails or answers
+something else shows as `review failed: …`; it never changes the job's own
+result.
+
+```toml
+[review]
+enabled = false   # review new jobs by default (v toggles it while running)
+model = "opus"    # the reviewer's model
 ```
 
 ## Guard
