@@ -2,8 +2,8 @@ use std::rc::Rc;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
 use swarmux_domain::{
-    AgentEvent, DomainError, Job, JobId, JobProgress, JobStatus, Limits, Millis, PromptId, Session,
-    SessionId, describe, plan, run_order,
+    AgentEvent, DomainError, Job, JobId, JobProgress, JobStatus, Limits, LoopBreaker, LoopTrip,
+    Millis, PromptId, Session, SessionId, describe, plan, run_order,
 };
 
 use crate::ports::{
@@ -23,6 +23,7 @@ struct Tracked {
     job: Job,
     progress: JobProgress,
     started_at: Option<Millis>,
+    breaker: LoopBreaker,
 }
 
 /// One row of the queue screen.
@@ -58,6 +59,15 @@ pub struct PumpReport {
     pub new_sessions: Vec<Session>,
     /// Some job made progress, started or ended.
     pub changed: bool,
+    /// Jobs the loop breaker stopped.
+    pub loop_trips: Vec<(JobId, LoopTrip)>,
+}
+
+/// What applying one runner message led to.
+#[derive(Default)]
+struct Applied {
+    forked: Option<Session>,
+    trip: Option<LoopTrip>,
 }
 
 /// Use cases for jobs: queueing prompts, running them when allowed and
@@ -69,6 +79,7 @@ pub struct JobService {
     clock: Rc<dyn Clock>,
     monitor: Option<Rc<dyn SystemMonitor>>,
     limits: Limits,
+    loop_repeats: u32,
     tx: Sender<(JobId, RunnerMsg)>,
     rx: Receiver<(JobId, RunnerMsg)>,
     tracked: Vec<Tracked>,
@@ -91,6 +102,7 @@ impl JobService {
             clock,
             monitor: None,
             limits: Settings::default().limits(),
+            loop_repeats: Settings::default().guard.loop_repeats,
             tx,
             rx,
             tracked: Vec::new(),
@@ -100,6 +112,12 @@ impl JobService {
 
     pub fn with_limits(mut self, limits: Limits) -> JobService {
         self.limits = limits;
+        self
+    }
+
+    /// Identical tool failures in a row that stop a job (0 = never).
+    pub fn with_loop_repeats(mut self, repeats: u32) -> JobService {
+        self.loop_repeats = repeats;
         self
     }
 
@@ -202,8 +220,10 @@ impl JobService {
         while let Ok((job_id, msg)) = self.rx.try_recv() {
             report.changed = true;
             match self.apply(job_id, msg) {
-                Ok(Some(session)) => report.new_sessions.push(session),
-                Ok(None) => {}
+                Ok(applied) => {
+                    report.new_sessions.extend(applied.forked);
+                    report.loop_trips.extend(applied.trip.map(|t| (job_id, t)));
+                }
                 Err(e) => report.errors.push(e),
             }
         }
@@ -298,6 +318,7 @@ impl JobService {
             job,
             progress,
             started_at: None,
+            breaker: LoopBreaker::new(self.loop_repeats),
         });
     }
 
@@ -450,24 +471,25 @@ impl JobService {
         });
     }
 
-    /// Applies one runner message. Returns the session a fork created, if any.
-    fn apply(&mut self, job_id: JobId, msg: RunnerMsg) -> AppResult<Option<Session>> {
+    /// Applies one runner message: may create a fork's session or trip the
+    /// loop breaker, which stops the job.
+    fn apply(&mut self, job_id: JobId, msg: RunnerMsg) -> AppResult<Applied> {
         let now = self.clock.now();
+        let mut applied = Applied::default();
         let Some(i) = self.find(job_id) else {
-            return Ok(None);
+            return Ok(applied);
         };
         if self.tracked[i].progress.status == JobStatus::Cancelled {
-            return Ok(None);
+            return Ok(applied);
         }
         let tick = self.tick_of(i);
-        let mut forked = None;
 
         let finished = match msg {
             RunnerMsg::Event(ev) => {
                 if let AgentEvent::Init { session_id, .. } = &ev
                     && self.tracked[i].job.fork
                 {
-                    forked = self.adopt_fork(i, session_id)?;
+                    applied.forked = self.adopt_fork(i, session_id)?;
                 }
                 if !matches!(ev, AgentEvent::Ignored { .. }) {
                     self.jobs.append_event(
@@ -478,7 +500,17 @@ impl JobService {
                         now,
                     )?;
                 }
-                self.tracked[i].progress.apply(&ev, tick)
+                let t = &mut self.tracked[i];
+                let finished = t.progress.apply(&ev, tick);
+                match t.breaker.observe(&ev) {
+                    Some(trip) if finished.is_none() => {
+                        self.runner.cancel(job_id);
+                        let stopped = t.progress.stop(&trip.reason(), tick);
+                        applied.trip = Some(trip);
+                        stopped
+                    }
+                    _ => finished,
+                }
             }
             RunnerMsg::Exited { code, stderr_tail } => {
                 let reason = match code {
@@ -504,7 +536,7 @@ impl JobService {
             self.jobs.save_result(job_id, &result)?;
             self.jobs.set_status(job_id, status, now)?;
         }
-        Ok(forked)
+        Ok(applied)
     }
 
     /// A fork's `init` names the new Claude session: bind it to a new

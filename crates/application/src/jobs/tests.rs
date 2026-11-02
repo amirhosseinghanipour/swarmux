@@ -492,3 +492,63 @@ fn template_dispatch_records_the_prompt() {
     assert_eq!(f.runner.request(0).prompt, "fix bug");
     assert_eq!(f.store.prompt_of(job), Some(id));
 }
+
+fn failing_call(f: &Fixture, i: usize, id: &str) {
+    f.runner.emit(
+        i,
+        RunnerMsg::Event(AgentEvent::ToolUse {
+            id: id.into(),
+            name: "Bash".into(),
+            summary: "cargo test".into(),
+            actor: Actor::Lead,
+        }),
+    );
+    f.runner.emit(
+        i,
+        RunnerMsg::Event(AgentEvent::ToolResult {
+            tool_use_id: id.into(),
+            is_error: true,
+            preview: "error[E0425]: cannot find value".into(),
+            actor: Actor::Lead,
+        }),
+    );
+}
+
+#[test]
+fn loop_guard_stops_a_job_repeating_a_failure() {
+    let mut f = fixture();
+    let job = f.svc.dispatch(f.session.id, "fix it").unwrap();
+    failing_call(&f, 0, "t1");
+    assert!(f.svc.pump().loop_trips.is_empty());
+    failing_call(&f, 0, "t2");
+    let report = f.svc.pump();
+    assert_eq!(report.loop_trips.len(), 1);
+    assert_eq!(report.loop_trips[0].0, job);
+    assert_eq!(f.runner.cancelled(), [job]);
+    assert_eq!(f.store.status_of(job), JobStatus::Cancelled);
+    let error = f.store.result_of(job).unwrap().error.unwrap();
+    assert_eq!(error, "loop guard: Bash failed the same way twice");
+
+    // Later messages from the killed process change nothing.
+    f.runner.emit(0, RunnerMsg::Event(result(0.1)));
+    f.svc.pump();
+    assert_eq!(f.store.status_of(job), JobStatus::Cancelled);
+}
+
+#[test]
+fn loop_guard_can_be_turned_off() {
+    let mut f = fixture();
+    f.svc = JobService::new(
+        f.store.clone(),
+        f.store.clone(),
+        f.runner.clone(),
+        f.clock.clone(),
+    )
+    .with_loop_repeats(0);
+    let job = f.svc.dispatch(f.session.id, "fix it").unwrap();
+    for id in ["a", "b", "c"] {
+        failing_call(&f, 0, id);
+    }
+    assert!(f.svc.pump().loop_trips.is_empty());
+    assert_eq!(f.store.status_of(job), JobStatus::Running);
+}

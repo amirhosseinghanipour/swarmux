@@ -22,6 +22,11 @@ pub enum AppError {
     JobNotFinished(JobId),
     #[error("job #{0} is no longer queued")]
     JobNotQueued(JobId),
+    #[error("that approval is no longer pending")]
+    ApprovalNotFound,
+    /// The settings file couldn't be changed.
+    #[error("config error: {0}")]
+    Config(String),
 }
 
 pub type AppResult<T> = Result<T, AppError>;

@@ -135,7 +135,8 @@ mod tests {
             Settings {
                 max_concurrent: 5,
                 min_free_ram_mb: 512,
-                default_model: "opus".into()
+                default_model: "opus".into(),
+                ..Settings::default()
             }
         );
     }

@@ -5,15 +5,16 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use swarmux_domain::{
-    Job, JobId, JobResult, JobStatus, Millis, PromptDraft, PromptId, PromptTemplate, Session,
-    SessionId,
+    Decision, Job, JobId, JobResult, JobStatus, Millis, PromptDraft, PromptId, PromptTemplate,
+    Session, SessionId,
 };
 
 use crate::ports::{
-    AgentRunner, Clock, JobRepository, NewJob, PromptRepository, RunRequest, RunSink, RunnerMsg,
-    SessionRepository, StoredEvent, SystemMonitor, Workspace,
+    AgentRunner, Clock, DecisionRepository, HookInbox, HookRequest, InboxItem, JobRepository,
+    NewJob, PromptRepository, RuleWriter, RunRequest, RunSink, RunnerMsg, SessionRepository,
+    StoredEvent, SystemMonitor, Workspace,
 };
-use crate::{AppError, AppResult, JobSummary};
+use crate::{AppError, AppResult, DecisionRecord, JobSummary};
 
 /// A clock that only moves when told to.
 pub struct FixedClock(Cell<Millis>);
@@ -393,5 +394,132 @@ impl FakeMonitor {
 impl SystemMonitor for FakeMonitor {
     fn free_memory_bytes(&self) -> Option<u64> {
         self.0.get()
+    }
+}
+
+/// Hook requests pushed by the test; records every answer.
+#[derive(Default)]
+pub struct FakeHookInbox {
+    queue: RefCell<Vec<InboxItem>>,
+    answers: RefCell<Vec<(u64, Decision)>>,
+    next: Cell<u64>,
+}
+
+impl FakeHookInbox {
+    /// Queues an unanswered request for `tool` on `subject` from folder `/w`.
+    /// Returns its id.
+    pub fn push(&self, job: Option<JobId>, tool: &str, subject: &str) -> u64 {
+        let id = self.next.get() + 1;
+        self.next.set(id);
+        self.queue.borrow_mut().push(InboxItem {
+            request: HookRequest {
+                request_id: id,
+                job_id: job,
+                tool_name: tool.into(),
+                subject: subject.into(),
+                input: format!("{{\"subject\":{subject:?}}}"),
+                cwd: "/w".into(),
+            },
+            answered: None,
+        });
+        id
+    }
+
+    /// Queues a request the transport already answered.
+    pub fn push_answered(&self, tool: &str, subject: &str, decision: Decision) -> u64 {
+        let id = self.push(None, tool, subject);
+        if let Some(item) = self.queue.borrow_mut().last_mut() {
+            item.answered = Some((decision, 7));
+        }
+        id
+    }
+
+    pub fn answers(&self) -> Vec<(u64, Decision)> {
+        self.answers.borrow().clone()
+    }
+
+    pub fn answer_to(&self, id: u64) -> Option<Decision> {
+        self.answers
+            .borrow()
+            .iter()
+            .find(|(i, _)| *i == id)
+            .map(|(_, d)| d.clone())
+    }
+}
+
+impl HookInbox for FakeHookInbox {
+    fn poll(&self) -> Vec<InboxItem> {
+        std::mem::take(&mut *self.queue.borrow_mut())
+    }
+
+    fn respond(&self, request_id: u64, decision: &Decision) {
+        self.answers
+            .borrow_mut()
+            .push((request_id, decision.clone()));
+    }
+}
+
+/// Keeps decisions in memory; can be told to fail.
+#[derive(Default)]
+pub struct FakeDecisionRepo {
+    rows: RefCell<Vec<DecisionRecord>>,
+    fail: Cell<bool>,
+}
+
+impl FakeDecisionRepo {
+    pub fn rows(&self) -> Vec<DecisionRecord> {
+        self.rows.borrow().clone()
+    }
+
+    pub fn fail(&self, fail: bool) {
+        self.fail.set(fail);
+    }
+}
+
+impl DecisionRepository for FakeDecisionRepo {
+    fn record(&self, decision: &DecisionRecord) -> AppResult<()> {
+        if self.fail.get() {
+            return Err(AppError::Storage("disk full".into()));
+        }
+        self.rows.borrow_mut().push(decision.clone());
+        Ok(())
+    }
+
+    fn recent_decisions(&self, limit: usize) -> AppResult<Vec<DecisionRecord>> {
+        Ok(self
+            .rows
+            .borrow()
+            .iter()
+            .rev()
+            .take(limit)
+            .cloned()
+            .collect())
+    }
+}
+
+/// Records saved rules; can be told to refuse.
+#[derive(Default)]
+pub struct FakeRuleWriter {
+    rules: RefCell<Vec<String>>,
+    refuse: Cell<bool>,
+}
+
+impl FakeRuleWriter {
+    pub fn rules(&self) -> Vec<String> {
+        self.rules.borrow().clone()
+    }
+
+    pub fn refuse(&self, refuse: bool) {
+        self.refuse.set(refuse);
+    }
+}
+
+impl RuleWriter for FakeRuleWriter {
+    fn add_allow_rule(&self, rule: &str) -> AppResult<()> {
+        if self.refuse.get() {
+            return Err(AppError::Config("allow list is too complex to edit".into()));
+        }
+        self.rules.borrow_mut().push(rule.to_string());
+        Ok(())
     }
 }

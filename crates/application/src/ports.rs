@@ -3,11 +3,11 @@
 use std::path::{Path, PathBuf};
 
 use swarmux_domain::{
-    AgentEvent, Job, JobId, JobResult, JobStatus, Millis, PromptDraft, PromptId, PromptTemplate,
-    Session, SessionId,
+    AgentEvent, Decision, Job, JobId, JobResult, JobStatus, Millis, PromptDraft, PromptId,
+    PromptTemplate, Session, SessionId,
 };
 
-use crate::{AppResult, JobSummary};
+use crate::{AppResult, DecisionRecord, JobSummary};
 
 pub trait SessionRepository {
     fn insert(&self, session: &Session) -> AppResult<()>;
@@ -131,4 +131,50 @@ pub trait SystemMonitor {
 
 pub trait Clock {
     fn now(&self) -> Millis;
+}
+
+/// A tool call Claude Code asks swarmux about (its PreToolUse hook).
+#[derive(Clone, Debug, PartialEq)]
+pub struct HookRequest {
+    /// Unique within this run.
+    pub request_id: u64,
+    /// The job whose `claude` made the call, when known.
+    pub job_id: Option<JobId>,
+    pub tool_name: String,
+    /// What the call acts on: the command, file path or URL ("" if none).
+    pub subject: String,
+    /// The tool input as JSON, possibly shortened, for display.
+    pub input: String,
+    /// The folder the call was made from.
+    pub cwd: String,
+}
+
+/// A hook request as it left the inbox.
+#[derive(Clone, Debug, PartialEq)]
+pub struct InboxItem {
+    pub request: HookRequest,
+    /// Set when the transport already answered from the shared policy:
+    /// the decision and how long deciding took, in microseconds.
+    pub answered: Option<(Decision, u64)>,
+}
+
+/// Where hook requests arrive and their answers go back.
+pub trait HookInbox {
+    /// Requests received since the last call.
+    fn poll(&self) -> Vec<InboxItem>;
+    /// Answers a request that wasn't answered yet. Unknown ids are ignored.
+    fn respond(&self, request_id: u64, decision: &Decision);
+}
+
+/// The guard's decision log.
+pub trait DecisionRepository {
+    fn record(&self, decision: &DecisionRecord) -> AppResult<()>;
+    /// The newest `limit` decisions, newest first.
+    fn recent_decisions(&self, limit: usize) -> AppResult<Vec<DecisionRecord>>;
+}
+
+/// Saves guard rules the user adds while swarmux runs.
+pub trait RuleWriter {
+    /// Adds `rule` to the allow list of the user's settings.
+    fn add_allow_rule(&self, rule: &str) -> AppResult<()>;
 }
