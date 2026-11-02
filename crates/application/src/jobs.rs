@@ -277,6 +277,8 @@ impl JobService {
                 Err(e) => report.errors.push(e),
             }
         }
+        // Read even with nothing queued, so the status bar always shows it.
+        self.free_ram();
         match self.schedule() {
             Ok(started) => report.changed |= started,
             Err(e) => report.errors.push(e),

@@ -561,3 +561,13 @@ fn lean_sessions_run_lean_jobs() {
     f.svc.dispatch(f.session.id, "hi").unwrap();
     assert!(f.runner.request(0).lean);
 }
+
+#[test]
+fn free_memory_is_read_with_nothing_queued() {
+    let mut f = fixture();
+    f.monitor.set(Some(3 * GB));
+    assert_eq!(f.svc.stats().free_ram, None);
+    f.svc.pump();
+    assert_eq!(f.svc.stats().free_ram, Some(3 * GB));
+    assert_eq!(f.runner.started(), 0);
+}
