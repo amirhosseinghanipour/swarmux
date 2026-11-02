@@ -1568,7 +1568,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "serde_json",
  "swarmux-application",
+ "swarmux-domain",
  "swarmux-infrastructure",
  "swarmux-tui",
  "tokio",

@@ -6,8 +6,8 @@ use std::time::Duration;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::DefaultTerminal;
 use swarmux_application::{
-    AppError, AppResult, HistoryService, JobService, PromptService, QueueEntry, QueueStats,
-    SessionService,
+    AppError, AppResult, GuardService, HistoryService, JobService, PromptService, QueueEntry,
+    QueueStats, SessionService,
 };
 use swarmux_domain::{JobId, JobProgress, PromptId, Session};
 
@@ -75,6 +75,8 @@ pub struct App {
     pub selected: usize,
     /// Last error, shown in the status bar until the next key press.
     pub error: Option<String>,
+    /// Last confirmation, shown like `error` but not as a problem.
+    pub notice: Option<String>,
     pub prompts: PromptsScreen,
     pub queue: QueueScreen,
     pub history: HistoryScreen,
@@ -83,6 +85,7 @@ pub struct App {
     jobs: JobService,
     prompt_service: PromptService,
     history_service: HistoryService,
+    pub guard: GuardService,
     cwd: PathBuf,
 }
 
@@ -92,6 +95,7 @@ impl App {
         jobs: JobService,
         prompt_service: PromptService,
         history_service: HistoryService,
+        guard: GuardService,
         cwd: PathBuf,
     ) -> App {
         let mut app = App {
@@ -101,6 +105,7 @@ impl App {
             sessions: Vec::new(),
             selected: 0,
             error: None,
+            notice: None,
             prompts: PromptsScreen::default(),
             queue: QueueScreen::default(),
             history: HistoryScreen::default(),
@@ -109,6 +114,7 @@ impl App {
             jobs,
             prompt_service,
             history_service,
+            guard,
             cwd,
         };
         app.refresh_sessions(None);
@@ -130,10 +136,15 @@ impl App {
         Ok(())
     }
 
-    /// Applies pending job updates and starts queued jobs.
+    /// Applies pending job updates, starts queued jobs and handles guard requests.
     pub fn update(&mut self) {
         let report = self.jobs.pump();
-        if let Some(e) = report.errors.into_iter().last() {
+        let mut errors = report.errors;
+        for (job, trip) in &report.loop_trips {
+            errors.extend(self.guard.record_loop(*job, trip).err());
+        }
+        errors.extend(self.guard.pump().errors);
+        if let Some(e) = errors.into_iter().last() {
             self.error = Some(e.to_string());
         }
         if !report.new_sessions.is_empty() {
@@ -166,6 +177,11 @@ impl App {
 
     pub fn stats(&self) -> QueueStats {
         self.jobs.stats()
+    }
+
+    /// The session a job belongs to, if the job is from this run.
+    pub fn session_of(&self, job: JobId) -> Option<&str> {
+        self.jobs.progress(job).map(|p| p.session_name.as_str())
     }
 
     /// The timeline's "now" for the current job.
@@ -223,6 +239,14 @@ impl App {
         }
 
         self.error = None;
+        self.notice = None;
+        if let KeyCode::Char(c @ ('y' | 'n' | 'a')) = key.code
+            && self.guard.pending_count() > 0
+        {
+            let result = self.answer_approval(c);
+            self.show(result);
+            return;
+        }
         let confirming_delete = std::mem::take(&mut self.prompts.confirm_delete);
         match key.code {
             KeyCode::Char('q') => self.quit = true,
@@ -265,6 +289,28 @@ impl App {
     fn show(&mut self, result: AppResult<()>) {
         if let Err(e) = result {
             self.error = Some(e.to_string());
+        }
+    }
+
+    /// `y` approves, `n` denies, `a` always allows the oldest held tool call.
+    fn answer_approval(&mut self, key: char) -> AppResult<()> {
+        let Some(id) = self.guard.approvals().first().map(|a| a.request.request_id) else {
+            return Ok(());
+        };
+        match key {
+            'y' => self.guard.approve(id),
+            'n' => self.guard.deny(id),
+            _ => {
+                let done = self.guard.always_allow(id)?;
+                self.notice = Some(match done.not_saved {
+                    None => format!("always allowing {} (saved to config.toml)", done.rule),
+                    Some(why) => format!(
+                        "always allowing {} for this run; not saved: {why}",
+                        done.rule
+                    ),
+                });
+                Ok(())
+            }
         }
     }
 
@@ -473,10 +519,13 @@ pub(crate) mod tests_support {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use swarmux_application::ports::PromptRepository;
     use swarmux_application::testing::{
-        FakeMonitor, FakeRunner, FakeWorkspace, FixedClock, InMemoryStore,
+        FakeDecisionRepo, FakeHookInbox, FakeMonitor, FakeRuleWriter, FakeRunner, FakeWorkspace,
+        FixedClock, InMemoryStore,
     };
-    use swarmux_application::{HistoryService, JobService, PromptService, SessionService};
-    use swarmux_domain::PromptDraft;
+    use swarmux_application::{
+        GuardService, HistoryService, JobService, PromptService, SessionService, SharedPolicy,
+    };
+    use swarmux_domain::{GuardPolicy, PromptDraft};
 
     use super::App;
 
@@ -486,6 +535,9 @@ pub(crate) mod tests_support {
         pub runner: Rc<FakeRunner>,
         pub clock: Rc<FixedClock>,
         pub monitor: Rc<FakeMonitor>,
+        pub inbox: Rc<FakeHookInbox>,
+        pub decisions: Rc<FakeDecisionRepo>,
+        pub rules: Rc<FakeRuleWriter>,
     }
 
     /// An app wired to in-memory fakes.
@@ -504,18 +556,30 @@ pub(crate) mod tests_support {
             .with_monitor(monitor.clone());
         let prompts = PromptService::new(store.clone(), store.clone(), workspace, clock.clone());
         let history = HistoryService::new(store.clone());
+        let inbox = Rc::new(FakeHookInbox::default());
+        let decisions = Rc::new(FakeDecisionRepo::default());
+        let rules = Rc::new(FakeRuleWriter::default());
+        let guard = GuardService::new(
+            SharedPolicy::new(GuardPolicy::default()),
+            inbox.clone(),
+            decisions.clone(),
+            clock.clone(),
+        )
+        .with_rule_writer(rules.clone());
         TestApp {
-            app: App::new(sessions, jobs, prompts, history, "/work".into()),
+            app: App::new(sessions, jobs, prompts, history, guard, "/work".into()),
             store,
             runner,
             clock,
             monitor,
+            inbox,
+            decisions,
+            rules,
         }
     }
 
     impl TestApp {
-        /// Saves a prompt straight to the store and reloads the list.
-        fn keys(&mut self, codes: impl IntoIterator<Item = KeyCode>) {
+        pub(crate) fn keys(&mut self, codes: impl IntoIterator<Item = KeyCode>) {
             for code in codes {
                 self.app.on_key(KeyEvent::new(code, KeyModifiers::NONE));
             }
@@ -535,6 +599,7 @@ pub(crate) mod tests_support {
             self.keys([KeyCode::Enter]);
         }
 
+        /// Saves a prompt straight to the store and reloads the list.
         pub(crate) fn add_prompt(&mut self, name: &str, body: &str, tags: &[&str]) {
             let tags = tags.iter().map(|t| t.to_string()).collect();
             let draft = PromptDraft::new(name, body, tags).unwrap();

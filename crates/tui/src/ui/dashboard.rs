@@ -13,7 +13,21 @@ use crate::app::App;
 
 const LANE_LABEL_W: usize = 10;
 
+/// Below this height the guard panel is left out.
+const MIN_HEIGHT_FOR_GUARD: u16 = 16;
+
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
+    let area = if area.height >= MIN_HEIGHT_FOR_GUARD {
+        let [main, guard] = Layout::vertical([
+            Constraint::Fill(1),
+            Constraint::Length(super::guard::PANEL_HEIGHT),
+        ])
+        .areas(area);
+        super::guard::render_panel(frame, guard, app);
+        main
+    } else {
+        area
+    };
     if let (false, Some(job)) = (app.sessions.is_empty(), app.current_job()) {
         render_job(frame, area, job, app.now_tick());
         return;

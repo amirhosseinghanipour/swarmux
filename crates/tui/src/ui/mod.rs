@@ -3,6 +3,7 @@
 
 pub mod dashboard;
 pub mod editor;
+pub mod guard;
 pub mod history;
 pub mod input;
 pub mod prompts;
@@ -52,8 +53,17 @@ pub fn draw(frame: &mut Frame, app: &App) {
         Screen::History => history::render(frame, body, app),
         Screen::Sessions => sessions::render(frame, body, app),
     }
+    if app.guard.pending_count() > 0 {
+        let h = guard::APPROVAL_HEIGHT.min(body.height);
+        let overlay = Rect {
+            y: body.y + body.height - h,
+            height: h,
+            ..body
+        };
+        guard::render_approval(frame, overlay, app);
+    }
 
-    let stats = stats_line(app.stats());
+    let stats = stats_line(app.stats(), app.guard.pending_count());
     let [left, right] = Layout::horizontal([
         Constraint::Fill(1),
         Constraint::Length(stats.width() as u16),
@@ -83,19 +93,27 @@ pub fn short(n: u64) -> String {
     }
 }
 
-/// `running n/cap · queued m · RAM free x.x GB`, right of the status bar.
-fn stats_line(s: QueueStats) -> Line<'static> {
+/// `approvals k · running n/cap · queued m · RAM free x.x GB`, right of the status bar.
+fn stats_line(s: QueueStats, approvals: usize) -> Line<'static> {
     let ram = match s.free_ram {
         Some(b) => format!("{:.1} GB", b as f64 / (1u64 << 30) as f64),
         None => "n/a".into(),
     };
-    let mut spans = vec![Span::styled(
+    let mut spans = Vec::new();
+    if approvals > 0 {
+        spans.push(Span::styled(
+            format!("approvals {approvals}"),
+            Style::new().fg(Color::Black).bg(ORANGE),
+        ));
+        spans.push(Span::raw(" "));
+    }
+    spans.push(Span::styled(
         format!(
             "running {}/{} · queued {} · ",
             s.running, s.max_concurrent, s.queued
         ),
         Style::new().fg(MUTED),
-    )];
+    ));
     if s.ram_low {
         spans.push(Span::styled(
             format!("RAM free {ram} (low) "),
@@ -162,6 +180,10 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
         }
         Mode::Normal => match (&app.error, app.prompts.selected_prompt()) {
             (Some(e), _) => Line::from(Span::styled(format!(" ! {e}"), Style::new().fg(RED))),
+            (None, _) if app.notice.is_some() => Line::from(Span::styled(
+                format!(" {}", app.notice.as_deref().unwrap_or_default()),
+                Style::new().fg(GREEN),
+            )),
             (None, Some(p)) if app.prompts.confirm_delete => Line::from(Span::styled(
                 format!(
                     " press x again to delete \"{}\" · any other key keeps it",
