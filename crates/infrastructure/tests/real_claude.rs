@@ -5,7 +5,7 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use swarmux_application::ports::{AgentRunner, RunRequest, RunnerMsg};
-use swarmux_domain::{AgentEvent, SessionId};
+use swarmux_domain::{AgentEvent, JobId, SessionId};
 use swarmux_infrastructure::ClaudeCli;
 
 #[test]
@@ -23,6 +23,7 @@ fn real_claude_job_reports_init_and_result() {
     let (tx, rx) = mpsc::channel();
     cli.start(
         RunRequest {
+            job_id: JobId(1),
             cwd: dir.path().into(),
             session_id: SessionId::random(),
             resume: false,

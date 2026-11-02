@@ -6,7 +6,7 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use swarmux_application::ports::{AgentRunner, RunRequest, RunnerMsg};
-use swarmux_domain::SessionId;
+use swarmux_domain::{JobId, SessionId};
 use swarmux_infrastructure::ClaudeCli;
 use swarmux_infrastructure::claude_cli::command::{build_args, user_message};
 
@@ -20,6 +20,7 @@ fn fixture(name: &str) -> String {
 
 fn request(cwd: PathBuf, prompt: &str) -> RunRequest {
     RunRequest {
+        job_id: JobId(1),
         cwd,
         session_id: SessionId::random(),
         resume: false,
@@ -134,4 +135,81 @@ fn spawn_failure_reports_failed() {
     );
     assert_eq!(msgs.len(), 1);
     assert!(matches!(msgs[0], RunnerMsg::SpawnFailed(_)));
+}
+
+fn runtime() -> tokio::runtime::Runtime {
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .unwrap()
+}
+
+/// Waits up to `secs` for `cond`.
+fn eventually(secs: u64, cond: impl Fn() -> bool) -> bool {
+    let end = std::time::Instant::now() + Duration::from_secs(secs);
+    while std::time::Instant::now() < end {
+        if cond() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    cond()
+}
+
+#[test]
+fn finished_job_is_forgotten() {
+    let rt = runtime();
+    let cli = ClaudeCli::new(FAKE.into(), rt.handle().clone());
+    let dir = tempfile::tempdir().unwrap();
+    let (tx, rx) = mpsc::channel();
+    cli.start(
+        request(dir.path().into(), "hi"),
+        Box::new(move |m| {
+            let _ = tx.send(m);
+        }),
+    );
+    assert_eq!(cli.running(), 1);
+    while let Ok(m) = rx.recv_timeout(Duration::from_secs(20)) {
+        if matches!(m, RunnerMsg::Exited { .. }) {
+            break;
+        }
+    }
+    assert!(eventually(5, || cli.running() == 0));
+}
+
+#[test]
+fn cancel_kills_the_process() {
+    let rt = runtime();
+    let dir = tempfile::tempdir().unwrap();
+    let done = dir.path().join("done");
+    let env = vec![
+        ("FAKE_CLAUDE_SLEEP_MS".to_string(), "1500".to_string()),
+        (
+            "FAKE_CLAUDE_DONE_FILE".to_string(),
+            done.to_string_lossy().into_owned(),
+        ),
+    ];
+    let cli = ClaudeCli::new(FAKE.into(), rt.handle().clone()).with_env(env);
+    let (tx, rx) = mpsc::channel();
+    let req = request(dir.path().into(), "hi");
+    let job = req.job_id;
+    cli.start(
+        req,
+        Box::new(move |m| {
+            let _ = tx.send(m);
+        }),
+    );
+    std::thread::sleep(Duration::from_millis(300));
+    cli.cancel(job);
+    assert_eq!(cli.running(), 0);
+    cli.cancel(JobId(12345)); // unknown jobs are ignored
+
+    std::thread::sleep(Duration::from_millis(2500));
+    assert!(!done.exists(), "the process was not killed");
+    assert!(
+        rx.try_iter()
+            .all(|m| !matches!(m, RunnerMsg::Exited { .. })),
+        "a cancelled job reports nothing more"
+    );
 }

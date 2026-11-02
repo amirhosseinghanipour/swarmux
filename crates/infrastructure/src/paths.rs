@@ -6,13 +6,19 @@ use std::path::{Path, PathBuf};
 pub struct Paths {
     pub data_dir: PathBuf,
     pub db: PathBuf,
+    pub config: PathBuf,
 }
 
 impl Paths {
     pub fn from_home(home: &Path) -> Paths {
         let data_dir = home.join(".swarmux");
         let db = data_dir.join("swarmux.db");
-        Paths { data_dir, db }
+        let config = data_dir.join("config.toml");
+        Paths {
+            data_dir,
+            db,
+            config,
+        }
     }
 
     pub fn default_home() -> io::Result<Paths> {
@@ -32,5 +38,6 @@ mod tests {
         let p = Paths::from_home(Path::new("/home/u"));
         assert_eq!(p.data_dir, Path::new("/home/u/.swarmux"));
         assert_eq!(p.db, Path::new("/home/u/.swarmux/swarmux.db"));
+        assert_eq!(p.config, Path::new("/home/u/.swarmux/config.toml"));
     }
 }

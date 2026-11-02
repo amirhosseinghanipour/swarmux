@@ -143,7 +143,9 @@ mod tests {
         let sess = Session::new(SessionId::random(), "s", "/w".into(), "sonnet", 0).unwrap();
         SessionRepository::insert(&s, &sess).unwrap();
         let id = PromptRepository::insert(&s, &draft("a", &[]), 1).unwrap();
-        let job = JobRepository::insert(&s, sess.id, Some(id), "body", "sonnet", 2).unwrap();
+        let mut new = crate::sqlite::tests::new_job(sess.id, "body");
+        new.prompt_id = Some(id);
+        let job = JobRepository::insert(&s, &new, 2).unwrap();
         assert_eq!(s.job_prompt(job), Some(id.0));
 
         PromptRepository::delete(&s, id).unwrap();

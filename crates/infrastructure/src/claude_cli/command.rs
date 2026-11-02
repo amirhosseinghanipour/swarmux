@@ -41,11 +41,12 @@ pub fn user_message(prompt: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use swarmux_domain::SessionId;
+    use swarmux_domain::{JobId, SessionId};
     use uuid::Uuid;
 
     fn req(resume: bool, fork: bool) -> RunRequest {
         RunRequest {
+            job_id: JobId(1),
             cwd: "/w".into(),
             session_id: SessionId(Uuid::nil()),
             resume,

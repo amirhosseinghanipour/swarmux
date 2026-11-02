@@ -138,6 +138,7 @@ fn parse_result(v: &Value) -> AgentEvent {
             .pointer("/subagent_stats/spawned")
             .and_then(Value::as_u64)
             .unwrap_or(0) as u32,
+        text: str_at(v, "result"),
     }
 }
 
@@ -257,6 +258,7 @@ mod tests {
         assert_eq!(num_turns, 2);
         assert_eq!(context_window, Some(1_000_000));
         assert_eq!(tokens_out, 385);
+        assert!(matches!(ev.last(), Some(AgentEvent::Result { text, .. }) if !text.is_empty()));
         assert!(!is_error);
     }
 

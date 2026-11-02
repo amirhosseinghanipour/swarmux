@@ -79,8 +79,16 @@ CREATE TABLE decisions (
 );
 ";
 
+/// Fork jobs, final answer text, and indexes for the queue and history.
+const SCHEMA_V2: &str = "
+ALTER TABLE jobs ADD COLUMN fork INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE job_results ADD COLUMN text TEXT NOT NULL DEFAULT '';
+CREATE INDEX jobs_status ON jobs(status);
+CREATE INDEX jobs_created ON jobs(created_at);
+";
+
 /// Migrations in order; index + 1 is the resulting `user_version`.
-const MIGRATIONS: &[&str] = &[SCHEMA_V1];
+const MIGRATIONS: &[&str] = &[SCHEMA_V1, SCHEMA_V2];
 
 /// Maps adapter errors into the application's error type.
 pub(crate) trait OrStorage<T> {
@@ -138,10 +146,21 @@ impl SqliteStore {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
-    use swarmux_application::ports::{JobRepository, SessionRepository};
+    use swarmux_application::ports::{JobRepository, NewJob, SessionRepository};
     use swarmux_domain::{JobId, JobResult, JobStatus, Session, SessionId};
+
+    pub(crate) fn new_job(session: SessionId, prompt: &str) -> NewJob {
+        NewJob {
+            session_id: session,
+            prompt_id: None,
+            prompt: prompt.into(),
+            model: "sonnet".into(),
+            priority: 0,
+            fork: false,
+        }
+    }
 
     fn session(name: &str, now: i64) -> Session {
         Session::new(SessionId::random(), name, "/w".into(), "sonnet", now).unwrap()
@@ -151,7 +170,7 @@ mod tests {
         let s = SqliteStore::open_in_memory().unwrap();
         let sess = session("a", 1);
         SessionRepository::insert(&s, &sess).unwrap();
-        let job = JobRepository::insert(&s, sess.id, None, "hi", "sonnet", 2).unwrap();
+        let job = JobRepository::insert(&s, &new_job(sess.id, "hi"), 2).unwrap();
         (s, sess, job)
     }
 
@@ -164,9 +183,29 @@ mod tests {
     }
 
     #[test]
-    fn migrate_sets_schema_version_1() {
+    fn migrate_sets_latest_schema_version() {
         let s = SqliteStore::open_in_memory().unwrap();
-        assert_eq!(s.schema_version().unwrap(), 1);
+        assert_eq!(s.schema_version().unwrap(), MIGRATIONS.len() as i64);
+    }
+
+    #[test]
+    fn version_1_database_is_upgraded_in_place() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("v1.db");
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(SCHEMA_V1).unwrap();
+        conn.pragma_update(None, "user_version", 1).unwrap();
+        conn.execute_batch(
+            "INSERT INTO sessions VALUES ('00000000-0000-4000-8000-000000000001', 's', '/w', 'sonnet', 'default', 1, NULL, 0);
+             INSERT INTO jobs (id, body_rendered, session_id, model, status, created_at)
+             VALUES (1, 'old', '00000000-0000-4000-8000-000000000001', 'sonnet', 'done', 2);",
+        )
+        .unwrap();
+        drop(conn);
+        let s = SqliteStore::open(&path).unwrap();
+        assert_eq!(s.schema_version().unwrap(), 2);
+        let job = JobRepository::get(&s, JobId(1)).unwrap().unwrap();
+        assert_eq!((job.prompt.as_str(), job.fork), ("old", false));
     }
 
     #[test]
@@ -176,7 +215,7 @@ mod tests {
         drop(SqliteStore::open(&path).unwrap());
         assert_eq!(
             SqliteStore::open(&path).unwrap().schema_version().unwrap(),
-            1
+            MIGRATIONS.len() as i64
         );
     }
 
@@ -190,10 +229,13 @@ mod tests {
         assert_eq!(names(&s), ["b", "a"]);
         s.touch(a.id, 30).unwrap();
         assert_eq!(names(&s), ["a", "b"]);
-        let got = s.get(a.id).unwrap().unwrap();
+        let got = SessionRepository::get(&s, a.id).unwrap().unwrap();
         assert_eq!(got.last_used_at, Some(30));
         assert_eq!(got.cwd, a.cwd);
-        assert_eq!(s.get(SessionId::random()).unwrap(), None);
+        assert_eq!(
+            SessionRepository::get(&s, SessionId::random()).unwrap(),
+            None
+        );
     }
 
     #[test]
@@ -220,7 +262,7 @@ mod tests {
         let (s, _, job) = store_with_job();
         s.append_event(job, "text", "lead", &"x".repeat(20_000), 3)
             .unwrap();
-        let (_, _, payload) = s.events_for_job(job).remove(0);
+        let payload = s.events(job).unwrap().remove(0).payload;
         assert!(payload.ends_with("…[truncated]"));
         assert!(payload.len() <= PAYLOAD_CAP + "…[truncated]".len());
     }
@@ -230,7 +272,7 @@ mod tests {
         let (s, _, job) = store_with_job();
         s.append_event(job, "text", "lead", &"é".repeat(5000), 3)
             .unwrap();
-        let (_, _, payload) = s.events_for_job(job).remove(0);
+        let payload = s.events(job).unwrap().remove(0).payload;
         assert!(
             payload
                 .trim_end_matches("…[truncated]")
@@ -250,6 +292,7 @@ mod tests {
             duration_ms: 44116,
             outcome: "success".into(),
             error: Some("x".into()),
+            text: "answer é".into(),
         };
         s.save_result(job, &r).unwrap();
         assert_eq!(s.result(job).unwrap(), Some(r));

@@ -10,14 +10,18 @@ use super::{OrStorage, SqliteStore};
 
 const COLS: &str = "id, name, cwd, model, permission_mode, created_at, last_used_at, archived";
 
+/// Reads a session id stored as text in column `idx`.
+pub(crate) fn session_id_at(r: &Row, idx: usize) -> rusqlite::Result<SessionId> {
+    let id: String = r.get(idx)?;
+    Uuid::parse_str(&id).map(SessionId).map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(idx, rusqlite::types::Type::Text, Box::new(e))
+    })
+}
+
 fn from_row(r: &Row) -> rusqlite::Result<Session> {
-    let id: String = r.get(0)?;
-    let id = Uuid::parse_str(&id).map_err(|e| {
-        rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
-    })?;
     let cwd: String = r.get(2)?;
     Ok(Session {
-        id: SessionId(id),
+        id: session_id_at(r, 0)?,
         name: r.get(1)?,
         cwd: PathBuf::from(cwd),
         model: r.get(3)?,

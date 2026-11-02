@@ -1,12 +1,16 @@
 //! `AgentRunner` adapter: runs each job as a `claude -p` child process.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use swarmux_application::ports::{AgentRunner, RunRequest, RunSink, RunnerMsg};
+use swarmux_domain::JobId;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tokio::runtime::Handle;
+use tokio::task::AbortHandle;
 
 use super::command::{build_args, user_message};
 use super::parse::parse_line;
@@ -14,10 +18,19 @@ use super::parse::parse_line;
 /// How much of the end of stderr is kept for error messages.
 const STDERR_TAIL: usize = 2048;
 
+/// Running jobs; aborting a job's task drops its child, which kills it.
+type Running = Arc<Mutex<HashMap<JobId, AbortHandle>>>;
+
 pub struct ClaudeCli {
     bin: PathBuf,
     env: Vec<(String, String)>,
     rt: Handle,
+    running: Running,
+}
+
+/// The map stays usable even if a task panicked while holding the lock.
+fn lock(running: &Running) -> MutexGuard<'_, HashMap<JobId, AbortHandle>> {
+    running.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 impl ClaudeCli {
@@ -26,7 +39,13 @@ impl ClaudeCli {
             bin,
             env: Vec::new(),
             rt,
+            running: Running::default(),
         }
+    }
+
+    /// How many jobs are still running.
+    pub fn running(&self) -> usize {
+        lock(&self.running).len()
     }
 
     /// Extra environment for every child (used by tests).
@@ -40,7 +59,22 @@ impl AgentRunner for ClaudeCli {
     fn start(&self, request: RunRequest, sink: RunSink) {
         let bin = self.bin.clone();
         let env = self.env.clone();
-        self.rt.spawn(run(bin, env, request, sink));
+        let job = request.job_id;
+        let running = self.running.clone();
+        // Held until the handle is stored, so a job that ends at once still
+        // finds (and removes) its own entry.
+        let mut map = lock(&self.running);
+        let task = self.rt.spawn(async move {
+            run(bin, env, request, sink).await;
+            lock(&running).remove(&job);
+        });
+        map.insert(job, task.abort_handle());
+    }
+
+    fn cancel(&self, job: JobId) {
+        if let Some(task) = lock(&self.running).remove(&job) {
+            task.abort();
+        }
     }
 }
 
