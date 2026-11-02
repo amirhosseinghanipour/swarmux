@@ -13,9 +13,10 @@ review live in one terminal.
 - **Prompt library** with `{{variables}}`, a real editor and one-key refinement
 - **Queue & dispatch** across sessions with a concurrency cap and RAM guard
 - **Live dashboard**: lead session, subagents, context, tokens, cost, timeline, log
-- **JEV decision layer**: routine choices (tool gate, which agent, which model,
-  retry/stop) settled locally in code in under a millisecond, so the big models
-  never see them
+- **Guard**: one permission policy across all sessions and an automatic loop
+  breaker, settled in code in under a millisecond so the models never see it
+- **JEV (optional, bring your own key)**: the hosted Jev model for fuzzy
+  decisions such as unmatched tool calls and which agent should take a prompt
 - **Review step**: a reviewer model checks each job's diff before it is done
 - **History**: every prompt with cost and outcome; re-run or fork from any point
 
