@@ -16,3 +16,16 @@ uuid = { version = "1.29.0", features = ["v4", "serde"] }
 
 [dev-dependencies]
 tempfile = "3.27.0"
+
+[features]
+# Builds the test-only `fake_claude` binary used by tests/runner.rs.
+fake-claude = []
+
+[[bin]]
+name = "swarmux"
+path = "src/main.rs"
+
+[[bin]]
+name = "fake_claude"
+path = "src/bin/fake_claude.rs"
+required-features = ["fake-claude"]
