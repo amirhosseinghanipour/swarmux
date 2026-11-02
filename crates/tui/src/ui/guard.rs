@@ -1,4 +1,4 @@
-//! The guard / JEV panel on the dashboard, and the approval and JEV consent
+//! Guard decision lines for the dashboard, and the approval and JEV consent
 //! overlays on every screen.
 
 use ratatui::{
@@ -8,13 +8,11 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Clear, Paragraph},
 };
-use swarmux_application::{DecisionRecord, JevState, Outcome, Source};
+use swarmux_application::{DecisionRecord, JevState, Outcome};
 
 use super::{BLUE, GREEN, MUTED, ORANGE, RED};
 use crate::app::App;
 
-/// Height of the guard panel, borders included.
-pub const PANEL_HEIGHT: u16 = 8;
 /// Height of the approval overlay, borders included.
 pub const APPROVAL_HEIGHT: u16 = 6;
 /// Height of the JEV consent overlay, borders included.
@@ -22,44 +20,8 @@ pub const CONSENT_HEIGHT: u16 = 9;
 /// Cells in a confidence bar.
 const BAR: usize = 10;
 
-/// Counts for this run, JEV's state and the latest decisions (guard and routing).
-pub fn render_panel(frame: &mut Frame, area: Rect, app: &App) {
-    let s = app.guard.stats();
-    let mut lines = vec![Line::from(vec![
-        Span::styled(format!("allow {}", s.allowed), Style::new().fg(GREEN)),
-        Span::styled(" · ", Style::new().fg(MUTED)),
-        Span::styled(format!("deny {}", s.denied), Style::new().fg(RED)),
-        Span::styled(" · ", Style::new().fg(MUTED)),
-        Span::styled(format!("ask {}", s.asked), Style::new().fg(ORANGE)),
-        Span::styled(" · ", Style::new().fg(MUTED)),
-        Span::styled(format!("pass {}", s.passed), Style::new().fg(MUTED)),
-        Span::styled(" · ", Style::new().fg(MUTED)),
-        Span::styled(format!("loop stops {}", s.stopped), Style::new().fg(RED)),
-    ])];
-    lines.push(jev_line(app));
-    let room = area.height.saturating_sub(4) as usize;
-    let mut recent: Vec<&DecisionRecord> = app.guard.recent().take(room).collect();
-    recent.extend(app.routing.recent().take(room));
-    recent.sort_by_key(|d| std::cmp::Reverse(d.ts));
-    recent.truncate(room);
-    if recent.is_empty() {
-        lines.push(Line::styled(
-            "no tool calls yet: every call your jobs make is checked here",
-            Style::new().fg(MUTED),
-        ));
-    }
-    lines.extend(recent.into_iter().map(|d| match (d.source, d.confidence) {
-        (Source::Jev, Some(c)) => jev_decision_line(d, c),
-        _ => decision_line(d),
-    }));
-    let block = Block::bordered()
-        .border_style(Style::new().fg(GREEN))
-        .title(Span::styled(" guard / JEV ", Style::new().fg(GREEN)));
-    frame.render_widget(Paragraph::new(lines).block(block), area);
-}
-
 /// Whether JEV is on, and how to turn it on when it isn't.
-fn jev_line(app: &App) -> Line<'static> {
+pub(crate) fn jev_line(app: &App) -> Line<'static> {
     let muted = Style::new().fg(MUTED);
     let Some(jev) = app.guard.jev() else {
         return Line::styled(
@@ -104,7 +66,7 @@ fn jev_line(app: &App) -> Line<'static> {
 }
 
 /// `jev   Bash make deploy ████████░░ 0.91 → allow`
-fn jev_decision_line(d: &DecisionRecord, confidence: f64) -> Line<'_> {
+pub(crate) fn jev_decision_line(d: &DecisionRecord, confidence: f64) -> Line<'_> {
     let (what, target) = if d.outcome == Outcome::Route {
         let rule = d.rule.as_deref().unwrap_or_default();
         let target = rule
@@ -146,7 +108,7 @@ pub fn bar(confidence: f64) -> String {
     format!("{}{}", "█".repeat(filled), "░".repeat(BAR - filled))
 }
 
-fn decision_line(d: &DecisionRecord) -> Line<'_> {
+pub(crate) fn decision_line(d: &DecisionRecord) -> Line<'_> {
     let color = match d.outcome {
         Outcome::Allow | Outcome::Route => GREEN,
         Outcome::Deny | Outcome::Stop => RED,
@@ -393,9 +355,9 @@ mod tests {
         t.send("hi");
         t.inbox.push(None, "Read", "/w/src/main.rs");
         t.app.update();
-        let out = render_to_string(&t.app, 120, 30);
-        assert!(out.contains(" guard / JEV "), "{out}");
-        assert!(out.contains("allow 1 · deny 0 · ask 0 · pass 0"), "{out}");
+        let out = render_to_string(&t.app, 160, 48);
+        assert!(out.contains("GUARD · fork layer · 1 decision "), "{out}");
+        assert!(out.contains("allow 100% of 1"), "{out}");
         assert!(out.contains("Read /w/src/main.rs  Read(**)"), "{out}");
     }
 
@@ -425,8 +387,8 @@ mod tests {
             );
         }
         t.app.update();
-        let out = render_to_string(&t.app, 140, 30);
-        assert!(out.contains("loop stops 1"), "{out}");
+        let out = render_to_string(&t.app, 160, 48);
+        assert!(out.contains("stop 1 · split → you 0"), "{out}");
         assert!(
             out.contains("loop guard: Bash failed the same way twice"),
             "{out}"

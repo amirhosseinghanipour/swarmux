@@ -73,6 +73,8 @@ pub enum Mode {
 
 pub struct App {
     pub screen: Screen,
+    /// Frames drawn so far; drives the spinners.
+    pub frame: u64,
     pub quit: bool,
     pub mode: Mode,
     pub sessions: Vec<Session>,
@@ -113,6 +115,7 @@ impl App {
     ) -> App {
         let mut app = App {
             screen: Screen::default(),
+            frame: 0,
             quit: false,
             mode: Mode::Normal,
             sessions: Vec::new(),
@@ -142,6 +145,7 @@ impl App {
         while !self.quit {
             self.update();
             terminal.draw(|frame| crate::ui::draw(frame, &self))?;
+            self.frame = self.frame.wrapping_add(1);
             if event::poll(FRAME)?
                 && let Event::Key(key) = event::read()?
                 && key.kind == KeyEventKind::Press
@@ -159,7 +163,11 @@ impl App {
         for (job, trip) in &report.loop_trips {
             errors.extend(self.guard.record_loop(*job, trip).err());
         }
-        errors.extend(self.guard.pump().errors);
+        let guard = self.guard.pump();
+        errors.extend(guard.errors);
+        for job in guard.decisions.iter().filter_map(|d| d.job_id) {
+            self.jobs.observe_decision(job);
+        }
         errors.extend(self.pump_routes());
         if let Some(e) = errors.into_iter().last() {
             self.error = Some(e.to_string());
@@ -185,6 +193,41 @@ impl App {
             return Some(p);
         }
         self.jobs.latest()
+    }
+
+    /// The review run of the current job, if there is one.
+    pub fn review_run(&self) -> Option<&JobProgress> {
+        let job = self.current_job()?;
+        if let Some(r) = self.dashboard.replayed_review()
+            && self.dashboard.replayed().map(|p| p.job_id) == Some(job.job_id)
+        {
+            return Some(r);
+        }
+        self.jobs.review_progress(job.job_id)
+    }
+
+    /// Where the current job's timeline ends (now, while anything runs).
+    pub fn timeline_end(&self) -> u32 {
+        let Some(job) = self.current_job() else {
+            return 0;
+        };
+        match self.jobs.progress(job.job_id) {
+            Some(_) => self.jobs.timeline_end(job.job_id),
+            None => self
+                .review_run()
+                .map_or(0, |r| r.log_offset + r.last_tick)
+                .max(job.last_tick),
+        }
+    }
+
+    /// Whether the next prompts get a review.
+    pub fn review_next(&self) -> bool {
+        self.jobs.review_next()
+    }
+
+    /// The reviewer's model.
+    pub fn review_model(&self) -> &str {
+        self.jobs.review_model()
     }
 
     /// Running, queued and recently finished jobs.
@@ -306,6 +349,19 @@ impl App {
                 let result = self.prompts_key(c, confirming_delete);
                 self.show(result);
             }
+            KeyCode::Char('v') if self.screen == Screen::Dashboard => {
+                let on = !self.jobs.review_next();
+                self.notice = Some(if self.jobs.set_review_next(on) {
+                    format!(
+                        "review on: the next jobs are audited by {} when they finish",
+                        self.jobs.review_model()
+                    )
+                } else if on {
+                    "review is not available: no git workspace configured".into()
+                } else {
+                    "review off for the next jobs".into()
+                });
+            }
             KeyCode::Char(c @ ('p' | 'P')) if self.screen == Screen::Dashboard => {
                 if self.sessions.is_empty() {
                     self.error = Some("create a session first: press 5 then n".into());
@@ -391,9 +447,16 @@ impl App {
     /// Shows `job` on the dashboard, rebuilding it from history if it is
     /// not from this run.
     fn view(&mut self, job: JobId) -> AppResult<()> {
+        // A review job is shown as part of the job it audits.
+        let mut job = self.jobs.subject_of(job);
         let replay = match self.jobs.progress(job) {
             Some(_) => None,
-            None => Some(self.history_service.replay(job)?),
+            None => {
+                if let Some(of) = self.history_service.detail(job)?.summary.review_of {
+                    job = of;
+                }
+                Some(self.history_service.replay_with_review(job)?)
+            }
         };
         self.dashboard.follow(job, replay);
         self.screen = Screen::Dashboard;
@@ -589,12 +652,12 @@ pub(crate) mod tests_support {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use swarmux_application::ports::PromptRepository;
     use swarmux_application::testing::{
-        FakeAdvisor, FakeConsents, FakeDecisionRepo, FakeHookInbox, FakeMonitor, FakeRouter,
-        FakeRuleWriter, FakeRunner, FakeWorkspace, FixedClock, InMemoryStore,
+        FakeAdvisor, FakeAgentCatalog, FakeConsents, FakeDecisionRepo, FakeHookInbox, FakeMonitor,
+        FakeRouter, FakeRuleWriter, FakeRunner, FakeWorkspace, FixedClock, InMemoryStore,
     };
     use swarmux_application::{
-        GuardService, HistoryService, Jev, JobService, PromptService, RoutingService,
-        SessionService, SharedPolicy,
+        GuardService, HistoryService, Jev, JobService, PromptService, ReviewSettings,
+        RoutingService, SessionService, SharedPolicy,
     };
     use swarmux_domain::{GuardPolicy, PromptDraft};
 
@@ -610,6 +673,7 @@ pub(crate) mod tests_support {
         pub decisions: Rc<FakeDecisionRepo>,
         pub rules: Rc<FakeRuleWriter>,
         pub router: Rc<FakeRouter>,
+        pub catalog: Rc<FakeAgentCatalog>,
         /// Set by [`test_app_with_jev`].
         pub advisor: Option<Rc<FakeAdvisor>>,
     }
@@ -635,8 +699,11 @@ pub(crate) mod tests_support {
         let monitor = Rc::new(FakeMonitor::default());
         let workspace = Rc::new(FakeWorkspace::with_diff("+diff"));
         let sessions = SessionService::new(store.clone(), clock.clone());
+        let catalog = Rc::new(FakeAgentCatalog::default());
         let jobs = JobService::new(store.clone(), store.clone(), runner.clone(), clock.clone())
-            .with_monitor(monitor.clone());
+            .with_monitor(monitor.clone())
+            .with_review(workspace.clone(), &ReviewSettings::default())
+            .with_agent_catalog(catalog.clone());
         let prompts = PromptService::new(store.clone(), store.clone(), workspace, clock.clone());
         let history = HistoryService::new(store.clone());
         let inbox = Rc::new(FakeHookInbox::default());
@@ -687,6 +754,7 @@ pub(crate) mod tests_support {
             decisions,
             rules,
             router,
+            catalog,
             advisor,
         }
     }

@@ -8,12 +8,21 @@ pub struct DashboardState {
     pub followed: Option<JobId>,
     /// A job from an earlier run, rebuilt from history.
     pub replay: Option<JobProgress>,
+    /// The review run of the replayed job, if it had one.
+    pub replay_review: Option<JobProgress>,
 }
 
 impl DashboardState {
-    pub fn follow(&mut self, job: JobId, replay: Option<JobProgress>) {
+    pub fn follow(&mut self, job: JobId, replay: Option<(JobProgress, Option<JobProgress>)>) {
         self.followed = Some(job);
+        let (replay, review) = replay.map_or((None, None), |(j, r)| (Some(j), r));
         self.replay = replay;
+        self.replay_review = review;
+    }
+
+    /// The review run of the replayed job.
+    pub fn replayed_review(&self) -> Option<&JobProgress> {
+        self.replayed().and(self.replay_review.as_ref())
     }
 
     /// The replayed progress of the followed job, if that is what is shown.

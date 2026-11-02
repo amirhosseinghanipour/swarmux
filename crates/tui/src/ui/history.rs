@@ -6,9 +6,9 @@ use ratatui::{
     widgets::{Block, Cell, Paragraph, Row, Table, TableState, Wrap},
 };
 use swarmux_application::JobDetail;
-use swarmux_domain::iso_minute;
+use swarmux_domain::{ReviewState, ReviewVerdict, iso_minute};
 
-use super::{MUTED, ORANGE, RED, short, status_span};
+use super::{GREEN, MUTED, ORANGE, RED, short, status_span};
 use crate::app::App;
 
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
@@ -108,6 +108,11 @@ fn render_detail(frame: &mut Frame, area: Rect, detail: Option<&JobDetail>) {
         lines.push(heading("result"));
         lines.extend(text.lines().map(|l| Line::raw(l.to_string())));
     }
+    if let Some(review) = &d.review {
+        lines.push(Line::raw(""));
+        lines.push(heading("review"));
+        lines.extend(review_lines(review));
+    }
     if let Some(e) = &s.error {
         lines.push(Line::raw(""));
         lines.push(Line::styled("error", Style::new().fg(RED)));
@@ -119,6 +124,49 @@ fn render_detail(frame: &mut Frame, area: Rect, detail: Option<&JobDetail>) {
             .block(panel(format!(" job #{} ", s.job_id))),
         area,
     );
+}
+
+/// The review's outcome, its concerns and what it cost.
+fn review_lines(review: &ReviewState) -> Vec<Line<'static>> {
+    let cost = |c: f64| Span::styled(format!(" · ${c:.4}"), Style::new().fg(MUTED));
+    match review {
+        ReviewState::Requested => vec![Line::styled("requested", Style::new().fg(MUTED))],
+        ReviewState::Running { job } => vec![Line::styled(
+            format!("running as job #{job}"),
+            Style::new().fg(MUTED),
+        )],
+        ReviewState::Done {
+            review,
+            job,
+            cost_usd,
+        } => {
+            let (text, color) = match review.verdict {
+                ReviewVerdict::Pass => ("passed", GREEN),
+                ReviewVerdict::Concerns => ("concerns", RED),
+            };
+            let mut lines = vec![Line::from(vec![
+                Span::styled(text, Style::new().fg(color)),
+                Span::raw(format!(
+                    " · {} diffs checked · job #{job}",
+                    review.diffs_checked
+                )),
+                cost(*cost_usd),
+            ])];
+            lines.extend(
+                review
+                    .concerns
+                    .iter()
+                    .map(|c| Line::styled(format!("- {c}"), Style::new().fg(RED))),
+            );
+            lines
+        }
+        ReviewState::Failed {
+            error, cost_usd, ..
+        } => vec![Line::from(vec![
+            Span::styled(format!("review failed: {error}"), Style::new().fg(RED)),
+            cost(*cost_usd),
+        ])],
+    }
 }
 
 #[cfg(test)]
@@ -209,6 +257,31 @@ mod tests {
     }
 
     #[test]
+    fn detail_shows_the_review() {
+        use swarmux_application::ports::JobRepository;
+        use swarmux_domain::{JobId, Review, ReviewState, ReviewVerdict};
+        let mut t = with_history();
+        let review = ReviewState::Done {
+            review: Review {
+                verdict: ReviewVerdict::Concerns,
+                concerns: vec!["no test for empty input".into()],
+                diffs_checked: 2,
+            },
+            job: JobId(9),
+            cost_usd: 0.0311,
+        };
+        t.store.set_review(JobId(1), &review).unwrap();
+        press(&mut t.app, KeyCode::Char('4'));
+        press(&mut t.app, KeyCode::Down);
+        let out = render_to_string(&t.app, 160, 30);
+        assert!(
+            out.contains("concerns · 2 diffs checked · job #9 · $0.0311"),
+            "{out}"
+        );
+        assert!(out.contains("- no test for empty input"), "{out}");
+    }
+
+    #[test]
     fn search_filters_as_you_type_and_esc_clears() {
         let mut t = with_history();
         press(&mut t.app, KeyCode::Char('/'));
@@ -262,7 +335,7 @@ mod tests {
         press(&mut t2.app, KeyCode::Down);
         press(&mut t2.app, KeyCode::Enter);
         assert_eq!(t2.app.screen, Screen::Dashboard);
-        let out = render_to_string(&t2.app, 120, 14);
+        let out = render_to_string(&t2.app, 160, 48);
         assert!(out.contains("done"), "{out}");
         assert!(out.contains("$0.2500"), "{out}");
     }

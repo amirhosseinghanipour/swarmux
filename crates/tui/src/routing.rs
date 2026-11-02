@@ -60,6 +60,8 @@ impl App {
                 Ok(job) => {
                     let line = routed.summary();
                     self.jobs.note(job, "route", &line);
+                    // Choosing the session was the job's first decision.
+                    self.jobs.observe_decision(job);
                     self.dashboard.follow(job, None);
                     self.notice = Some(line);
                     self.refresh_sessions(Some(&routed.session));
@@ -190,13 +192,13 @@ mod tests {
     #[test]
     fn consent_overlay_asks_once_and_y_turns_jev_on() {
         let mut t = test_app_with_jev(false);
-        let out = render_to_string(&t.app, 140, 30);
+        let out = render_to_string(&t.app, 160, 48);
         assert!(out.contains("fake.example"), "{out}");
         assert!(out.contains("Never file contents"), "{out}");
         t.keys([KeyCode::Char('y')]);
         let jev = t.app.guard.jev().unwrap().clone();
         assert_eq!(jev.state(), JevState::On);
-        let out = render_to_string(&t.app, 140, 30);
+        let out = render_to_string(&t.app, 160, 48);
         assert!(!out.contains("Never file contents"), "{out}");
         assert!(out.contains("JEV typesafe · threshold 0.85"), "{out}");
     }
@@ -206,7 +208,7 @@ mod tests {
         let mut t = test_app_with_jev(false);
         t.keys([KeyCode::Char('n')]);
         assert_eq!(t.app.guard.jev().unwrap().state(), JevState::Declined);
-        let out = render_to_string(&t.app, 140, 30);
+        let out = render_to_string(&t.app, 160, 48);
         assert!(out.contains("JEV typesafe off for this run"), "{out}");
         t.inbox.push(None, "Bash", "make");
         t.app.update();
@@ -229,13 +231,16 @@ mod tests {
         advisor.reply(1, advice(AdviceAnswer::Session("api".into()), 0.93));
         t.app.update();
         assert!(t.router.requests().is_empty(), "confident jev skips haiku");
-        let out = render_to_string(&t.app, 140, 34);
-        assert!(out.contains(" guard / JEV "), "{out}");
+        let out = render_to_string(&t.app, 160, 48);
+        assert!(out.contains("GUARD · fork layer"), "{out}");
         assert!(
             out.contains("Bash make deploy █████████░ 0.91 → allow"),
             "{out}"
         );
-        assert!(out.contains("which session █████████░ 0.93 → api"), "{out}");
+        assert!(
+            out.contains("which session ███████████░ 0.93 → api"),
+            "{out}"
+        );
         let rows = t.decisions.rows();
         assert!(
             rows.iter()
@@ -246,7 +251,7 @@ mod tests {
     #[test]
     fn jev_off_panel_explains_how_to_turn_it_on() {
         let t = test_app();
-        let out = render_to_string(&t.app, 140, 30);
+        let out = render_to_string(&t.app, 160, 48);
         assert!(
             out.contains("JEV off · bring your own key: swarmux jev set-key typesafe"),
             "{out}"
@@ -257,7 +262,7 @@ mod tests {
     fn without_a_key_no_consent_is_asked() {
         let mut t = test_app_with_jev(false);
         t.advisor.as_ref().unwrap().set_no_key(true);
-        let out = render_to_string(&t.app, 140, 30);
+        let out = render_to_string(&t.app, 160, 48);
         assert!(!out.contains("Never file contents"), "{out}");
         assert!(out.contains("no key found"), "{out}");
         t.with_session("a");

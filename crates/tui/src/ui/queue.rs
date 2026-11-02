@@ -166,7 +166,7 @@ mod tests {
         );
         t.app.update();
         press(&mut t.app, KeyCode::Enter);
-        let out = render_to_string(&t.app, 110, 12);
+        let out = render_to_string(&t.app, 160, 48);
         assert!(out.contains("from the first"), "{out}");
     }
 }

@@ -15,6 +15,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
+    widgets::Block,
 };
 use swarmux_application::QueueStats;
 use swarmux_domain::JobStatus;
@@ -26,8 +27,15 @@ pub const BLUE: Color = Color::Rgb(110, 160, 235);
 pub const GREEN: Color = Color::Rgb(110, 200, 130);
 pub const RED: Color = Color::Rgb(230, 90, 90);
 pub const MUTED: Color = Color::Rgb(120, 120, 140);
+/// Labels: a muted grey-purple.
+pub const LABEL: Color = Color::Rgb(150, 140, 180);
+/// Placeholders and empty tracks.
+pub const DIM: Color = Color::Rgb(75, 72, 90);
+/// The near-black background.
+pub const BG: Color = Color::Rgb(14, 13, 18);
 
 pub fn draw(frame: &mut Frame, app: &App) {
+    frame.render_widget(Block::new().style(Style::new().bg(BG)), frame.area());
     let [header, tabs, body, status] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
@@ -36,14 +44,16 @@ pub fn draw(frame: &mut Frame, app: &App) {
     ])
     .areas(frame.area());
 
-    frame.render_widget(
+    let title = if app.screen == Screen::Dashboard {
+        dashboard::header::title(app, &dashboard::View::of(app))
+    } else {
         Line::from(vec![
             Span::styled("SWARMUX", Style::new().add_modifier(Modifier::BOLD)),
             Span::styled("  ·  claude code command center", Style::new().fg(ORANGE)),
         ])
-        .centered(),
-        header,
-    );
+        .centered()
+    };
+    frame.render_widget(title, header);
     draw_tabs(frame, tabs, app.screen);
 
     match app.screen {
@@ -211,20 +221,21 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
                 ),
                 Style::new().fg(ORANGE),
             )),
+            _ if app.screen == Screen::Dashboard => {
+                dashboard::status::line(app, &dashboard::View::of(app))
+            }
             _ => Line::from(Span::styled(hints(app), Style::new().fg(MUTED))),
         },
     };
     frame.render_widget(line, area);
 }
 
-fn hints(app: &App) -> &'static str {
+pub(crate) fn hints(app: &App) -> &'static str {
     if app.prompts.form.is_some() {
         return " tab next field · ctrl+s save · esc cancel";
     }
     match app.screen {
-        Screen::Dashboard => {
-            " p prompt · P let swarmux route · ↑↓ session · 3 queue · 1-5 screens · q quit"
-        }
+        Screen::Dashboard => " p prompt · P route · v review · ↑↓ session · 1-5 screens · q quit",
         Screen::Queue => " c cancel · r retry · +/- priority · enter view · ↑↓ select · q quit",
         Screen::History => " / search · r re-run · f fork · enter view · ↑↓ select · q quit",
         Screen::Prompts => {
