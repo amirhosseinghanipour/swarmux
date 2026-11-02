@@ -5,7 +5,8 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
-use swarmux_application::{GuardSettings, Settings};
+use serde::de::IgnoredAny;
+use swarmux_application::{GuardSettings, JevProvider, JevSettings, Settings};
 use swarmux_domain::{Pattern, Unmatched};
 
 /// Why the config file couldn't be used.
@@ -35,6 +36,17 @@ struct RawConfig {
     min_free_ram_mb: Option<i64>,
     default_model: Option<String>,
     guard: Option<RawGuard>,
+    jev: Option<RawJev>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawJev {
+    provider: Option<String>,
+    threshold: Option<f64>,
+    timeout_ms: Option<i64>,
+    /// Only to refuse it with a clear message; its value is never read.
+    api_key: Option<IgnoredAny>,
 }
 
 #[derive(Deserialize)]
@@ -102,7 +114,48 @@ pub fn parse_settings(text: &str, path: &Path) -> Result<Settings, ConfigError> 
     if let Some(guard) = raw.guard {
         settings.guard = parse_guard(guard, text, path)?;
     }
+    if let Some(jev) = raw.jev {
+        settings.jev = parse_jev(jev, text, path)?;
+    }
     Ok(settings)
+}
+
+fn parse_jev(raw: RawJev, text: &str, path: &Path) -> Result<JevSettings, ConfigError> {
+    let error = |key: &str, message: &str| ConfigError {
+        path: path.to_path_buf(),
+        line: key_line(text, key),
+        message: message.to_string(),
+    };
+    if raw.api_key.is_some() {
+        return Err(error(
+            "api_key",
+            "keys aren't read from config.toml: run `swarmux jev set-key <provider>`              or set TYPESAFE_API_KEY / OPENROUTER_API_KEY",
+        ));
+    }
+    let mut jev = JevSettings::default();
+    if let Some(p) = raw.provider {
+        jev.provider = JevProvider::parse(p.trim()).ok_or_else(|| {
+            error(
+                "provider",
+                "provider must be \"off\", \"typesafe\" or \"openrouter\"",
+            )
+        })?;
+    }
+    if let Some(t) = raw.threshold {
+        if !(0.0..=1.0).contains(&t) {
+            return Err(error("threshold", "threshold must be between 0 and 1"));
+        }
+        jev.threshold = t;
+    }
+    if let Some(ms) = raw.timeout_ms {
+        jev.timeout_ms = Some(
+            u64::try_from(ms)
+                .ok()
+                .filter(|ms| (100..=60_000).contains(ms))
+                .ok_or_else(|| error("timeout_ms", "timeout_ms must be between 100 and 60000"))?,
+        );
+    }
+    Ok(jev)
 }
 
 fn parse_guard(raw: RawGuard, text: &str, path: &Path) -> Result<GuardSettings, ConfigError> {
@@ -321,6 +374,79 @@ alow = []",
         )
         .unwrap_err();
         assert!(e.message.contains("alow"), "{e}");
+    }
+
+    #[test]
+    fn jev_section_is_read() {
+        let s = parse(
+            "[jev]
+provider = \"openrouter\"
+threshold = 0.9
+timeout_ms = 3000
+",
+        )
+        .unwrap();
+        assert_eq!(
+            s.jev,
+            JevSettings {
+                provider: JevProvider::OpenRouter,
+                threshold: 0.9,
+                timeout_ms: Some(3000),
+            }
+        );
+        assert_eq!(parse("").unwrap().jev.provider, JevProvider::Off);
+        let only = parse(
+            "[jev]
+provider = \"typesafe\"",
+        )
+        .unwrap()
+        .jev;
+        assert_eq!((only.threshold, only.timeout_ms()), (0.85, 2000));
+    }
+
+    #[test]
+    fn bad_jev_values_are_rejected() {
+        let e = parse(
+            "[jev]
+provider = \"gpt\"",
+        )
+        .unwrap_err();
+        assert_eq!(e.line, Some(2));
+        assert!(e.message.contains("typesafe"), "{e}");
+        assert!(
+            parse(
+                "[jev]
+threshold = 1.5"
+            )
+            .is_err()
+        );
+        assert!(
+            parse(
+                "[jev]
+timeout_ms = 0"
+            )
+            .is_err()
+        );
+        assert!(
+            parse(
+                "[jev]
+model = \"x\""
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn keys_in_config_are_refused_without_echoing_them() {
+        let e = parse(
+            "[jev]
+provider = \"typesafe\"
+api_key = \"sk-SECRET-123\"",
+        )
+        .unwrap_err();
+        assert_eq!(e.line, Some(3));
+        assert!(e.message.contains("swarmux jev set-key"), "{e}");
+        assert!(!e.to_string().contains("SECRET"), "{e}");
     }
 
     #[test]
