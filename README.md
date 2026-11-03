@@ -372,18 +372,19 @@ goes first, then the reviewer becomes one line and the cards a list); below
 
 swarmux paints its own background (the default `reference` theme is OLED
 black, with orange for Opus/Sonnet and the lead, blue for Haiku and green for
-the Guard), so your terminal's colour scheme never shows through.
+the Guard), so your terminal's colour scheme never shows through (unless you set
+`bg = "none"`, below).
 
 | Key | Does |
 | --- | --- |
-| `t` | next theme (on Focus `t` opens the session in a terminal tab instead): `reference`, `catppuccin-mocha`, `tokyo-night`, `gruvbox-dark`, `rose-pine`, `nord`, `dracula` |
+| `t` | next theme (on Focus `t` opens the session in a terminal tab instead): `reference` (alias `oled`), `catppuccin-mocha`, `tokyo-night`, `gruvbox-dark`, `rose-pine`, `nord`, `dracula`, `nocturne`, `catppuccin-latte`, `okabe-ito`, `kanagawa`, `everforest` |
 | `L` | next layout: `command` (the dashboard above), `btop` (a dense grid of small panels), `minimal` (lead and log), then yours |
 | `Tab` / `Shift+Tab` | move the focus highlight between panels (`Esc` clears it) |
 
 ```toml
 theme = "tokyo-night"   # any name above
 layout = "btop"         # command, btop, minimal or one of [[layouts]]
-icons = "nerd"          # "ascii" (default), "unicode" or "nerd" for Nerd Font glyphs
+icons = "unicode"       # "unicode" (default), "ascii", "nerd", or "auto" (see Themes)
 gaps = 1                # blank cells between panels, 0-4
 fps = 10                # frames per second, 1-30
 low_power = false       # true: 4 fps, no easing or pulses
@@ -408,6 +409,51 @@ telemetry panels `usage`, `burn`, `tokens`, `context`, `agents`, `todos`,
 show "waiting for data" until their feed is connected. A panel too small for
 its full view collapses to one line; when even that doesn't fit, the least
 important panels are hidden first.
+
+### Themes
+
+Every theme keeps text at 4.5:1 or better against its background and every
+coloured mark at 3:1 or better; a test checks all of them. `reference` is
+pure `#000000` and stays the default (`oled` is another name for it).
+`nocturne` is near-black blue-grey with a periwinkle accent,
+`catppuccin-latte` is the light one, and `okabe-ito` uses the eight
+colour-blind-safe Okabe-Ito hues, so warnings, errors and "ok" stay apart for
+deuteranopes.
+
+```toml
+theme = "nocturne"
+bg = "none"             # don't paint a background: panels and gaps show your terminal's
+icons = "auto"          # Nerd Font glyphs when SWARMUX_ICONS=nerd, NERD_FONT=1 or `font` says so
+font = "JetBrainsMono NF"   # a hint for icons = "auto"; "Nerd" or an NF/NFM/NFP suffix counts
+
+[themes.mine]           # your own; unset roles come from `base` (default: reference)
+base = "nord"
+lead = "#ff9e64"
+error = "#ff5c6c"
+gauge = ["#7fd99a", "#e6c37a", "#ff6b7a"]   # low, mid, high
+```
+
+With `bg = "none"` the screen background, panels and the gaps between them are
+left to the terminal, which is how a transparent or blurred terminal shows
+through. Choose a theme whose text suits your terminal's background.
+
+Take colours from the rest of your desktop; swarmux reads the file again
+within a second of it changing:
+
+| `theme =` | Reads |
+| --- | --- |
+| `"wal"` | pywal, `~/.cache/wal/colors.json` |
+| `"base16:~/schemes/gruvbox.yaml"` | a base16 scheme (flat or `palette:` YAML) |
+| `"matugen:~/.cache/matugen/colors.json"` | matugen's JSON (the `dark` scheme) |
+
+Share a theme, or give your terminal the same palette:
+
+```
+swarmux theme list
+swarmux theme export nocturne                      # a [themes.nocturne] block for config.toml
+swarmux theme export nord --format base16          # also: kitty, alacritty, wezterm
+swarmux theme export wal --format kitty > wal.conf # imports can be exported too
+```
 
 Colours are truecolor when `COLORTERM` is `truecolor` or `24bit` (or inside
 Windows Terminal) and fall back to the 256-colour palette otherwise.
