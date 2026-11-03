@@ -8,6 +8,7 @@ mod decision;
 mod error;
 mod guard;
 mod history;
+pub mod hookbus;
 mod jev;
 mod jobs;
 pub mod ledger;
@@ -27,6 +28,10 @@ pub use guard::{
     AlwaysAllowed, GuardReport, GuardService, GuardStats, PendingApproval, SharedPolicy,
 };
 pub use history::{HISTORY_LIMIT, HistoryService, JobDetail, JobSummary};
+pub use hookbus::{
+    AllowStop, HookBus, HookFeed, HookNotice, NoSessionContext, SessionSignals,
+    SessionStartContext, SessionStartInfo, StopAnswer, StopContext, StopPolicy,
+};
 pub use jev::{Jev, JevState, SUMMARY_MAX, summarize};
 pub use jobs::{JobFact, JobService, PumpReport, QueueEntry, QueueStats};
 pub use prompts::{BUILTIN_VARIABLES, PromptService, RenderedPrompt};

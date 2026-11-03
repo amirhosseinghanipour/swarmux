@@ -861,3 +861,21 @@ impl Ledger for InMemoryLedger {
             .collect())
     }
 }
+
+/// Lifecycle events pushed by the test.
+#[derive(Default)]
+pub struct FakeHookFeed {
+    queue: RefCell<Vec<crate::hookbus::HookNotice>>,
+}
+
+impl FakeHookFeed {
+    pub fn push(&self, notice: crate::hookbus::HookNotice) {
+        self.queue.borrow_mut().push(notice);
+    }
+}
+
+impl crate::hookbus::HookFeed for FakeHookFeed {
+    fn poll_notices(&self) -> Vec<crate::hookbus::HookNotice> {
+        std::mem::take(&mut *self.queue.borrow_mut())
+    }
+}

@@ -100,11 +100,14 @@ impl MissionState {
         &mut self,
         guard: &GuardService,
         jobs: &JobService,
+        hook_changes: &[Change],
         now: Millis,
         cwd: Option<&Path>,
     ) {
         self.items = self.attention.collect(guard, jobs, now);
-        self.changes = self.attention.changes(guard, jobs, CHANGES_KEPT);
+        self.changes = self
+            .attention
+            .changes(guard, jobs, hook_changes, CHANGES_KEPT);
         self.facts = jobs.facts();
         self.keep_selection();
         if let Some(feed) = &self.feed {
@@ -448,6 +451,7 @@ mod tests {
             todos_total: 5,
             loop_stops: 0,
             agents_running: 1,
+            session_state: None,
         }
     }
 

@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 
 use swarmux_domain::{
     AttentionId, AttentionItem, HeldCall, JobId, JobStatus, Millis, ReviewState, ReviewVerdict,
-    STALL_AFTER_MS, SessionId, rank,
+    STALL_AFTER_MS, SessionId, SessionState, rank,
 };
 
 use crate::{DecisionRecord, GuardService, JobFact, JobService, Outcome, PendingApproval};
@@ -86,7 +86,8 @@ impl AttentionService {
             items.push(AttentionItem::approval(&call, since, deadline));
         }
         for f in facts.iter().filter(|f| f.review_of.is_none()) {
-            items.extend(job_item(f, facts, now));
+            let held = approvals.iter().any(|a| a.request.job_id == Some(f.job_id));
+            items.extend(job_item(f, facts, now, held));
         }
         items.retain(|i| !self.acknowledged.contains(&i.id));
         // Forget what has gone, so a reused id starts fresh.
@@ -115,9 +116,16 @@ impl AttentionService {
 
     /// The latest changes, newest first: job lifecycle and the notable guard
     /// decisions (denials, held calls, loop stops, routing).
-    pub fn changes(&self, guard: &GuardService, jobs: &JobService, limit: usize) -> Vec<Change> {
+    /// `extra` are changes from other sources (the hook bus).
+    pub fn changes(
+        &self,
+        guard: &GuardService,
+        jobs: &JobService,
+        extra: &[Change],
+        limit: usize,
+    ) -> Vec<Change> {
         let decisions: Vec<&DecisionRecord> = guard.recent().collect();
-        changes_from(&jobs.facts(), &decisions, limit)
+        changes_from(&jobs.facts(), &decisions, extra, limit)
     }
 }
 
@@ -143,7 +151,7 @@ fn title_of(f: &JobFact) -> String {
         .to_string()
 }
 
-fn job_item(f: &JobFact, facts: &[JobFact], now: Millis) -> Option<AttentionItem> {
+fn job_item(f: &JobFact, facts: &[JobFact], now: Millis, held: bool) -> Option<AttentionItem> {
     let title = title_of(f);
     let session: SessionId = f.session_id;
     let ended = f.finished_at.unwrap_or(f.created_at);
@@ -194,6 +202,15 @@ fn job_item(f: &JobFact, facts: &[JobFact], now: Millis) -> Option<AttentionItem
             }
         },
         JobStatus::Running => {
+            if f.session_state == Some(SessionState::RequiresAction) && !held {
+                let since = f.last_event_at.or(f.started_at).unwrap_or(now);
+                return Some(AttentionItem::needs_input(
+                    f.job_id,
+                    f.session_id,
+                    &title,
+                    since,
+                ));
+            }
             let last = f.last_event_at.or(f.started_at)?;
             (now - last >= STALL_AFTER_MS)
                 .then(|| AttentionItem::stalled(f.job_id, session, &title, last))
@@ -202,7 +219,12 @@ fn job_item(f: &JobFact, facts: &[JobFact], now: Millis) -> Option<AttentionItem
     }
 }
 
-fn changes_from(facts: &[JobFact], decisions: &[&DecisionRecord], limit: usize) -> Vec<Change> {
+fn changes_from(
+    facts: &[JobFact],
+    decisions: &[&DecisionRecord],
+    extra: &[Change],
+    limit: usize,
+) -> Vec<Change> {
     let name_of = |job: Option<JobId>| {
         job.and_then(|j| facts.iter().find(|f| f.job_id == j))
             .map_or_else(|| "?".to_string(), |f| f.session_name.clone())
@@ -255,6 +277,12 @@ fn changes_from(facts: &[JobFact], decisions: &[&DecisionRecord], limit: usize) 
             text: text.trim().to_string(),
         });
     }
+    for c in extra {
+        out.push(Change {
+            session: name_of(c.job),
+            ..c.clone()
+        });
+    }
     out.sort_by(|a, b| b.at.cmp(&a.at).then(b.job.cmp(&a.job)));
     out.truncate(limit);
     out
@@ -262,7 +290,7 @@ fn changes_from(facts: &[JobFact], decisions: &[&DecisionRecord], limit: usize) 
 
 #[cfg(test)]
 mod tests {
-    use swarmux_domain::{AttentionKind, Priority, Review};
+    use swarmux_domain::{AttentionKind, Priority, Review, SessionState};
 
     use super::*;
     use crate::ports::HookRequest;
@@ -290,6 +318,7 @@ mod tests {
             todos_total: 0,
             loop_stops: 0,
             agents_running: 0,
+            session_state: None,
         }
     }
 
@@ -468,7 +497,7 @@ mod tests {
         };
         let allow = decision(Outcome::Allow, 9_500, "Read");
         let deny = decision(Outcome::Deny, 8_000, "Bash");
-        let rows = changes_from(&[done, running], &[&allow, &deny], 10);
+        let rows = changes_from(&[done, running], &[&allow, &deny], &[], 10);
         let text: Vec<_> = rows
             .iter()
             .map(|c| format!("{} {} {}", c.at, c.session, c.text))
@@ -482,6 +511,48 @@ mod tests {
                 "2000 s1 job started"
             ]
         );
-        assert_eq!(changes_from(&[], &[&deny], 0).len(), 0);
+        assert_eq!(changes_from(&[], &[&deny], &[], 0).len(), 0);
+    }
+
+    #[test]
+    fn requires_action_without_a_held_call_is_a_p2_question() {
+        let mut waiting = fact(1, JobStatus::Running);
+        waiting.session_state = Some(SessionState::RequiresAction);
+        let mut explained = fact(2, JobStatus::Running);
+        explained.session_state = Some(SessionState::RequiresAction);
+        let mut busy = fact(3, JobStatus::Running);
+        busy.session_state = Some(SessionState::Running);
+        let held = vec![held(7, 2, "Bash", "make", 60)];
+        let items = AttentionService::new().collect_from(&held, &[waiting, explained, busy], 5_000);
+        let got: Vec<_> = items
+            .iter()
+            .map(|i| (i.id.to_string(), i.kind, i.priority))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("approval:7".into(), AttentionKind::Approval, Priority::P2),
+                (
+                    "job:1:question".into(),
+                    AttentionKind::Question,
+                    Priority::P2
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn extra_changes_are_named_and_merged() {
+        let f = fact(1, JobStatus::Running);
+        let extra = Change {
+            at: 9_000,
+            job: Some(JobId(1)),
+            session: String::new(),
+            kind: ChangeKind::Denied,
+            text: "classifier denied Bash".into(),
+        };
+        let rows = changes_from(&[f], &[], &[extra], 10);
+        assert_eq!(rows[0].session, "s1");
+        assert_eq!(rows[0].kind, ChangeKind::Denied);
     }
 }

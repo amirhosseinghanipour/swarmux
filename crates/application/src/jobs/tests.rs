@@ -571,3 +571,33 @@ fn free_memory_is_read_with_nothing_queued() {
     assert_eq!(f.svc.stats().free_ram, Some(3 * GB));
     assert_eq!(f.runner.started(), 0);
 }
+
+#[test]
+fn session_state_is_tracked_while_running_and_dropped_when_done() {
+    let mut f = fixture();
+    let job = f.svc.dispatch(f.session.id, "a").unwrap();
+    let state = |f: &Fixture| {
+        f.svc
+            .facts()
+            .iter()
+            .find(|x| x.job_id == job)
+            .unwrap()
+            .session_state
+    };
+    assert_eq!(state(&f), None);
+    f.runner.emit(
+        0,
+        RunnerMsg::Event(AgentEvent::SessionState(SessionState::RequiresAction)),
+    );
+    f.svc.pump();
+    assert_eq!(state(&f), Some(SessionState::RequiresAction));
+    f.runner.emit(
+        0,
+        RunnerMsg::Event(AgentEvent::SessionState(SessionState::Running)),
+    );
+    f.svc.pump();
+    assert_eq!(state(&f), Some(SessionState::Running));
+    f.finish(0);
+    f.svc.pump();
+    assert_eq!(state(&f), None);
+}

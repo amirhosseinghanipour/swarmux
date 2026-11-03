@@ -233,6 +233,23 @@ impl LedgerService {
         )
     }
 
+    /// A lifecycle event reported through a Claude Code hook.
+    pub fn record_hook_event(
+        &self,
+        n: &crate::hookbus::HookNotice,
+        session: Option<SessionId>,
+        now: Millis,
+    ) -> AppResult<()> {
+        let payload = Payload::new()
+            .str("event", n.event.as_str())
+            .opt_str("tool", n.tool.as_deref())
+            .str("session", &n.session)
+            .text("summary", &n.summary)
+            .str("input_sha256", &n.input_sha256)
+            .int("input_len", saturating(n.input_len as u64));
+        self.append(now, LedgerKind::AgentEvent, "hook", n.job, session, payload)
+    }
+
     pub fn record_decision(&self, d: &DecisionRecord) -> AppResult<()> {
         let payload = Payload::new()
             .str("source", d.source.as_str())

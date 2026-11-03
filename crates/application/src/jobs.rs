@@ -9,7 +9,8 @@ use swarmux_domain::telemetry::{
 };
 use swarmux_domain::{
     AgentEvent, DomainError, Job, JobId, JobProgress, JobResult, JobStatus, Limits, LoopBreaker,
-    LoopTrip, Millis, PromptId, ReviewState, Session, SessionId, describe, plan, run_order,
+    LoopTrip, Millis, PromptId, ReviewState, Session, SessionId, SessionState, describe, plan,
+    run_order,
 };
 
 use crate::ports::{
@@ -38,6 +39,8 @@ struct Tracked {
     finished_at: Option<Millis>,
     /// How the job ended, once it has.
     outcome: Option<JobOutcome>,
+    /// What Claude Code last said the session is doing.
+    session_state: Option<SessionState>,
 }
 
 /// What a finished job reported, as the inbox needs it.
@@ -95,6 +98,8 @@ pub struct JobFact {
     pub loop_stops: u32,
     /// Subagents running now.
     pub agents_running: u32,
+    /// What Claude Code last said the session is doing, while it runs.
+    pub session_state: Option<SessionState>,
 }
 
 /// Counts for the status bar.
@@ -518,6 +523,7 @@ impl JobService {
                     todos_total: t.activity.todos.len() as u32,
                     loop_stops: p.loop_stops.len() as u32,
                     agents_running: p.subagents_running() as u32,
+                    session_state: t.session_state.filter(|_| p.status == JobStatus::Running),
                 }
             })
             .collect()
@@ -581,6 +587,7 @@ impl JobService {
             last_event_at: None,
             finished_at: None,
             outcome: None,
+            session_state: None,
         });
     }
 
@@ -783,6 +790,9 @@ impl JobService {
                         &describe(&ev),
                         now,
                     )?;
+                }
+                if let AgentEvent::SessionState(state) = &ev {
+                    self.tracked[i].session_state = Some(*state);
                 }
                 self.observe_telemetry(i, job_id, &ev, now)?;
                 let finished = self.tracked[i].progress.apply(&ev, tick);

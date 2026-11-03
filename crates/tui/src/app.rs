@@ -10,9 +10,9 @@ use std::rc::Rc;
 
 use swarmux_application::ports::Clock;
 use swarmux_application::{
-    AppError, AppResult, GuardService, HistoryService, JobService, PendingApproval, PromptService,
-    QueueEntry, QueueStats, RoutingService, SessionService, TelemetryService, TelemetrySettings,
-    UiSettings,
+    AppError, AppResult, GuardService, HistoryService, HookBus, JobService, PendingApproval,
+    PromptService, QueueEntry, QueueStats, RoutingService, SessionService, TelemetryService,
+    TelemetrySettings, UiSettings,
 };
 use swarmux_domain::{AttentionKind, JobId, JobProgress, Millis, PromptId, Session, SessionId};
 
@@ -129,6 +129,8 @@ pub struct App {
     toast: Option<(String, u64)>,
     /// What the splash screen shows.
     pub splash: SplashInfo,
+    /// Lifecycle events reported by the agents' hooks.
+    hooks: Option<HookBus>,
 }
 
 /// What the composition root knows at start-up.
@@ -184,6 +186,7 @@ impl App {
             look: Look::default(),
             anim: RefCell::new(Anim::default()),
             telemetry: Telemetry::default(),
+            hooks: None,
             focus: None,
             toast: None,
             splash: SplashInfo::default(),
@@ -213,6 +216,12 @@ impl App {
         if ui.splash && !launch.no_splash {
             self.look.splash_until = Some(self.frame + self.look.frames(SPLASH_MS));
         }
+        self
+    }
+
+    /// Records the agents' lifecycle events and shows what they say.
+    pub fn with_hook_bus(mut self, bus: HookBus) -> App {
+        self.hooks = Some(bus);
         self
     }
 
@@ -258,8 +267,13 @@ impl App {
     fn refresh_mission(&mut self) {
         let now = self.now();
         let cwd = self.selected_session().map(|s| s.cwd.clone());
+        let hook_changes = self
+            .hooks
+            .as_ref()
+            .map(HookBus::changes)
+            .unwrap_or_default();
         self.mission
-            .refresh(&self.guard, &self.jobs, now, cwd.as_deref());
+            .refresh(&self.guard, &self.jobs, &hook_changes, now, cwd.as_deref());
     }
 
     /// New data for the telemetry panels.
@@ -305,6 +319,9 @@ impl App {
         errors.extend(guard.errors);
         for job in guard.decisions.iter().filter_map(|d| d.job_id) {
             self.jobs.observe_decision(job);
+        }
+        if let Some(hooks) = &mut self.hooks {
+            errors.extend(hooks.pump());
         }
         errors.extend(self.pump_routes());
         if let Some(e) = errors.into_iter().last() {
