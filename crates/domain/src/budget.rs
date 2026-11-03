@@ -135,6 +135,9 @@ pub struct GovernorPolicy {
     pub downgrade_to: String,
     /// How far ahead a job's window use is forecast.
     pub horizon: Millis,
+    /// New work waits while the user's inbox load is above this share
+    /// (0 to 1); `1.0` or more never holds.
+    pub load_hold_at: f64,
 }
 
 impl Default for GovernorPolicy {
@@ -144,6 +147,7 @@ impl Default for GovernorPolicy {
             downgrade_at: 0.90,
             downgrade_to: "sonnet".into(),
             horizon: 30 * MINUTE,
+            load_hold_at: crate::alarm::HOLD_AT,
         }
     }
 }
@@ -167,6 +171,12 @@ pub enum Admission {
         used: f64,
         ahead: f64,
     },
+    /// Wait: the user is working the inbox as much as they can take, so
+    /// no new work starts until the load is back under `at`.
+    Hold {
+        load: f64,
+        at: f64,
+    },
 }
 
 impl Admission {
@@ -174,11 +184,17 @@ impl Admission {
         matches!(self, Admission::Defer { .. })
     }
 
+    /// Held back by the supervisor's load, not by a usage window.
+    pub fn is_held(&self) -> bool {
+        matches!(self, Admission::Hold { .. })
+    }
+
     /// "deferred: 5h at 94%, resumes 15:58"; `None` when simply admitted.
     pub fn reason(&self, offset_min: i32) -> Option<String> {
         let pct = |u: f64| (u * 100.0).round().clamp(0.0, 100.0) as u32;
         match self {
             Admission::Admit => None,
+            Admission::Hold { load, .. } => Some(format!("held: you're at {}% load", pct(*load))),
             Admission::Defer {
                 window,
                 used,
@@ -290,6 +306,28 @@ pub fn admit(
             ahead,
         },
         None => Admission::Admit,
+    }
+}
+
+/// `admission`, unless the user is working the inbox beyond the policy's
+/// load line: then new work waits. A usage window that already defers the
+/// job says so first, and verification is never held (it clears the inbox).
+pub fn hold_for_load(
+    policy: &GovernorPolicy,
+    admission: Admission,
+    class: JobClass,
+    load: Option<f64>,
+) -> Admission {
+    match (admission, load) {
+        (Admission::Admit | Admission::Downgrade { .. }, Some(load))
+            if class == JobClass::Work && load.is_finite() && load > policy.load_hold_at =>
+        {
+            Admission::Hold {
+                load,
+                at: policy.load_hold_at,
+            }
+        }
+        (admission, _) => admission,
     }
 }
 

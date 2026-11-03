@@ -3,6 +3,7 @@
 //! Depends on nothing but `uuid`, `thiserror` and `sha2`. No I/O, no clocks, no
 //! frameworks; time is always passed in by the caller.
 
+pub mod alarm;
 mod attention;
 pub mod budget;
 mod date;
@@ -30,8 +31,8 @@ mod tokens;
 mod worktree;
 
 pub use attention::{
-    AttentionId, AttentionItem, AttentionKind, HeldCall, Likelihood, Priority, STALL_AFTER_MS,
-    is_destructive, rank,
+    AttentionId, AttentionItem, AttentionKind, CallContext, HeldCall, Likelihood, Priority,
+    STALL_AFTER_MS, is_destructive, rank,
 };
 pub use date::{iso_date, iso_minute, parse_iso_millis};
 pub use error::DomainError;

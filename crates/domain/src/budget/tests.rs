@@ -387,6 +387,7 @@ fn property_admission_respects_the_hold_threshold() {
             downgrade_at: rng.range(0.3, 1.0),
             downgrade_to: (*rng.pick(&["haiku", "sonnet"])).into(),
             horizon: (rng.range(0.0, 3.0) * HOUR as f64) as Millis,
+            load_hold_at: 1.0,
         };
         let model = *rng.pick(&models);
         let class = if rng.next().is_multiple_of(4) {
@@ -422,6 +423,7 @@ fn property_admission_respects_the_hold_threshold() {
                 assert!(tier(to).is_some());
             }
             Admission::Admit => assert!(!must_hold, "admitted at the limit: {windows:?}"),
+            Admission::Hold { .. } => unreachable!("`admit` knows nothing of load"),
         }
         // Stale readings never hold anything back.
         let after = windows
@@ -439,7 +441,7 @@ fn property_lower_use_never_admits_less() {
     let rank = |a: &Admission| match a {
         Admission::Admit => 2,
         Admission::Downgrade { .. } => 1,
-        Admission::Defer { .. } => 0,
+        Admission::Defer { .. } | Admission::Hold { .. } => 0,
     };
     for _ in 0..10_000 {
         let now = DAY;
@@ -503,4 +505,46 @@ fn budget_line_names_the_cap_and_the_windows() {
     assert_eq!(budget_line(&[], None, 0.97, now, 0), None);
     // A reset window says nothing.
     assert_eq!(budget_line(&w, None, 0.97, 4 * DAY, 0), None);
+}
+
+#[test]
+fn the_load_hold_only_touches_new_work_the_windows_let_through() {
+    let p = GovernorPolicy::default();
+    let hold = |a, class, load| hold_for_load(&p, a, class, load);
+    assert_eq!(
+        hold(Admission::Admit, JobClass::Work, Some(0.78)),
+        Admission::Hold {
+            load: 0.78,
+            at: 0.70
+        }
+    );
+    assert_eq!(
+        hold(Admission::Admit, JobClass::Work, Some(0.78))
+            .reason(0)
+            .as_deref(),
+        Some("held: you're at 78% load")
+    );
+    assert_eq!(
+        hold(Admission::Admit, JobClass::Work, Some(0.70)),
+        Admission::Admit
+    );
+    assert_eq!(
+        hold(Admission::Admit, JobClass::Work, None),
+        Admission::Admit
+    );
+    assert_eq!(
+        hold(Admission::Admit, JobClass::Verify, Some(0.99)),
+        Admission::Admit
+    );
+    assert_eq!(
+        hold(Admission::Admit, JobClass::Work, Some(f64::NAN)),
+        Admission::Admit
+    );
+    let defer = Admission::Defer {
+        window: "five_hour".into(),
+        used: 0.99,
+        until: None,
+    };
+    assert_eq!(hold(defer.clone(), JobClass::Work, Some(0.99)), defer);
+    assert!(Admission::Hold { load: 0.8, at: 0.7 }.is_held());
 }
