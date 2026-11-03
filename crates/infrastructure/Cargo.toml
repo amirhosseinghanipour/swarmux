@@ -24,6 +24,7 @@ toml.workspace = true
 uuid.workspace = true
 
 [target.'cfg(windows)'.dependencies]
+tauri-winrt-notification = "0.8.1"
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Power", "Win32_System_Time"] }
 
 [dev-dependencies]

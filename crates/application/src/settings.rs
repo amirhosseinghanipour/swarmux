@@ -23,6 +23,7 @@ pub struct Settings {
     pub ui: UiSettings,
     pub worktree: WorktreeSettings,
     pub governor: GovernorSettings,
+    pub notify: crate::NotifySettings,
 }
 
 /// The `[governor]` section: when queued work waits for a usage window to
@@ -247,6 +248,7 @@ impl Default for Settings {
             ui: UiSettings::default(),
             worktree: WorktreeSettings::default(),
             governor: GovernorSettings::default(),
+            notify: crate::NotifySettings::default(),
         }
     }
 }

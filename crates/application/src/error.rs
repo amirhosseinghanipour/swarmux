@@ -29,6 +29,9 @@ pub enum AppError {
     /// The settings file couldn't be changed.
     #[error("config error: {0}")]
     Config(String),
+    /// A notification could not be delivered.
+    #[error("notification failed: {0}")]
+    Notify(String),
     #[error("mission {0} not found")]
     MissionNotFound(String),
     /// The mission can't take that step now.

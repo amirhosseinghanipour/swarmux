@@ -548,3 +548,65 @@ fn the_load_hold_follows_the_time_spent_in_the_inbox() {
     assert_eq!(runner.started(), 1);
     assert_eq!(svc.stats().held, 0);
 }
+
+/// Notifications are fed what the inbox shows, so they follow its rules.
+#[test]
+fn notifications_honor_focus_mode_and_shelving_but_never_hold_p1() {
+    use std::cell::RefCell;
+
+    use crate::AppResult;
+    use crate::notify::{Notification, Notifier, NotifyService, NotifySettings};
+
+    struct Log(Rc<RefCell<Vec<Notification>>>);
+    impl Notifier for Log {
+        fn notify(&self, n: &Notification) -> AppResult<()> {
+            self.0.borrow_mut().push(n.clone());
+            Ok(())
+        }
+    }
+    let sent = Rc::new(RefCell::new(Vec::new()));
+    let mut notify =
+        NotifyService::new(Box::new(Log(sent.clone())), NotifySettings::default(), || 0);
+    let ids = |sent: &Rc<RefCell<Vec<Notification>>>| {
+        sent.borrow()
+            .iter()
+            .map(|n| n.id.to_string())
+            .collect::<Vec<_>>()
+    };
+
+    let mut p = Plant::new();
+    p.svc.set_focus(true, p.now);
+    let edit = p.hold("Edit", "src/lib.rs");
+    let wipe = p.hold("Bash", "rm -rf build");
+
+    // Window away, focus mode on: the deferred P2 stays quiet, P1 does not.
+    let items = p.look();
+    assert!(notify.observe(&items, true, p.now).is_empty());
+    assert_eq!(ids(&sent), [format!("approval:{wipe}")]);
+
+    // A breakpoint makes the P2 due, and then it notifies.
+    p.wait(30 * SEC);
+    p.svc.breakpoint(Breakpoint::TileSwitched);
+    let items = p.look();
+    notify.observe(&items, true, p.now);
+    assert_eq!(
+        ids(&sent),
+        [format!("approval:{wipe}"), format!("approval:{edit}")]
+    );
+
+    // A shelved P2 is not due, so it does not notify.
+    let mut q = Plant::new();
+    let ask = q.hold("Edit", "src/a.rs");
+    let items = q.look();
+    let item = by_request(&items, ask).clone();
+    assert!(q.svc.shelve(&item, ShelveFor::Minutes(15), q.now).unwrap());
+    let (mut quiet, seen) = {
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        (
+            NotifyService::new(Box::new(Log(seen.clone())), NotifySettings::default(), || 0),
+            seen,
+        )
+    };
+    quiet.observe(&q.look(), true, q.now);
+    assert!(seen.borrow().is_empty());
+}

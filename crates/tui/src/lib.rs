@@ -22,7 +22,10 @@ pub use app::{App, Launch};
 /// Takes over the terminal, runs the app until the user quits, then restores it.
 pub fn run(app: App) -> std::io::Result<()> {
     let mut terminal = ratatui::init();
+    // Terminals that don't know focus reporting ignore this.
+    let _ = crossterm::execute!(std::io::stdout(), crossterm::event::EnableFocusChange);
     let result = app.run(&mut terminal);
+    let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableFocusChange);
     ratatui::restore();
     result
 }

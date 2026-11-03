@@ -17,6 +17,7 @@ mod jev;
 mod jobs;
 pub mod ledger;
 pub mod missions;
+mod notify;
 pub mod ports;
 mod prompts;
 mod routing;
@@ -56,6 +57,10 @@ pub use jev::{Jev, JevState, SUMMARY_MAX, summarize};
 pub use jobs::{JobFact, JobService, PumpReport, QueueEntry, QueueStats};
 pub use missions::{
     LintReply, LintRequest, LintSink, MissionLinter, MissionReport, MissionService, MissionStore,
+};
+pub use notify::{
+    FocusTracker, IDLE_UNFOCUSED_MS, Moment, NoNotifier, Notification, Notifier, NotifyService,
+    NotifySettings, QuietHours, TerminalMode, may_notify,
 };
 pub use prompts::{BUILTIN_VARIABLES, PromptService, RenderedPrompt};
 pub use routing::{ROUTE_PROMPT_MAX, RouteReport, Routed, RoutingService};
