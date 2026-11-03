@@ -22,6 +22,8 @@ pub enum ChangeKind {
     Asked,
     Stopped,
     Routed,
+    /// The done-gate judged a stop.
+    Gate,
 }
 
 /// One row of the change log: informational, never an inbox item.
@@ -58,6 +60,18 @@ impl AttentionService {
         self.collect_from(&guard.approvals(), &jobs.facts(), now)
     }
 
+    /// [`collect`](Self::collect), plus `extra` items from other sources
+    /// (the done-gate's escalations).
+    pub fn collect_with(
+        &mut self,
+        guard: &GuardService,
+        jobs: &JobService,
+        extra: Vec<AttentionItem>,
+        now: Millis,
+    ) -> Vec<AttentionItem> {
+        self.gather(&guard.approvals(), &jobs.facts(), extra, now)
+    }
+
     /// [`collect`](Self::collect) from plain values.
     pub fn collect_from(
         &mut self,
@@ -65,7 +79,17 @@ impl AttentionService {
         facts: &[JobFact],
         now: Millis,
     ) -> Vec<AttentionItem> {
-        let mut items = Vec::new();
+        self.gather(approvals, facts, Vec::new(), now)
+    }
+
+    fn gather(
+        &mut self,
+        approvals: &[PendingApproval],
+        facts: &[JobFact],
+        extra: Vec<AttentionItem>,
+        now: Millis,
+    ) -> Vec<AttentionItem> {
+        let mut items = extra;
         for a in approvals {
             let r = &a.request;
             let session = r

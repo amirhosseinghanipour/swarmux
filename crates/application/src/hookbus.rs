@@ -25,6 +25,8 @@ pub struct HookNotice {
     pub job: Option<JobId>,
     /// Claude Code's own session id.
     pub session: String,
+    /// The session's working folder.
+    pub cwd: String,
     pub tool: Option<String>,
     /// One line saying what happened.
     pub summary: String,
@@ -50,6 +52,8 @@ pub struct StopContext {
     pub event: HookEvent,
     pub job: Option<JobId>,
     pub session: String,
+    /// The session's working folder.
+    pub cwd: String,
     pub last_message: String,
 }
 
@@ -63,8 +67,13 @@ pub enum StopAnswer {
 }
 
 /// Decides whether an agent may stop. The default allows everything.
+///
+/// Called on the hook transport's threads, where it may take its time.
 pub trait StopPolicy: Send + Sync {
     fn on_stop(&self, stop: &StopContext) -> StopAnswer;
+
+    /// Sees every other lifecycle event first (a session starting, …).
+    fn observe(&self, _notice: &HookNotice) {}
 }
 
 /// What a `SessionStart` hook is told.

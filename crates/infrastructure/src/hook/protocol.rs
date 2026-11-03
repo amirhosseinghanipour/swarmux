@@ -166,6 +166,7 @@ impl WireRequest {
             event,
             job: self.job_id.map(JobId),
             session: self.session_id,
+            cwd: self.cwd,
             tool: Some(self.tool_name).filter(|t| !t.is_empty()),
             summary: self.summary,
             detail: self.detail,

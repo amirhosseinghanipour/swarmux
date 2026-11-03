@@ -6,6 +6,7 @@
 mod attention;
 mod decision;
 mod error;
+pub mod gate;
 mod guard;
 mod history;
 pub mod hookbus;
@@ -24,6 +25,10 @@ pub mod testing;
 pub use attention::{AttentionService, Change, ChangeKind};
 pub use decision::{DecisionRecord, Outcome, Source};
 pub use error::{AppError, AppResult};
+pub use gate::{
+    Checker, ExecutionLog, GateKeeper, GateRecord, GateService, GateSource, GateState, LoadedGate,
+    WriteFence, run_checks,
+};
 pub use guard::{
     AlwaysAllowed, GuardReport, GuardService, GuardStats, PendingApproval, SharedPolicy,
 };

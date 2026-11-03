@@ -250,6 +250,64 @@ impl LedgerService {
         self.append(now, LedgerKind::AgentEvent, "hook", n.job, session, payload)
     }
 
+    /// A done-gate verdict, or a manual run of a repository's checks.
+    pub fn record_gate(
+        &self,
+        r: &crate::gate::GateRecord,
+        session: Option<SessionId>,
+        now: Millis,
+    ) -> AppResult<()> {
+        let runs = r
+            .findings
+            .runs
+            .iter()
+            .map(|c| {
+                Payload::new()
+                    .str("name", &c.name)
+                    .text("command", &c.command)
+                    .opt_int("exit", c.exit.map(i64::from))
+                    .bool("timed_out", c.timed_out)
+                    .bool("flaky", c.flaky)
+                    .int("duration_ms", saturating(c.duration_ms))
+                    .opt_str("spawn_error", c.spawn_error.as_deref())
+                    .text(
+                        "first_failure",
+                        &c.failure_excerpt().join(
+                            "
+",
+                        ),
+                    )
+            })
+            .collect();
+        let pins: Vec<String> = r
+            .findings
+            .pins
+            .iter()
+            .map(|p| format!("{} {}", p.verb(), p.path()))
+            .collect();
+        // A manual run blocks nobody: it passed or failed.
+        let outcome = match (r.event, r.findings.clean()) {
+            (Some(_), _) => r.outcome.as_str(),
+            (None, true) => "pass",
+            (None, false) => "fail",
+        };
+        let payload = Payload::new()
+            .opt_str("event", r.event.map(|e| e.as_str()))
+            .str("session", &r.session)
+            .str("outcome", outcome)
+            .int("blocks", i64::from(r.blocks))
+            .int("max_blocks", i64::from(r.max_blocks))
+            .text("root", &r.root)
+            .str("origin", r.origin.as_str())
+            .objects("checks", runs)
+            .strs("protected_changed", &pins)
+            .strs("evidence_gaps", &r.findings.gaps)
+            .text("digest", &r.digest)
+            .opt_str("problem", r.problem.as_deref());
+        let actor = if r.event.is_some() { "gate" } else { "cli" };
+        self.append(now, LedgerKind::GateVerdict, actor, r.job, session, payload)
+    }
+
     pub fn record_decision(&self, d: &DecisionRecord) -> AppResult<()> {
         let payload = Payload::new()
             .str("source", d.source.as_str())

@@ -1,5 +1,6 @@
 mod review;
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -13,6 +14,7 @@ use swarmux_domain::{
     run_order,
 };
 
+use crate::gate::ExecutionLog;
 use crate::ports::{
     AgentCatalog, AgentRunner, Clock, JobRepository, NewJob, RunRequest, RunSink, RunnerMsg,
     SessionRepository, SystemMonitor, TelemetryStore, Workspace,
@@ -41,6 +43,8 @@ struct Tracked {
     outcome: Option<JobOutcome>,
     /// What Claude Code last said the session is doing.
     session_state: Option<SessionState>,
+    /// Shell commands waiting for their result, by tool_use id.
+    shell: HashMap<String, String>,
 }
 
 /// What a finished job reported, as the inbox needs it.
@@ -157,6 +161,8 @@ pub struct JobService {
     activity: SwarmActivity,
     /// Where limit readings and environments outlive the run.
     telemetry: Option<Rc<dyn TelemetryStore>>,
+    /// Where the shell commands agents ran are reported, as evidence.
+    executions: Option<Rc<dyn ExecutionLog>>,
 }
 
 /// Environments restored at start.
@@ -187,11 +193,18 @@ impl JobService {
             review: ReviewSettings::default(),
             activity: SwarmActivity::default(),
             telemetry: None,
+            executions: None,
         }
     }
 
     /// Keeps usage-limit readings and session environments in `store`;
     /// [`JobService::recover`] loads the stored ones.
+    /// Reports every shell command agents run, and whether it succeeded.
+    pub fn with_execution_log(mut self, log: Rc<dyn ExecutionLog>) -> JobService {
+        self.executions = Some(log);
+        self
+    }
+
     pub fn with_telemetry_store(mut self, store: Rc<dyn TelemetryStore>) -> JobService {
         self.telemetry = Some(store);
         self
@@ -588,6 +601,7 @@ impl JobService {
             finished_at: None,
             outcome: None,
             session_state: None,
+            shell: HashMap::new(),
         });
     }
 
@@ -794,6 +808,7 @@ impl JobService {
                 if let AgentEvent::SessionState(state) = &ev {
                     self.tracked[i].session_state = Some(*state);
                 }
+                self.observe_shell(i, job_id, &ev);
                 self.observe_telemetry(i, job_id, &ev, now)?;
                 let finished = self.tracked[i].progress.apply(&ev, tick);
                 if let AgentEvent::ToolUse { id, .. } = &ev
@@ -848,6 +863,30 @@ impl JobService {
             self.after_finish(i, &result)?;
         }
         Ok(applied)
+    }
+
+    /// Pairs shell commands with their results and reports them.
+    fn observe_shell(&mut self, i: usize, job_id: JobId, ev: &AgentEvent) {
+        let Some(log) = &self.executions else {
+            return;
+        };
+        match ev {
+            AgentEvent::ToolUse {
+                id, name, summary, ..
+            } if matches!(name.as_str(), "Bash" | "PowerShell") => {
+                self.tracked[i].shell.insert(id.clone(), summary.clone());
+            }
+            AgentEvent::ToolResult {
+                tool_use_id,
+                is_error,
+                ..
+            } => {
+                if let Some(command) = self.tracked[i].shell.remove(tool_use_id) {
+                    log.executed(job_id, &command, !is_error);
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Feeds an event to the job's and the run's activity, and stores limit

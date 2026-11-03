@@ -21,6 +21,10 @@ pub use transport::{ENV_JOB, ENV_PIPE, connect, endpoint_for};
 
 /// Claude Code kills a lifecycle hook after this long. They answer at once.
 const LIFECYCLE_TIMEOUT_SECS: u64 = 30;
+/// Claude Code kills a `Stop` or `SubagentStop` hook after this long: the
+/// done-gate runs the repository's checks before it answers. A gate still
+/// running then lets the agent stop.
+pub const STOP_TIMEOUT_SECS: u64 = 1800;
 
 /// The `--settings` JSON that makes `claude` run `exe hook <event>` for
 /// every lifecycle event swarmux listens to. PreToolUse is killed after
@@ -33,7 +37,7 @@ pub fn hook_settings(exe: &Path, timeout_secs: u64) -> String {
             "type": "command",
             "command": exe.to_string_lossy(),
             "args": ["hook", arg_of(event)],
-            "timeout": if event == HookEvent::PreToolUse { timeout_secs } else { LIFECYCLE_TIMEOUT_SECS },
+            "timeout": timeout_of(event, timeout_secs),
         });
         if !event.is_blocking() {
             command["async"] = true.into();
@@ -45,6 +49,15 @@ pub fn hook_settings(exe: &Path, timeout_secs: u64) -> String {
         hooks.insert(event.as_str().to_string(), serde_json::json!([group]));
     }
     serde_json::json!({ "hooks": hooks }).to_string()
+}
+
+/// How long Claude Code lets the hook for `event` run.
+fn timeout_of(event: HookEvent, pre_tool_secs: u64) -> u64 {
+    match event {
+        HookEvent::PreToolUse => pre_tool_secs,
+        HookEvent::Stop | HookEvent::SubagentStop => STOP_TIMEOUT_SECS,
+        _ => LIFECYCLE_TIMEOUT_SECS,
+    }
 }
 
 /// The command line name of `event` in the injected settings.
@@ -136,7 +149,7 @@ mod tests {
                     "type": "command",
                     "command": r"C:\bin\swarmux.exe",
                     "args": ["hook", "stop"],
-                    "timeout": 30,
+                    "timeout": 1800,
                 }]
             })
         );

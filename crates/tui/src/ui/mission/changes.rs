@@ -52,6 +52,7 @@ fn icon_of(kind: ChangeKind) -> Icon {
         ChangeKind::Asked => Icon::Question,
         ChangeKind::Stopped => Icon::Stalled,
         ChangeKind::Routed => Icon::Lead,
+        ChangeKind::Gate => Icon::Guard,
     }
 }
 
@@ -61,6 +62,8 @@ fn row(app: &App, c: &Change, offset_min: i32, width: usize) -> Line<'static> {
     let color = match c.kind {
         ChangeKind::Failed | ChangeKind::Denied | ChangeKind::Stopped => t.error,
         ChangeKind::Finished | ChangeKind::Reviewed => t.ok,
+        ChangeKind::Gate if c.text.starts_with("gate passed") => t.ok,
+        ChangeKind::Gate => t.warn,
         _ => t.muted,
     };
     let head = format!("{} ", local_clock(c.at, offset_min));

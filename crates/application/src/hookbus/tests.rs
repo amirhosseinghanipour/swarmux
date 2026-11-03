@@ -33,6 +33,7 @@ fn notice(event: HookEvent, job: Option<i64>) -> HookNotice {
         event,
         job: job.map(JobId),
         session: "claude-session".into(),
+        cwd: "/w".into(),
         tool: None,
         summary: format!("{} happened", event.as_str()),
         detail: String::new(),
@@ -132,6 +133,7 @@ fn default_seams_allow_and_add_nothing() {
         event: HookEvent::Stop,
         job: None,
         session: String::new(),
+        cwd: String::new(),
         last_message: String::new(),
     };
     assert_eq!(AllowStop.on_stop(&stop), StopAnswer::Allow);

@@ -203,7 +203,7 @@ async fn serve<S: AsyncRead + AsyncWrite>(conn: S, shared: Arc<Shared>) {
                 Some(HookEvent::PreToolUse) => {
                     WireReply::from_decision(&decide(wire, &shared).await)
                 }
-                Some(event) => lifecycle(event, wire, &shared),
+                Some(event) => lifecycle(event, wire, shared.clone()).await,
                 // An event this version doesn't know: leave it alone.
                 None => WireReply::pass(),
             },
@@ -245,14 +245,30 @@ async fn decide(wire: WireRequest, shared: &Shared) -> Decision {
 
 /// Hands a lifecycle event to the app and answers it: the events Claude
 /// Code waits for ask the responders, the rest get an empty pass.
-fn lifecycle(event: HookEvent, wire: WireRequest, shared: &Shared) -> WireReply {
+///
+/// Responders may take their time (the done-gate runs a test suite), so
+/// they run on a blocking thread, never on the socket's.
+async fn lifecycle(event: HookEvent, wire: WireRequest, shared: Arc<Shared>) -> WireReply {
     let notice = wire.into_notice(event);
-    let reply = match event {
+    let answer = tokio::task::spawn_blocking({
+        let shared = shared.clone();
+        let notice = notice.clone();
+        move || respond(event, &notice, &shared)
+    })
+    .await;
+    let _ = lock(&shared.notices).send(notice);
+    // A responder that panicked leaves the agent alone.
+    answer.unwrap_or_else(|_| WireReply::pass())
+}
+
+fn respond(event: HookEvent, notice: &HookNotice, shared: &Shared) -> WireReply {
+    match event {
         HookEvent::Stop | HookEvent::SubagentStop => {
             let stop = StopContext {
                 event,
                 job: notice.job,
                 session: notice.session.clone(),
+                cwd: notice.cwd.clone(),
                 last_message: notice.detail.clone(),
             };
             match shared.responders.stop.on_stop(&stop) {
@@ -263,6 +279,7 @@ fn lifecycle(event: HookEvent, wire: WireRequest, shared: &Shared) -> WireReply 
             }
         }
         HookEvent::SessionStart => {
+            shared.responders.stop.observe(notice);
             let start = SessionStartInfo {
                 job: notice.job,
                 session: notice.session.clone(),
@@ -279,8 +296,9 @@ fn lifecycle(event: HookEvent, wire: WireRequest, shared: &Shared) -> WireReply 
                 None => WireReply::pass(),
             }
         }
-        _ => WireReply::pass(),
-    };
-    let _ = lock(&shared.notices).send(notice);
-    reply
+        _ => {
+            shared.responders.stop.observe(notice);
+            WireReply::pass()
+        }
+    }
 }

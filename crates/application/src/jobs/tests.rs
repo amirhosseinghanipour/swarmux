@@ -601,3 +601,74 @@ fn session_state_is_tracked_while_running_and_dropped_when_done() {
     f.svc.pump();
     assert_eq!(state(&f), None);
 }
+
+#[derive(Default)]
+struct Ran(std::cell::RefCell<Vec<(JobId, String, bool)>>);
+
+impl ExecutionLog for Ran {
+    fn executed(&self, job: JobId, command: &str, ok: bool) {
+        self.0.borrow_mut().push((job, command.to_string(), ok));
+    }
+}
+
+#[test]
+fn shell_commands_are_reported_with_their_results() {
+    let mut f = fixture();
+    let ran = Rc::new(Ran::default());
+    f.svc = JobService::new(
+        f.store.clone(),
+        f.store.clone(),
+        f.runner.clone(),
+        f.clock.clone(),
+    )
+    .with_loop_repeats(0)
+    .with_execution_log(ran.clone());
+    let job = f.svc.dispatch(f.session.id, "fix it").unwrap();
+    failing_call(&f, 0, "t1");
+    f.runner.emit(
+        0,
+        RunnerMsg::Event(AgentEvent::ToolUse {
+            id: "t2".into(),
+            name: "Read".into(),
+            summary: "src/lib.rs".into(),
+            actor: Actor::Lead,
+        }),
+    );
+    for (id, ok) in [("t2", true), ("t3", true)] {
+        f.runner.emit(
+            0,
+            RunnerMsg::Event(AgentEvent::ToolResult {
+                tool_use_id: id.into(),
+                is_error: !ok,
+                preview: String::new(),
+                actor: Actor::Lead,
+            }),
+        );
+    }
+    f.runner.emit(
+        0,
+        RunnerMsg::Event(AgentEvent::ToolUse {
+            id: "t4".into(),
+            name: "PowerShell".into(),
+            summary: "cargo test -q".into(),
+            actor: Actor::Subagent("a1".into()),
+        }),
+    );
+    f.runner.emit(
+        0,
+        RunnerMsg::Event(AgentEvent::ToolResult {
+            tool_use_id: "t4".into(),
+            is_error: false,
+            preview: "ok".into(),
+            actor: Actor::Subagent("a1".into()),
+        }),
+    );
+    f.svc.pump();
+    assert_eq!(
+        *ran.0.borrow(),
+        [
+            (job, "cargo test".to_string(), false),
+            (job, "cargo test -q".to_string(), true),
+        ]
+    );
+}
