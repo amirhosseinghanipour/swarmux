@@ -5,6 +5,7 @@ mod doctor;
 mod gate;
 mod jev;
 mod telemetry;
+mod worktree;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -16,8 +17,8 @@ use clap::{Parser, Subcommand};
 use swarmux_application::ledger::{LedgerService, LedgeredDecisions, LedgeredJobs};
 use swarmux_application::ports::Clock;
 use swarmux_application::{
-    GateKeeper, GateService, GuardService, HistoryService, HookBus, Jev, JobService, PromptService,
-    RoutingService, SessionService, SharedPolicy,
+    GateKeeper, GateService, GuardService, HandoffBoard, HistoryService, HookBus, Jev, JobService,
+    PromptService, RoutingService, SessionService, SharedPolicy,
 };
 use swarmux_infrastructure::hook::{self, HookServer, Responders};
 use swarmux_infrastructure::{
@@ -59,6 +60,11 @@ enum Command {
         #[command(subcommand)]
         action: GateAction,
     },
+    /// Per-job git worktrees, their port blocks and checkpoints.
+    Worktree {
+        #[command(subcommand)]
+        action: WorktreeAction,
+    },
     /// Hooks Claude Code runs inside swarmux jobs (not for direct use).
     #[command(hide = true)]
     Hook {
@@ -94,6 +100,33 @@ enum GateAction {
         /// A folder inside the repository (default: the current one).
         #[arg(long)]
         dir: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
+enum WorktreeAction {
+    /// Show the worktrees that have not been reclaimed.
+    List,
+    /// Reclaim the worktrees of jobs that ended a while ago. Files left in
+    /// them are committed to the job's branch first.
+    Gc {
+        /// Only say what would be reclaimed.
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Show checkpoints: those of one job, or the newest ones.
+    Checkpoints {
+        /// The job number.
+        job: Option<i64>,
+        /// How many of the newest to show when no job is given.
+        #[arg(short, default_value_t = 20)]
+        n: usize,
+    },
+    /// Set worktree mode for a session (by name or id).
+    Mode {
+        session: String,
+        #[arg(value_enum)]
+        mode: worktree::Mode,
     },
 }
 
@@ -136,6 +169,12 @@ fn main() -> anyhow::Result<ExitCode> {
         Some(Command::Gate {
             action: GateAction::Show { dir },
         }) => gate::show(dir),
+        Some(Command::Worktree { action }) => match action {
+            WorktreeAction::List => worktree::list(),
+            WorktreeAction::Gc { dry_run } => worktree::gc(dry_run),
+            WorktreeAction::Checkpoints { job, n } => worktree::checkpoints(job, n),
+            WorktreeAction::Mode { session, mode } => worktree::mode(&session, mode),
+        },
         None => run_tui(cli.no_splash),
         Some(Command::Doctor) => doctor::run(),
         Some(Command::Jev {
@@ -182,9 +221,11 @@ fn run_tui(no_splash: bool) -> anyhow::Result<()> {
     let guard_settings = &settings.guard;
     let policy = SharedPolicy::new(guard_settings.policy()).with_fence(keeper.clone());
     let pipe = hook::endpoint_for(std::process::id());
+    // Handoffs reach the sessions that start after a checkpoint.
+    let board = HandoffBoard::new();
     let responders = Responders {
         stop: keeper.clone(),
-        ..Responders::default()
+        session_start: board.clone(),
     };
     let server = Rc::new(
         HookServer::start_with(rt.handle(), &pipe, policy.clone(), responders)
@@ -197,8 +238,21 @@ fn run_tui(no_splash: bool) -> anyhow::Result<()> {
     };
     let runner =
         Rc::new(ClaudeCli::new(doctor::claude_bin(), rt.handle().clone()).with_guard(guard_hook));
-    let gate = GateService::new(gate_records, ledger.clone(), store.clone(), clock.clone());
-    let hook_bus = HookBus::new(server.clone(), ledger, store.clone(), clock.clone());
+    let worktree::Services {
+        worktrees,
+        checkpoints,
+    } = worktree::services(
+        &paths,
+        &settings,
+        store.clone(),
+        ledger.clone(),
+        clock.clone(),
+        board,
+    );
+    let gate = GateService::new(gate_records, ledger.clone(), store.clone(), clock.clone())
+        .with_checkpoints(checkpoints.clone());
+    let hook_bus = HookBus::new(server.clone(), ledger, store.clone(), clock.clone())
+        .with_checkpoints(checkpoints);
     let mut guard = GuardService::new(policy, server, decisions.clone(), clock.clone())
         .with_timeout_secs(guard_settings.approval_timeout_secs)
         .with_rule_writer(Rc::new(ConfigRuleWriter::new(paths.config.clone())));
@@ -236,7 +290,8 @@ fn run_tui(no_splash: bool) -> anyhow::Result<()> {
         .with_monitor(Rc::new(SysinfoMonitor::new()))
         .with_review(workspace, &settings.review)
         .with_agent_catalog(Rc::new(FsAgentCatalog::new(Some(paths.home.clone()))))
-        .with_execution_log(Rc::new(keeper));
+        .with_execution_log(Rc::new(keeper))
+        .with_worktrees(worktrees);
     jobs.recover()?;
     let app = App::new(
         sessions,
