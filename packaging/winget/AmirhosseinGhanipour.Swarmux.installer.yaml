@@ -1,0 +1,15 @@
+PackageIdentifier: AmirhosseinGhanipour.Swarmux
+PackageVersion: <VERSION>
+InstallerType: zip
+NestedInstallerType: portable
+NestedInstallerFiles:
+  - RelativeFilePath: swarmux-x86_64-pc-windows-msvc\swarmux.exe
+    PortableCommandAlias: swarmux
+Commands:
+  - swarmux
+Installers:
+  - Architecture: x64
+    InstallerUrl: https://github.com/amirhosseinghanipour/swarmux/releases/download/v<VERSION>/swarmux-x86_64-pc-windows-msvc.zip
+    InstallerSha256: <SHA256 OF THE ZIP, UPPERCASE>
+ManifestType: installer
+ManifestVersion: 1.9.0
