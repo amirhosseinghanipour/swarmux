@@ -23,6 +23,8 @@ review live in one terminal.
 - **Review step**: a read-only reviewer model audits a finished job's diff
 - **History**: every prompt with cost, outcome and review; re-run or fork from any point
 - **Lean mode** per session: skip your user-level Claude Code settings
+- **Audit ledger**: a tamper-evident, hash-chained record of every job,
+  agent event, review and guard decision
 
 Single Rust binary. Windows, macOS, Linux. Works with Claude Code only.
 
@@ -321,6 +323,27 @@ characters), or the first 200 characters of a prompt and your session names.
 Never file contents, diffs or folders. The first time a provider is enabled,
 swarmux shows exactly this and the host, and uses JEV only after you press
 `y`; the answer is remembered per provider.
+
+## Audit ledger
+
+Everything swarmux stores about a job (queued, started, each agent event,
+the review, how it finished) and every guard, loop-breaker, JEV and routing
+decision is also appended to a ledger in `~/.swarmux/swarmux.db`. Each entry
+holds the SHA-256 of the previous entry plus its own content, so editing,
+removing or reordering anything already recorded breaks the chain. Only
+swarmux writes it; the agent runner never gets a handle on it, and the table
+refuses changes and deletions. The chain has no secret key: someone who
+rewrites every entry after an edit gets a valid chain with a different head,
+so keep a head hash you printed earlier to compare against.
+
+```sh
+swarmux audit verify      # walks the chain; prints the head hash, exits 1 at the first break
+swarmux audit tail -n 20  # the newest entries
+swarmux doctor            # includes the ledger head and whether it verifies
+```
+
+Long texts (prompts, answers, tool output) are kept up to 8 KB per field,
+with the SHA-256 and length of the full text.
 
 ## License
 

@@ -10,7 +10,7 @@ use swarmux_application::{GuardSettings, Settings, SharedPolicy};
 use swarmux_infrastructure::hook::{self, ENV_JOB, ENV_PIPE, HookServer};
 use swarmux_infrastructure::jev::keys;
 use swarmux_infrastructure::{
-    Endpoint, Paths, SqliteStore, SysinfoMonitor, SystemClock, load_settings,
+    Endpoint, Paths, SqliteLedger, SqliteStore, SysinfoMonitor, SystemClock, load_settings,
 };
 
 const GB: f64 = (1u64 << 30) as f64;
@@ -38,6 +38,10 @@ pub fn run() -> anyhow::Result<()> {
     match SqliteStore::open(&paths.db).and_then(|s| s.schema_version()) {
         Ok(v) => println!("ok   database {} (schema v{v})", paths.db.display()),
         Err(e) => println!("fail database: {e}"),
+    }
+    match SqliteLedger::open(&paths.db) {
+        Ok(ledger) => crate::audit::doctor(&ledger),
+        Err(e) => println!("fail ledger: {e}"),
     }
     match load_settings(&paths.config) {
         Ok(s) => {

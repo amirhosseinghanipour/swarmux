@@ -1,13 +1,16 @@
 //! Composition root: the only place that wires concrete adapters to use cases.
 
+mod audit;
 mod doctor;
 mod jev;
 mod telemetry;
 
+use std::process::ExitCode;
 use std::rc::Rc;
 
 use anyhow::Context;
 use clap::{Parser, Subcommand};
+use swarmux_application::ledger::{LedgerService, LedgeredDecisions, LedgeredJobs};
 use swarmux_application::ports::Clock;
 use swarmux_application::{
     GuardService, HistoryService, Jev, JobService, PromptService, RoutingService, SessionService,
@@ -16,7 +19,7 @@ use swarmux_application::{
 use swarmux_infrastructure::hook::{self, HookServer};
 use swarmux_infrastructure::{
     ClaudeCli, ConfigRuleWriter, FsAgentCatalog, GitCli, GuardHook, HaikuRouter, Paths,
-    SqliteStore, SysinfoMonitor, SystemClock, load_settings,
+    SqliteLedger, SqliteStore, SysinfoMonitor, SystemClock, load_settings,
 };
 use swarmux_tui::{App, Launch};
 
@@ -43,6 +46,11 @@ enum Command {
         #[command(subcommand)]
         action: JevAction,
     },
+    /// The tamper-evident ledger of everything swarmux observed or decided.
+    Audit {
+        #[command(subcommand)]
+        action: AuditAction,
+    },
     /// Hooks Claude Code runs inside swarmux jobs (not for direct use).
     #[command(hide = true)]
     Hook {
@@ -66,14 +74,38 @@ enum JevAction {
 }
 
 #[derive(Subcommand)]
+enum AuditAction {
+    /// Check the whole hash chain; exits with 1 if it is broken.
+    Verify,
+    /// Show the newest entries.
+    Tail {
+        /// How many entries.
+        #[arg(short, default_value_t = 20)]
+        n: usize,
+    },
+}
+
+#[derive(Subcommand)]
 enum HookEvent {
     /// PreToolUse: asks the running swarmux whether a tool call may run.
     PreTool,
 }
 
-fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<ExitCode> {
     let cli = Cli::parse();
     match cli.command {
+        Some(Command::Audit {
+            action: AuditAction::Verify,
+        }) => {
+            return Ok(if audit::verify()? {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            });
+        }
+        Some(Command::Audit {
+            action: AuditAction::Tail { n },
+        }) => audit::tail_cmd(n),
         None => run_tui(cli.no_splash),
         Some(Command::Doctor) => doctor::run(),
         Some(Command::Jev {
@@ -88,7 +120,8 @@ fn main() -> anyhow::Result<()> {
             hook::pre_tool_main();
             Ok(())
         }
-    }
+    }?;
+    Ok(ExitCode::SUCCESS)
 }
 
 fn run_tui(no_splash: bool) -> anyhow::Result<()> {
@@ -100,6 +133,13 @@ fn run_tui(no_splash: bool) -> anyhow::Result<()> {
     let settings = load_settings(&paths.config)?;
     let store = Rc::new(SqliteStore::open(&paths.db)?);
     let clock = Rc::new(SystemClock);
+    // Every job change and decision that is stored is also chained into the ledger.
+    let ledger = Rc::new(LedgerService::new(
+        Rc::new(SqliteLedger::open(&paths.db)?),
+        clock.clone(),
+    ));
+    let jobs_log = Rc::new(LedgeredJobs::new(store.clone(), ledger.clone()));
+    let decisions = Rc::new(LedgeredDecisions::new(store.clone(), ledger));
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
@@ -119,12 +159,12 @@ fn run_tui(no_splash: bool) -> anyhow::Result<()> {
     };
     let runner =
         Rc::new(ClaudeCli::new(doctor::claude_bin(), rt.handle().clone()).with_guard(guard_hook));
-    let mut guard = GuardService::new(policy, server, store.clone(), clock.clone())
+    let mut guard = GuardService::new(policy, server, decisions.clone(), clock.clone())
         .with_timeout_secs(guard_settings.approval_timeout_secs)
         .with_rule_writer(Rc::new(ConfigRuleWriter::new(paths.config.clone())));
     let router = HaikuRouter::new(doctor::claude_bin(), rt.handle().clone());
     let mut routing =
-        RoutingService::new(store.clone(), store.clone(), store.clone(), clock.clone())
+        RoutingService::new(store.clone(), jobs_log.clone(), decisions, clock.clone())
             .with_router(Rc::new(router));
     if let Some((advisor, _)) = jev::advisor(&settings.jev, rt.handle().clone())? {
         let jev = Rc::new(Jev::new(
@@ -146,10 +186,10 @@ fn run_tui(no_splash: bool) -> anyhow::Result<()> {
         workspace.clone(),
         clock.clone(),
     );
-    let history = HistoryService::new(store.clone());
+    let history = HistoryService::new(jobs_log.clone());
     // Collectors run from the start so the stations have data once shown.
     let _telemetry = telemetry::start(&settings, &paths, store.clone(), clock.clone());
-    let mut jobs = JobService::new(store.clone(), store.clone(), runner, clock)
+    let mut jobs = JobService::new(store.clone(), jobs_log, runner, clock)
         .with_telemetry_store(store)
         .with_limits(settings.limits())
         .with_loop_repeats(guard_settings.loop_repeats)
