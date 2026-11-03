@@ -13,8 +13,8 @@ use clap::{Parser, Subcommand};
 use swarmux_application::ledger::{LedgerService, LedgeredDecisions, LedgeredJobs};
 use swarmux_application::ports::Clock;
 use swarmux_application::{
-    GuardService, HistoryService, Jev, JobService, PromptService, RoutingService, SessionService,
-    SharedPolicy,
+    GuardService, HistoryService, HookBus, Jev, JobService, PromptService, RoutingService,
+    SessionService, SharedPolicy,
 };
 use swarmux_infrastructure::hook::{self, HookServer};
 use swarmux_infrastructure::{
@@ -54,8 +54,8 @@ enum Command {
     /// Hooks Claude Code runs inside swarmux jobs (not for direct use).
     #[command(hide = true)]
     Hook {
-        #[command(subcommand)]
-        event: HookEvent,
+        /// The hook event: pre-tool, stop, session-start, … (or Claude Code's own name).
+        event: String,
     },
 }
 
@@ -85,12 +85,6 @@ enum AuditAction {
     },
 }
 
-#[derive(Subcommand)]
-enum HookEvent {
-    /// PreToolUse: asks the running swarmux whether a tool call may run.
-    PreTool,
-}
-
 fn main() -> anyhow::Result<ExitCode> {
     let cli = Cli::parse();
     match cli.command {
@@ -114,10 +108,8 @@ fn main() -> anyhow::Result<ExitCode> {
         Some(Command::Jev {
             action: JevAction::Test { provider },
         }) => jev::test(provider.as_deref()),
-        Some(Command::Hook {
-            event: HookEvent::PreTool,
-        }) => {
-            hook::pre_tool_main();
+        Some(Command::Hook { event }) => {
+            hook::hook_main(&event);
             Ok(())
         }
     }?;
@@ -139,7 +131,7 @@ fn run_tui(no_splash: bool) -> anyhow::Result<()> {
         clock.clone(),
     ));
     let jobs_log = Rc::new(LedgeredJobs::new(store.clone(), ledger.clone()));
-    let decisions = Rc::new(LedgeredDecisions::new(store.clone(), ledger));
+    let decisions = Rc::new(LedgeredDecisions::new(store.clone(), ledger.clone()));
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
@@ -159,6 +151,7 @@ fn run_tui(no_splash: bool) -> anyhow::Result<()> {
     };
     let runner =
         Rc::new(ClaudeCli::new(doctor::claude_bin(), rt.handle().clone()).with_guard(guard_hook));
+    let hook_bus = HookBus::new(server.clone(), ledger, store.clone(), clock.clone());
     let mut guard = GuardService::new(policy, server, decisions.clone(), clock.clone())
         .with_timeout_secs(guard_settings.approval_timeout_secs)
         .with_rule_writer(Rc::new(ConfigRuleWriter::new(paths.config.clone())));
@@ -207,6 +200,7 @@ fn run_tui(no_splash: bool) -> anyhow::Result<()> {
         std::env::current_dir()?,
     )
     .with_clock(Rc::new(SystemClock))
+    .with_hook_bus(hook_bus)
     .with_telemetry_feed(telemetry, &settings.telemetry)
     .with_look(
         &settings.ui,

@@ -10,9 +10,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use swarmux_application::SharedPolicy;
 use swarmux_application::ports::{HookInbox, InboxItem};
-use swarmux_domain::{Decision, Verdict};
+use swarmux_application::{
+    AllowStop, HookFeed, HookNotice, NoSessionContext, SessionStartContext, SessionStartInfo,
+    SharedPolicy, StopAnswer, StopContext, StopPolicy,
+};
+use swarmux_domain::{Decision, HookEvent, Verdict};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::runtime::Handle;
 use tokio::sync::oneshot;
@@ -25,9 +28,28 @@ const REQUEST_MAX: u64 = 1 << 20;
 
 type Waiting = Mutex<HashMap<u64, oneshot::Sender<Decision>>>;
 
+/// What answers the events Claude Code waits for. The defaults let agents
+/// stop and add no context.
+#[derive(Clone)]
+pub struct Responders {
+    pub stop: Arc<dyn StopPolicy>,
+    pub session_start: Arc<dyn SessionStartContext>,
+}
+
+impl Default for Responders {
+    fn default() -> Responders {
+        Responders {
+            stop: Arc::new(AllowStop),
+            session_start: Arc::new(NoSessionContext),
+        }
+    }
+}
+
 struct Shared {
     policy: SharedPolicy,
     items: Mutex<Sender<InboxItem>>,
+    notices: Mutex<Sender<HookNotice>>,
+    responders: Responders,
     waiting: Waiting,
     next_id: AtomicU64,
 }
@@ -41,16 +63,31 @@ pub struct HookServer {
     name: String,
     shared: Arc<Shared>,
     items: Mutex<Receiver<InboxItem>>,
+    notices: Mutex<Receiver<HookNotice>>,
     task: AbortHandle,
 }
 
 impl HookServer {
     /// Starts listening on `name` (see [`super::endpoint_for`]) on the runtime `rt`.
     pub fn start(rt: &Handle, name: &str, policy: SharedPolicy) -> io::Result<HookServer> {
+        HookServer::start_with(rt, name, policy, Responders::default())
+    }
+
+    /// Like [`start`](Self::start), answering Stop, SubagentStop and
+    /// SessionStart with `responders`.
+    pub fn start_with(
+        rt: &Handle,
+        name: &str,
+        policy: SharedPolicy,
+        responders: Responders,
+    ) -> io::Result<HookServer> {
         let (tx, rx) = channel();
+        let (ntx, nrx) = channel();
         let shared = Arc::new(Shared {
             policy,
             items: Mutex::new(tx),
+            notices: Mutex::new(ntx),
+            responders,
             waiting: Mutex::default(),
             next_id: AtomicU64::new(1),
         });
@@ -60,6 +97,7 @@ impl HookServer {
             name: name.to_string(),
             shared,
             items: Mutex::new(rx),
+            notices: Mutex::new(nrx),
             task,
         })
     }
@@ -75,6 +113,12 @@ impl Drop for HookServer {
         self.task.abort();
         #[cfg(not(windows))]
         let _ = std::fs::remove_file(&self.name);
+    }
+}
+
+impl HookFeed for HookServer {
+    fn poll_notices(&self) -> Vec<HookNotice> {
+        lock(&self.notices).try_iter().collect()
     }
 }
 
@@ -155,7 +199,14 @@ async fn serve<S: AsyncRead + AsyncWrite>(conn: S, shared: Arc<Shared>) {
     let mut line = String::new();
     let reply = match reader.read_line(&mut line).await {
         Ok(_) => match serde_json::from_str::<WireRequest>(&line) {
-            Ok(wire) => WireReply::from_decision(&decide(wire, &shared).await),
+            Ok(wire) => match wire.hook_event() {
+                Some(HookEvent::PreToolUse) => {
+                    WireReply::from_decision(&decide(wire, &shared).await)
+                }
+                Some(event) => lifecycle(event, wire, &shared),
+                // An event this version doesn't know: leave it alone.
+                None => WireReply::pass(),
+            },
             Err(_) => WireReply::pass(),
         },
         Err(_) => return,
@@ -190,4 +241,46 @@ async fn decide(wire: WireRequest, shared: &Shared) -> Decision {
     // If the app goes away, leave the call to Claude Code's own rules.
     rx.await
         .unwrap_or_else(|_| Decision::new(Verdict::Pass, None))
+}
+
+/// Hands a lifecycle event to the app and answers it: the events Claude
+/// Code waits for ask the responders, the rest get an empty pass.
+fn lifecycle(event: HookEvent, wire: WireRequest, shared: &Shared) -> WireReply {
+    let notice = wire.into_notice(event);
+    let reply = match event {
+        HookEvent::Stop | HookEvent::SubagentStop => {
+            let stop = StopContext {
+                event,
+                job: notice.job,
+                session: notice.session.clone(),
+                last_message: notice.detail.clone(),
+            };
+            match shared.responders.stop.on_stop(&stop) {
+                StopAnswer::Allow => WireReply::pass(),
+                StopAnswer::Block { reason } => WireReply::print(
+                    serde_json::json!({"decision": "block", "reason": reason}).to_string(),
+                ),
+            }
+        }
+        HookEvent::SessionStart => {
+            let start = SessionStartInfo {
+                job: notice.job,
+                session: notice.session.clone(),
+                source: notice.detail.clone(),
+            };
+            match shared.responders.session_start.context(&start) {
+                Some(text) => WireReply::print(
+                    serde_json::json!({"hookSpecificOutput": {
+                        "hookEventName": "SessionStart",
+                        "additionalContext": text,
+                    }})
+                    .to_string(),
+                ),
+                None => WireReply::pass(),
+            }
+        }
+        _ => WireReply::pass(),
+    };
+    let _ = lock(&shared.notices).send(notice);
+    reply
 }

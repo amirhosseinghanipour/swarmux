@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 
 use swarmux_application::ports::{Clock, ConsentStore, SystemMonitor};
 use swarmux_application::{GuardSettings, Settings, SharedPolicy};
+use swarmux_domain::HookEvent;
 use swarmux_infrastructure::hook::{self, ENV_JOB, ENV_PIPE, HookServer};
 use swarmux_infrastructure::jev::keys;
 use swarmux_infrastructure::{
@@ -153,6 +154,7 @@ fn hook_checks() {
                 Some((out, _)) => println!("fail hook socket answered unexpectedly: {out}"),
                 None => println!("fail could not run `swarmux hook pre-tool`"),
             }
+            latency_checks(&exe, &name);
             drop(server);
         }
     }
@@ -166,10 +168,67 @@ fn hook_checks() {
     }
 }
 
+/// A hook input for `event` that every policy lets through.
+fn probe_for(event: HookEvent) -> String {
+    let extra = match event {
+        HookEvent::Stop | HookEvent::SubagentStop => r#","last_assistant_message":"ok""#,
+        HookEvent::SessionStart => r#","source":"startup""#,
+        _ => r#","tool_name":"Glob","tool_input":{"pattern":"*"}"#,
+    };
+    format!(
+        r#"{{"hook_event_name":"{}","session_id":"doctor","cwd":"."{extra}}}"#,
+        event.as_str()
+    )
+}
+
+/// How long the real `swarmux hook <event>` takes, spawn included, for
+/// every event Claude Code waits for.
+fn latency_checks(exe: &Path, pipe: &str) {
+    for event in HookEvent::ALL.into_iter().filter(|e| e.is_blocking()) {
+        let arg = if event == HookEvent::PreToolUse {
+            "pre-tool".to_string()
+        } else {
+            event.kebab()
+        };
+        let input = probe_for(event);
+        let mut times: Vec<Duration> = (0..LATENCY_CALLS)
+            .filter_map(|_| run_hook_event(exe, Some(pipe), &arg, &input).map(|(_, t)| t))
+            .collect();
+        times.sort();
+        match percentile95(&times) {
+            Some(p95) if times.len() == LATENCY_CALLS => println!(
+                "ok   hook {} p95 {:.1} ms over {LATENCY_CALLS} calls",
+                event.as_str(),
+                p95.as_secs_f64() * 1e3
+            ),
+            _ => println!("fail hook {} could not be measured", event.as_str()),
+        }
+    }
+}
+
+/// Calls timed per event by [`latency_checks`].
+const LATENCY_CALLS: usize = 5;
+
+/// The 95th percentile of the sorted `times` (nearest rank).
+fn percentile95(times: &[Duration]) -> Option<Duration> {
+    let n = times.len();
+    (n > 0).then(|| times[(n * 95).div_ceil(100) - 1])
+}
+
 /// Runs `exe hook pre-tool` on [`PROBE`]; its stdout and run time if it exited 0.
 fn run_hook(exe: &Path, pipe: Option<&str>) -> Option<(String, Duration)> {
+    run_hook_event(exe, pipe, "pre-tool", PROBE)
+}
+
+/// Runs `exe hook <arg>` on `input`; its stdout and run time if it exited 0.
+fn run_hook_event(
+    exe: &Path,
+    pipe: Option<&str>,
+    arg: &str,
+    input: &str,
+) -> Option<(String, Duration)> {
     let mut cmd = Command::new(exe);
-    cmd.args(["hook", "pre-tool"])
+    cmd.args(["hook", arg])
         .env_remove(ENV_PIPE)
         .env_remove(ENV_JOB)
         .stdin(Stdio::piped())
@@ -180,7 +239,7 @@ fn run_hook(exe: &Path, pipe: Option<&str>) -> Option<(String, Duration)> {
     }
     let start = Instant::now();
     let mut child = cmd.spawn().ok()?;
-    child.stdin.take()?.write_all(PROBE.as_bytes()).ok()?;
+    child.stdin.take()?.write_all(input.as_bytes()).ok()?;
     let output = child.wait_with_output().ok()?;
     let took = start.elapsed();
     output.status.success().then(|| {
@@ -197,4 +256,28 @@ fn claude_version(bin: &Path) -> Option<String> {
         .status
         .success()
         .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn p95_is_the_nearest_rank() {
+        let ms = |n: u64| Duration::from_millis(n);
+        assert_eq!(percentile95(&[]), None);
+        assert_eq!(percentile95(&[ms(3)]), Some(ms(3)));
+        let five = [ms(1), ms(2), ms(3), ms(4), ms(50)];
+        assert_eq!(percentile95(&five), Some(ms(50)));
+        let twenty: Vec<_> = (1..=20).map(ms).collect();
+        assert_eq!(percentile95(&twenty), Some(ms(19)));
+    }
+
+    #[test]
+    fn probes_name_their_event() {
+        for event in HookEvent::ALL {
+            let v: serde_json::Value = serde_json::from_str(&probe_for(event)).unwrap();
+            assert_eq!(v["hook_event_name"], event.as_str());
+        }
+    }
 }
