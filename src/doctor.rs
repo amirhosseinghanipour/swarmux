@@ -5,11 +5,13 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use swarmux_application::ports::{ConsentStore, SystemMonitor};
+use swarmux_application::ports::{Clock, ConsentStore, SystemMonitor};
 use swarmux_application::{GuardSettings, Settings, SharedPolicy};
 use swarmux_infrastructure::hook::{self, ENV_JOB, ENV_PIPE, HookServer};
 use swarmux_infrastructure::jev::keys;
-use swarmux_infrastructure::{Endpoint, Paths, SqliteStore, SysinfoMonitor, load_settings};
+use swarmux_infrastructure::{
+    Endpoint, Paths, SqliteStore, SysinfoMonitor, SystemClock, load_settings,
+};
 
 const GB: f64 = (1u64 << 30) as f64;
 
@@ -50,6 +52,7 @@ pub fn run() -> anyhow::Result<()> {
             println!("       default_model   = \"{}\"", s.default_model);
             guard_summary(&s);
             jev_summary(&s, &paths);
+            crate::telemetry::doctor(&s, &paths, SystemClock.now());
         }
         Err(e) => println!("fail config {e}"),
     }

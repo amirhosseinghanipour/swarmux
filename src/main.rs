@@ -2,6 +2,7 @@
 
 mod doctor;
 mod jev;
+mod telemetry;
 
 use std::rc::Rc;
 
@@ -141,7 +142,10 @@ fn run_tui() -> anyhow::Result<()> {
         clock.clone(),
     );
     let history = HistoryService::new(store.clone());
-    let mut jobs = JobService::new(store.clone(), store, runner, clock)
+    // Collectors run from the start so the stations have data once shown.
+    let _telemetry = telemetry::start(&settings, &paths, store.clone(), clock.clone());
+    let mut jobs = JobService::new(store.clone(), store.clone(), runner, clock)
+        .with_telemetry_store(store)
         .with_limits(settings.limits())
         .with_loop_repeats(guard_settings.loop_repeats)
         .with_monitor(Rc::new(SysinfoMonitor::new()))

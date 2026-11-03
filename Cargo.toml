@@ -42,6 +42,7 @@ rust-version.workspace = true
 
 [dependencies]
 swarmux-application.workspace = true
+swarmux-domain.workspace = true
 swarmux-infrastructure.workspace = true
 swarmux-tui.workspace = true
 anyhow.workspace = true
@@ -50,5 +51,4 @@ rpassword.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]
-swarmux-domain.workspace = true
 serde_json.workspace = true
