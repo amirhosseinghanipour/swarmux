@@ -210,6 +210,26 @@ impl AttentionItem {
         )
     }
 
+    /// A running job waiting for the user, with no held tool call to explain
+    /// it (P2).
+    pub fn needs_input(
+        job: JobId,
+        session: SessionId,
+        title: &str,
+        since: Millis,
+    ) -> AttentionItem {
+        AttentionItem::of_job(
+            job,
+            session,
+            AttentionKind::Question,
+            Priority::P2,
+            Likelihood::Certain,
+            title,
+            "waiting for your input",
+            since,
+        )
+    }
+
     /// A running job with no event since `since` (P3).
     pub fn stalled(job: JobId, session: SessionId, title: &str, since: Millis) -> AttentionItem {
         AttentionItem::of_job(

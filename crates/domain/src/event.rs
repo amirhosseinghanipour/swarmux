@@ -18,6 +18,35 @@ impl Actor {
     }
 }
 
+/// What the session is doing, as Claude Code reports it
+/// (`system/session_state_changed`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum SessionState {
+    Idle,
+    Running,
+    /// Waiting for the user (a permission prompt or a question).
+    RequiresAction,
+}
+
+impl SessionState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SessionState::Idle => "idle",
+            SessionState::Running => "running",
+            SessionState::RequiresAction => "requires_action",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<SessionState> {
+        match s {
+            "idle" => Some(SessionState::Idle),
+            "running" => Some(SessionState::Running),
+            "requires_action" => Some(SessionState::RequiresAction),
+            _ => None,
+        }
+    }
+}
+
 /// Something an agent did, independent of how Claude Code reported it.
 #[derive(Clone, Debug, PartialEq)]
 pub enum AgentEvent {
@@ -73,6 +102,8 @@ pub enum AgentEvent {
         todos: Vec<Todo>,
         actor: Actor,
     },
+    /// The session went idle, running, or is waiting for the user.
+    SessionState(SessionState),
     /// Known noise (hook progress, stream deltas, …).
     Ignored {
         kind: String,
@@ -100,6 +131,7 @@ impl AgentEvent {
             AgentEvent::RateLimit(_) => "rate_limit",
             AgentEvent::Environment(_) => "environment",
             AgentEvent::Todos { .. } => "todos",
+            AgentEvent::SessionState(_) => "session_state",
             AgentEvent::Ignored { .. } => "ignored",
             AgentEvent::Unknown { .. } => "unknown",
             AgentEvent::Malformed { .. } => "malformed",

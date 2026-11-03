@@ -8,6 +8,7 @@ mod date;
 mod error;
 mod event;
 mod guard;
+mod hook;
 mod job;
 mod json;
 pub mod ledger;
@@ -29,11 +30,12 @@ pub use attention::{
 };
 pub use date::{iso_date, iso_minute, parse_iso_millis};
 pub use error::DomainError;
-pub use event::{Actor, AgentEvent};
+pub use event::{Actor, AgentEvent, SessionState};
 pub use guard::{
     BUILTIN_ALLOW, BUILTIN_DENY, Decision, GuardPolicy, LoopBreaker, LoopTrip, Pattern, Unmatched,
     Verdict, error_signature, host_of,
 };
+pub use hook::HookEvent;
 pub use job::{Job, JobId, JobResult, JobStatus};
 pub use model::{Family, display_name};
 pub use phase::{Phase, PhaseInput, phase_of};

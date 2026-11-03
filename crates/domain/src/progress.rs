@@ -482,6 +482,7 @@ pub fn describe(ev: &AgentEvent) -> String {
                 todos.len()
             )
         }
+        AgentEvent::SessionState(state) => state.as_str().to_string(),
         AgentEvent::Ignored { kind } | AgentEvent::Unknown { kind, .. } => kind.clone(),
         AgentEvent::Malformed { raw } => raw.clone(),
     };
