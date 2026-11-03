@@ -10,9 +10,9 @@ use std::rc::Rc;
 
 use swarmux_application::ports::Clock;
 use swarmux_application::{
-    AppError, AppResult, GuardService, HistoryService, HookBus, JobService, PendingApproval,
-    PromptService, QueueEntry, QueueStats, RoutingService, SessionService, TelemetryService,
-    TelemetrySettings, UiSettings,
+    AppError, AppResult, GateService, GuardService, HistoryService, HookBus, JobService,
+    PendingApproval, PromptService, QueueEntry, QueueStats, RoutingService, SessionService,
+    TelemetryService, TelemetrySettings, UiSettings,
 };
 use swarmux_domain::{AttentionKind, JobId, JobProgress, Millis, PromptId, Session, SessionId};
 
@@ -131,6 +131,8 @@ pub struct App {
     pub splash: SplashInfo,
     /// Lifecycle events reported by the agents' hooks.
     hooks: Option<HookBus>,
+    /// The done-gate's verdicts.
+    gate: Option<GateService>,
 }
 
 /// What the composition root knows at start-up.
@@ -187,6 +189,7 @@ impl App {
             anim: RefCell::new(Anim::default()),
             telemetry: Telemetry::default(),
             hooks: None,
+            gate: None,
             focus: None,
             toast: None,
             splash: SplashInfo::default(),
@@ -223,6 +226,16 @@ impl App {
     pub fn with_hook_bus(mut self, bus: HookBus) -> App {
         self.hooks = Some(bus);
         self
+    }
+
+    /// Records the done-gate's verdicts and shows them on the wall.
+    pub fn with_gate(mut self, gate: GateService) -> App {
+        self.set_gate(gate);
+        self
+    }
+
+    pub(crate) fn set_gate(&mut self, gate: GateService) {
+        self.gate = Some(gate);
     }
 
     /// Time for ages and countdowns; without it the screens show no ages.
@@ -272,8 +285,12 @@ impl App {
             .as_ref()
             .map(HookBus::changes)
             .unwrap_or_default();
-        self.mission
-            .refresh(&self.guard, &self.jobs, &hook_changes, now, cwd.as_deref());
+        self.mission.refresh(
+            (&self.guard, &self.jobs, self.gate.as_ref()),
+            &hook_changes,
+            now,
+            cwd.as_deref(),
+        );
     }
 
     /// New data for the telemetry panels.
@@ -322,6 +339,10 @@ impl App {
         }
         if let Some(hooks) = &mut self.hooks {
             errors.extend(hooks.pump());
+        }
+        if let Some(gate) = &mut self.gate {
+            let (_, gate_errors) = gate.pump();
+            errors.extend(gate_errors);
         }
         errors.extend(self.pump_routes());
         if let Some(e) = errors.into_iter().last() {

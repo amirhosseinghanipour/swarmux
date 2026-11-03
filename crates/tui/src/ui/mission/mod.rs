@@ -56,6 +56,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let tiles = wall_tiles(
         &app.sessions,
         &app.mission.facts,
+        &app.mission.gates,
         &held,
         app.mission.usage(),
         now,

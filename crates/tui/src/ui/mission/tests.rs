@@ -923,3 +923,101 @@ fn the_approval_is_one_line_at_80x24_and_the_wall_stays() {
     let big = render_to_string(&t.app, 120, 40);
     assert!(big.contains("approval needed"), "{big}");
 }
+
+fn gate_record(
+    job: swarmux_domain::JobId,
+    outcome: swarmux_domain::gate::GateOutcome,
+    blocks: u32,
+) -> swarmux_application::GateRecord {
+    use swarmux_domain::gate::{CheckRun, GateFindings, GateOrigin};
+    swarmux_application::GateRecord {
+        job: Some(job),
+        session: "claude-1".into(),
+        event: Some(swarmux_domain::HookEvent::Stop),
+        root: "/work".into(),
+        origin: GateOrigin::File,
+        outcome,
+        blocks,
+        max_blocks: 3,
+        findings: GateFindings {
+            runs: vec![CheckRun {
+                name: "cargo test".into(),
+                command: "cargo test".into(),
+                exit: Some(101),
+                timed_out: false,
+                spawn_error: None,
+                duration_ms: 4_000,
+                output: "assertion failed".into(),
+                flaky: false,
+            }],
+            pins: Vec::new(),
+            gaps: vec!["you said \"done\", but no test run succeeded in this session".into()],
+        },
+        digest: "swarmux gate: still failing after 3 blocks.\n✗ cargo test: `cargo test` exited 101 after 4.0 s".into(),
+        problem: None,
+    }
+}
+
+#[test]
+fn gate_verdicts_become_wall_chips_changes_and_an_inbox_item() {
+    use std::rc::Rc;
+    use swarmux_application::GateService;
+    use swarmux_application::ledger::LedgerService;
+    use swarmux_application::testing::InMemoryLedger;
+    use swarmux_domain::gate::GateOutcome;
+    use swarmux_domain::{AttentionKind, ledger::LedgerKind};
+
+    let mut t = test_app();
+    t.with_session("oracle");
+    t.send("make the answer right");
+    init(&t, 0, "claude-sonnet-4-5");
+    let (tx, rx) = std::sync::mpsc::channel();
+    let ledger = Rc::new(InMemoryLedger::default());
+    let service = Rc::new(LedgerService::new(ledger.clone(), t.clock.clone()));
+    t.app.set_gate(GateService::new(
+        rx,
+        service,
+        t.store.clone(),
+        t.clock.clone(),
+    ));
+    t.app.screen = Screen::Mission;
+    t.app.update();
+    let out = render_to_string(&t.app, 240, 64);
+    assert!(out.contains("gate runs when the agent stops"), "{out}");
+
+    let job = t.app.mission.facts[0].job_id;
+    tx.send(gate_record(job, GateOutcome::Block, 0)).unwrap();
+    t.app.update();
+    let out = render_to_string(&t.app, 240, 64);
+    for needle in ["gate 1/3", "cargo test", "gate blocked a stop (1 of 3)"] {
+        assert!(out.contains(needle), "missing {needle:?}\n{out}");
+    }
+    assert!(!out.contains("gate runs when the agent stops"));
+    assert!(
+        t.app
+            .mission
+            .items
+            .iter()
+            .all(|i| i.kind != AttentionKind::GateEscalated)
+    );
+
+    tx.send(gate_record(job, GateOutcome::Escalate, 3)).unwrap();
+    t.app.update();
+    let out = render_to_string(&t.app, 240, 64);
+    assert!(out.contains("gate gave up"), "{out}");
+    let item = t
+        .app
+        .mission
+        .items
+        .iter()
+        .find(|i| i.kind == AttentionKind::GateEscalated)
+        .expect("an inbox item");
+    assert_eq!(item.title, "make the answer right");
+    assert!(item.detail.starts_with("✗ cargo test"));
+    let verdicts = ledger
+        .entries()
+        .iter()
+        .filter(|e| e.draft.kind == LedgerKind::GateVerdict)
+        .count();
+    assert_eq!(verdicts, 2);
+}

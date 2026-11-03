@@ -233,7 +233,7 @@ fn render_card(frame: &mut Frame, area: Rect, app: &App, tile: &Tile, scale: f64
 
     let mut next = 3;
     if tall {
-        // Todo progress, then review and guard chips.
+        // Todo progress, then done-gate, review and guard chips.
         let todo = match tile.todos {
             Some((done, all)) => {
                 let mut spans = vec![label(t, "todo ")];
@@ -254,7 +254,7 @@ fn render_card(frame: &mut Frame, area: Rect, app: &App, tile: &Tile, scale: f64
         frame.render_widget(todo, line(next));
         next += 1;
         let chips: Vec<Span> = if tile.chips.is_empty() {
-            vec![dim(t, "no gates yet")]
+            vec![dim(t, "gate runs when the agent stops")]
         } else {
             tile.chips
                 .iter()

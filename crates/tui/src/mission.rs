@@ -1,12 +1,14 @@
 //! Mission control's state: the attention inbox, the change log, the session
 //! wall and the telemetry snapshot, refreshed once per update.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use swarmux_application::{
-    AttentionService, Change, GuardService, JobFact, JobService, TelemetryService,
-    TelemetrySettings, TelemetrySnapshot,
+    AttentionService, Change, GateService, GateState, GuardService, JobFact, JobService,
+    TelemetryService, TelemetrySettings, TelemetrySnapshot,
 };
+use swarmux_domain::gate::GateOutcome;
 use swarmux_domain::telemetry::UsageReport;
 use swarmux_domain::{
     AttentionId, AttentionItem, JobId, JobStatus, Millis, ReviewState, ReviewVerdict, Session,
@@ -54,6 +56,8 @@ pub struct MissionState {
     /// Newest first.
     pub changes: Vec<Change>,
     pub facts: Vec<JobFact>,
+    /// Each job's latest done-gate verdict.
+    pub gates: HashMap<JobId, GateState>,
     pub snapshot: TelemetrySnapshot,
     pub cadence: Cadence,
     selected: Option<AttentionId>,
@@ -74,6 +78,7 @@ impl Default for MissionState {
             items: Vec::new(),
             changes: Vec::new(),
             facts: Vec::new(),
+            gates: HashMap::new(),
             snapshot: TelemetrySnapshot::default(),
             cadence: Cadence::default(),
             selected: None,
@@ -98,17 +103,20 @@ impl MissionState {
     /// and GitHub feeds should follow.
     pub fn refresh(
         &mut self,
-        guard: &GuardService,
-        jobs: &JobService,
+        (guard, jobs, gate): (&GuardService, &JobService, Option<&GateService>),
         hook_changes: &[Change],
         now: Millis,
         cwd: Option<&Path>,
     ) {
-        self.items = self.attention.collect(guard, jobs, now);
-        self.changes = self
-            .attention
-            .changes(guard, jobs, hook_changes, CHANGES_KEPT);
         self.facts = jobs.facts();
+        let escalations = gate.map(|g| g.escalations(&self.facts)).unwrap_or_default();
+        self.items = self.attention.collect_with(guard, jobs, escalations, now);
+        let mut extra = hook_changes.to_vec();
+        if let Some(g) = gate {
+            extra.extend(g.changes());
+            self.gates = g.states().clone();
+        }
+        self.changes = self.attention.changes(guard, jobs, &extra, CHANGES_KEPT);
         self.keep_selection();
         if let Some(feed) = &self.feed {
             if let Some(cwd) = cwd
@@ -281,7 +289,7 @@ pub struct Tile {
     pub job: Option<JobId>,
     /// Todos done and all, when the lead keeps a list.
     pub todos: Option<(u32, u32)>,
-    /// Review and guard state as short chips.
+    /// Done-gate, review and guard state as short chips.
     pub chips: Vec<Chip>,
 }
 
@@ -294,19 +302,52 @@ pub enum Tone {
     Info,
 }
 
-/// A short fact about a session: `review pass`, `loop stop`.
+/// A short fact about a session: `✓ cargo test`, `review pass`, `loop stop`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Chip {
     pub text: String,
     pub tone: Tone,
 }
 
-fn chips_of(f: &JobFact, held: bool) -> Vec<Chip> {
+/// The done-gate's chips: its state first (cards cut the row), then one
+/// per check, then what else it found.
+fn gate_chips(g: &GateState) -> Vec<Chip> {
+    let chip = |text: String, tone| Chip { text, tone };
+    let mut out = Vec::new();
+    match g.outcome {
+        GateOutcome::Block => out.push(chip(
+            format!("gate {}/{}", g.blocks, g.max_blocks),
+            Tone::Warn,
+        )),
+        GateOutcome::Escalate => out.push(chip("gate gave up".into(), Tone::Bad)),
+        GateOutcome::Pass => {}
+    }
+    if let Some(problem) = &g.problem {
+        let what = problem.split(':').next().unwrap_or("gate");
+        out.push(chip(format!("{what} invalid"), Tone::Bad));
+    }
+    for (name, passed, flaky) in &g.checks {
+        out.push(match (passed, flaky) {
+            (true, false) => chip(name.clone(), Tone::Good),
+            (true, true) => chip(format!("{name} flaky"), Tone::Warn),
+            (false, _) => chip(name.clone(), Tone::Bad),
+        });
+    }
+    if g.protected_changed > 0 {
+        out.push(chip("protected changed".into(), Tone::Bad));
+    }
+    if g.evidence_gaps > 0 {
+        out.push(chip("evidence missing".into(), Tone::Warn));
+    }
+    out
+}
+
+fn chips_of(f: &JobFact, gate: Option<&GateState>, held: bool) -> Vec<Chip> {
     let chip = |text: &str, tone| Chip {
         text: text.to_string(),
         tone,
     };
-    let mut out = Vec::new();
+    let mut out = gate.map(gate_chips).unwrap_or_default();
     match &f.review {
         Some(ReviewState::Requested | ReviewState::Running { .. }) => {
             out.push(chip("review pending", Tone::Info));
@@ -345,6 +386,7 @@ fn chips_of(f: &JobFact, held: bool) -> Vec<Chip> {
 pub fn wall_tiles(
     sessions: &[Session],
     facts: &[JobFact],
+    gates: &HashMap<JobId, GateState>,
     waiting: &[JobId],
     usage: Option<&UsageReport>,
     now: Millis,
@@ -404,7 +446,7 @@ pub fn wall_tiles(
                     .filter(|f| f.todos_total > 0)
                     .map(|f| (f.todos_done, f.todos_total)),
                 chips: latest
-                    .map(|f| chips_of(f, state == TileState::Waiting))
+                    .map(|f| chips_of(f, gates.get(&f.job_id), state == TileState::Waiting))
                     .unwrap_or_default(),
             }
         })
@@ -464,7 +506,7 @@ mod tests {
         let listed = [c.clone(), a.clone(), b.clone()];
         let names = |t: &[Tile]| t.iter().map(|t| t.name.clone()).collect::<Vec<_>>();
 
-        let idle = wall_tiles(&listed, &[], &[], None, 500);
+        let idle = wall_tiles(&listed, &[], &HashMap::new(), &[], None, 500);
         assert_eq!(names(&idle), ["alpha", "beta", "gamma"]);
 
         let busy = [
@@ -472,7 +514,7 @@ mod tests {
             fact(2, &b, JobStatus::Failed),
             fact(3, &a, JobStatus::Done),
         ];
-        let tiles = wall_tiles(&listed, &busy, &[], None, 500);
+        let tiles = wall_tiles(&listed, &busy, &HashMap::new(), &[], None, 500);
         assert_eq!(names(&tiles), names(&idle));
         let states: Vec<_> = tiles.iter().map(|t| t.state).collect();
         assert_eq!(
@@ -485,7 +527,7 @@ mod tests {
             fact(2, &b, JobStatus::Running),
             fact(3, &a, JobStatus::Queued),
         ];
-        let tiles = wall_tiles(&listed, &moved, &[JobId(2)], None, 500);
+        let tiles = wall_tiles(&listed, &moved, &HashMap::new(), &[JobId(2)], None, 500);
         assert_eq!(names(&tiles), names(&idle));
         assert_eq!(tiles[1].state, TileState::Waiting);
     }
@@ -496,7 +538,7 @@ mod tests {
         let mut old = fact(1, &a, JobStatus::Done);
         old.prompt = "old".into();
         let new = fact(2, &a, JobStatus::Running);
-        let tile = &wall_tiles(&[a], &[old, new], &[], None, 1_100)[0];
+        let tile = &wall_tiles(&[a], &[old, new], &HashMap::new(), &[], None, 1_100)[0];
         assert_eq!(tile.task, "do it");
         assert_eq!(tile.model, "opus");
         assert_eq!(tile.elapsed_ms, Some(1_000));
@@ -570,5 +612,65 @@ mod tests {
         m.snapshot.usage.updated_at = None;
         m.snapshot.usage.error = Some("no transcripts".into());
         assert_eq!(m.tells(now)[0].kind, TellKind::Failed);
+    }
+
+    #[test]
+    fn gate_chips_lead_with_the_gate_state() {
+        let s = session("a", 1);
+        let f = JobFact {
+            agents_running: 0,
+            ..fact(1, &s, JobStatus::Running)
+        };
+        let mut gate = GateState {
+            outcome: GateOutcome::Block,
+            blocks: 2,
+            max_blocks: 3,
+            checks: vec![
+                ("cargo test".into(), false, false),
+                ("lint".into(), true, true),
+            ],
+            protected_changed: 1,
+            evidence_gaps: 1,
+            digest: String::new(),
+            problem: None,
+            at: 0,
+        };
+        let gates = HashMap::from([(JobId(1), gate.clone())]);
+        let tile = &wall_tiles(
+            std::slice::from_ref(&s),
+            std::slice::from_ref(&f),
+            &gates,
+            &[],
+            None,
+            500,
+        )[0];
+        let chips: Vec<(&str, Tone)> = tile
+            .chips
+            .iter()
+            .map(|c| (c.text.as_str(), c.tone))
+            .collect();
+        assert_eq!(
+            chips,
+            [
+                ("gate 2/3", Tone::Warn),
+                ("cargo test", Tone::Bad),
+                ("lint flaky", Tone::Warn),
+                ("protected changed", Tone::Bad),
+                ("evidence missing", Tone::Warn),
+            ]
+        );
+        gate.outcome = GateOutcome::Pass;
+        gate.checks = vec![("cargo test".into(), true, false)];
+        gate.protected_changed = 0;
+        gate.evidence_gaps = 0;
+        let gates = HashMap::from([(JobId(1), gate)]);
+        let tile = &wall_tiles(&[s], &[f], &gates, &[], None, 500)[0];
+        assert_eq!(
+            tile.chips,
+            [Chip {
+                text: "cargo test".into(),
+                tone: Tone::Good
+            }]
+        );
     }
 }
