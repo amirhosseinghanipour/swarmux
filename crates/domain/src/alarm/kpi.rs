@@ -190,7 +190,13 @@ pub fn detect_flood(items: &[AttentionItem], now: Millis) -> Option<Flood> {
     let mut groups = Vec::new();
     let mut suppressed = HashSet::new();
     for (cause, mut members) in by_cause {
-        members.sort_by(|a, b| (a.since, &a.id).cmp(&(b.since, &b.id)));
+        members.sort_by(|a, b| {
+            (a.since, a.request.unwrap_or(u64::MAX), &a.id).cmp(&(
+                b.since,
+                b.request.unwrap_or(u64::MAX),
+                &b.id,
+            ))
+        });
         if members.len() < 2 {
             continue;
         }
