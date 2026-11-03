@@ -3,6 +3,7 @@
 mod consents;
 mod decisions;
 mod jobs;
+mod ledger;
 mod prompts;
 mod sessions;
 mod telemetry;
@@ -13,6 +14,7 @@ use rusqlite::Connection;
 use swarmux_application::{AppError, AppResult};
 
 pub use jobs::PAYLOAD_CAP;
+pub use ledger::SqliteLedger;
 
 pub struct SqliteStore {
     conn: Connection,
@@ -135,9 +137,29 @@ CREATE TABLE session_environments (
 );
 ";
 
+/// The hash-chained ledger. Rows are only ever inserted; the triggers
+/// refuse changing or removing them.
+const SCHEMA_V8: &str = "
+CREATE TABLE ledger (
+    seq INTEGER PRIMARY KEY,
+    ts INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    actor TEXT NOT NULL,
+    job_id INTEGER,
+    session TEXT,
+    payload_json TEXT NOT NULL,
+    prev_hash BLOB NOT NULL,
+    hash BLOB NOT NULL
+);
+CREATE TRIGGER ledger_no_update BEFORE UPDATE ON ledger
+BEGIN SELECT RAISE(ABORT, 'the ledger is append-only'); END;
+CREATE TRIGGER ledger_no_delete BEFORE DELETE ON ledger
+BEGIN SELECT RAISE(ABORT, 'the ledger is append-only'); END;
+";
+
 /// Migrations in order; index + 1 is the resulting `user_version`.
 const MIGRATIONS: &[&str] = &[
-    SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6, SCHEMA_V7,
+    SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6, SCHEMA_V7, SCHEMA_V8,
 ];
 
 /// Maps adapter errors into the application's error type.

@@ -24,4 +24,4 @@ pub use hook::HookServer;
 pub use jev::{Endpoint, JevHttp};
 pub use monitor::SysinfoMonitor;
 pub use paths::Paths;
-pub use sqlite::SqliteStore;
+pub use sqlite::{SqliteLedger, SqliteStore};
