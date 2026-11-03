@@ -242,7 +242,7 @@ impl Worktrees for GitWorktrees {
     }
 }
 
-fn remove_dir_retrying(path: &Path) -> AppResult<()> {
+pub(crate) fn remove_dir_retrying(path: &Path) -> AppResult<()> {
     let mut last = None;
     for attempt in 0..TRIES {
         match fs::remove_dir_all(path) {

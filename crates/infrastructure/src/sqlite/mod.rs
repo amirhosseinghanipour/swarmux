@@ -2,6 +2,7 @@
 
 mod consents;
 mod decisions;
+mod evidence;
 mod jobs;
 mod ledger;
 mod missions;
@@ -209,10 +210,25 @@ CREATE TABLE missions (
 CREATE INDEX missions_job ON missions(job_id);
 ";
 
+/// Evidence bundles: the JSON as sealed, its digest, the ledger entry that
+/// sealed it and the outcome labels earned since.
+const SCHEMA_V11: &str = "
+CREATE TABLE evidence (
+    slug TEXT PRIMARY KEY,
+    job_id INTEGER NOT NULL,
+    digest TEXT NOT NULL,
+    seal_seq INTEGER,
+    bundle TEXT NOT NULL,
+    labels TEXT NOT NULL DEFAULT '[]',
+    sealed_at INTEGER NOT NULL
+);
+CREATE INDEX evidence_job ON evidence(job_id);
+";
+
 /// Migrations in order; index + 1 is the resulting `user_version`.
 const MIGRATIONS: &[&str] = &[
     SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6, SCHEMA_V7, SCHEMA_V8,
-    SCHEMA_V9, SCHEMA_V10,
+    SCHEMA_V9, SCHEMA_V10, SCHEMA_V11,
 ];
 
 /// Maps adapter errors into the application's error type.
