@@ -19,14 +19,14 @@ use swarmux_application::ledger::{LedgerService, LedgeredDecisions, LedgeredJobs
 use swarmux_application::ports::Clock;
 use swarmux_application::{
     CombinedStatusline, GateKeeper, GateService, Governor, GuardService, HandoffBoard,
-    HistoryService, HookBus, Jev, JobService, MissionService, PromptService, RoutingService,
-    SessionService, SharedPolicy, StatuslineFeed, TruthBoard,
+    HistoryService, HookBus, Jev, JobService, MissionService, NotifyService, PromptService,
+    RoutingService, SessionService, SharedPolicy, StatuslineFeed, TruthBoard,
 };
 use swarmux_infrastructure::hook::{self, HookServer, Responders};
 use swarmux_infrastructure::{
     ClaudeCli, ConfigRuleWriter, FsAgentCatalog, FsGateSource, GitCli, GuardHook, HaikuLinter,
     HaikuRouter, MissionFiles, Paths, ProcessChecker, SqliteLedger, SqliteStore, SysinfoMonitor,
-    SystemClock, WindowsTerminal, load_settings,
+    SystemClock, WindowsTerminal, build_notifier, load_settings, utc_offset_minutes,
 };
 use swarmux_tui::{App, Launch};
 
@@ -393,6 +393,11 @@ fn run_tui(no_splash: bool) -> anyhow::Result<()> {
     .with_evidence(evidence, away_since)
     .with_checkpoints(checkpoints)
     .with_terminal(Rc::new(WindowsTerminal::new(doctor::claude_bin())))
+    .with_notifier(NotifyService::new(
+        build_notifier(&settings.notify, rt.handle()),
+        settings.notify.clone(),
+        utc_offset_minutes,
+    ))
     .with_telemetry_feed(telemetry, &settings.telemetry)
     .with_look(
         &settings.ui,
