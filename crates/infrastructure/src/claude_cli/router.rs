@@ -76,7 +76,7 @@ impl PromptRouter for HaikuRouter {
 }
 
 /// Runs `claude` with `prompt` on stdin; its stdout, or why it failed.
-async fn run(mut cmd: Command, prompt: String, bin: String) -> Result<String, String> {
+pub(crate) async fn run(mut cmd: Command, prompt: String, bin: String) -> Result<String, String> {
     let mut child = cmd.spawn().map_err(|e| format!("cannot run {bin}: {e}"))?;
     if let Some(mut stdin) = child.stdin.take() {
         let _ = stdin.write_all(prompt.as_bytes()).await;

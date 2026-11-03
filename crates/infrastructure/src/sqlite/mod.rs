@@ -4,6 +4,7 @@ mod consents;
 mod decisions;
 mod jobs;
 mod ledger;
+mod missions;
 mod prompts;
 mod sessions;
 mod telemetry;
@@ -190,10 +191,28 @@ CREATE TABLE checkpoints (
 CREATE INDEX checkpoints_job ON checkpoints(job_id);
 ";
 
+/// Missions: the contract (TOML), where it stands and what it spent.
+const SCHEMA_V10: &str = "
+CREATE TABLE missions (
+    slug TEXT PRIMARY KEY,
+    root TEXT NOT NULL,
+    session_id TEXT,
+    contract TEXT NOT NULL,
+    state TEXT NOT NULL,
+    job_id INTEGER,
+    lint TEXT,
+    spend TEXT NOT NULL,
+    note TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+CREATE INDEX missions_job ON missions(job_id);
+";
+
 /// Migrations in order; index + 1 is the resulting `user_version`.
 const MIGRATIONS: &[&str] = &[
     SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6, SCHEMA_V7, SCHEMA_V8,
-    SCHEMA_V9,
+    SCHEMA_V9, SCHEMA_V10,
 ];
 
 /// Maps adapter errors into the application's error type.

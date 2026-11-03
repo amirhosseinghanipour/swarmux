@@ -27,6 +27,8 @@ const SKIPPED: [&str; 7] = [
     "__pycache__",
     ".mypy_cache",
 ];
+/// Files below this are swarmux's to change, not the agents'.
+const MISSIONS_PREFIX: &str = ".swarmux/missions/";
 /// Protected files hashed at most, so a broad glob can't stall a hook.
 const PINS_MAX: usize = 5000;
 /// Files larger than this are pinned by size, not content.
@@ -253,7 +255,10 @@ impl GateSource for FsGateSource {
                 root.join(&start)
             };
             walk(&dir, &start, &mut |rel, path| {
-                if out.len() < PINS_MAX && protected_glob(globs, rel, fold).is_some() {
+                // swarmux itself writes mission contracts there while
+                // agents run; writes by agents are still refused.
+                let ours = rel.starts_with(MISSIONS_PREFIX);
+                if out.len() < PINS_MAX && !ours && protected_glob(globs, rel, fold).is_some() {
                     out.push(Pin {
                         path: rel.to_string(),
                         sha256: hash_file(path),
@@ -398,6 +403,9 @@ run = ["cargo", "clippy"]
         assert_eq!(gate.origin, GateOrigin::File);
         assert_eq!(gate.spec.protected, ["tests/oracles/**"]);
 
+        // Mission contracts are swarmux's to write while agents run.
+        fs::create_dir_all(root.join(".swarmux/missions")).unwrap();
+        fs::write(root.join(".swarmux/missions/m.toml"), "goal = \"g\"").unwrap();
         let pins = source.pins(&gate.root, &gate.spec.protected_globs());
         let paths: Vec<&str> = pins.iter().map(|p| p.path.as_str()).collect();
         assert_eq!(paths, [".swarmux/gates.toml", "tests/oracles/expected.txt"]);
