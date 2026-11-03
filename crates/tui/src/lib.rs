@@ -6,6 +6,7 @@
 mod app;
 mod dashboard;
 mod history;
+mod mission;
 mod prompts;
 mod queue;
 mod routing;

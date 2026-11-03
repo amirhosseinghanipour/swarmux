@@ -148,7 +148,7 @@ fn run_tui(no_splash: bool) -> anyhow::Result<()> {
     );
     let history = HistoryService::new(store.clone());
     // Collectors run from the start so the stations have data once shown.
-    let _telemetry = telemetry::start(&settings, &paths, store.clone(), clock.clone());
+    let telemetry = telemetry::start(&settings, &paths, store.clone(), clock.clone());
     let mut jobs = JobService::new(store.clone(), store.clone(), runner, clock)
         .with_telemetry_store(store)
         .with_limits(settings.limits())
@@ -166,6 +166,8 @@ fn run_tui(no_splash: bool) -> anyhow::Result<()> {
         routing,
         std::env::current_dir()?,
     )
+    .with_clock(Rc::new(SystemClock))
+    .with_telemetry_feed(telemetry, &settings.telemetry)
     .with_look(
         &settings.ui,
         Launch {

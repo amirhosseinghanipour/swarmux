@@ -233,7 +233,7 @@ mod tests {
         t.send("write the docs");
         t.runner.emit(1, RunnerMsg::SpawnFailed("no claude".into()));
         t.app.update();
-        press(&mut t.app, KeyCode::Char('4'));
+        press(&mut t.app, KeyCode::Char('5'));
         t
     }
 
@@ -277,7 +277,7 @@ mod tests {
             cost_usd: 0.0311,
         };
         t.store.set_review(JobId(1), &review).unwrap();
-        press(&mut t.app, KeyCode::Char('4'));
+        press(&mut t.app, KeyCode::Char('5'));
         press(&mut t.app, KeyCode::Down);
         let out = render_to_string(&t.app, 160, 30);
         assert!(
@@ -337,7 +337,7 @@ mod tests {
         let t = with_history();
         // A new app over the same store: its jobs are history, not live.
         let mut t2 = crate::app::tests_support::test_app_with_store(t.store.clone());
-        press(&mut t2.app, KeyCode::Char('4'));
+        press(&mut t2.app, KeyCode::Char('5'));
         press(&mut t2.app, KeyCode::Down);
         press(&mut t2.app, KeyCode::Enter);
         assert_eq!(t2.app.screen, Screen::Dashboard);

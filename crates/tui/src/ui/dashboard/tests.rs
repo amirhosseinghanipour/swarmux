@@ -349,8 +349,9 @@ fn every_size_renders_without_panicking() {
 #[test]
 fn empty_dashboard_has_placeholders_not_numbers() {
     let mut t = test_app();
+    t.app.screen = crate::app::Screen::Dashboard;
     let out = render_to_string(&t.app, 160, 48);
-    assert!(out.contains("press 5 then n"), "{out}");
+    assert!(out.contains("press 6 then n"), "{out}");
     assert!(out.contains("REVIEW OFF (v)"), "{out}");
     t.with_session("demo");
     let out = render_to_string(&t.app, 160, 48);

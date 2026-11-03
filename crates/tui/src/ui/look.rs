@@ -18,6 +18,8 @@ pub enum IconSet {
     /// Plain ASCII marks that every font has.
     #[default]
     Ascii,
+    /// Geometric Unicode marks that ordinary monospace fonts have.
+    Unicode,
     /// Nerd Font glyphs.
     Nerd,
 }
@@ -50,12 +52,31 @@ pub enum Icon {
     Env,
     Mix,
     Theme,
+    /// Mission control: the attention inbox and the change log.
+    Inbox,
+    Changes,
+    /// What an inbox item is about.
+    Approval,
+    Question,
+    Failed,
+    Concerns,
+    Result,
+    Stalled,
+    /// A session's state on the wall.
+    StateRun,
+    StateWait,
+    StateDone,
+    StateErr,
+    StateIdle,
+    /// Where a window's time has got to on a gauge.
+    Pace,
 }
 
 impl IconSet {
     pub fn parse(s: &str) -> Option<IconSet> {
         match s.trim().to_ascii_lowercase().as_str() {
             "ascii" => Some(IconSet::Ascii),
+            "unicode" => Some(IconSet::Unicode),
             "nerd" => Some(IconSet::Nerd),
             _ => None,
         }
@@ -90,6 +111,61 @@ impl IconSet {
                 Env => "=",
                 Mix => "o",
                 Theme => "*",
+                Inbox => "!",
+                Changes => "~",
+                Approval => "!",
+                Question => "?",
+                Failed => "x",
+                Concerns => "~",
+                Result => "+",
+                Stalled => "z",
+                StateRun => "*",
+                StateWait => "?",
+                StateDone => "+",
+                StateErr => "x",
+                StateIdle => "-",
+                Pace => "|",
+            },
+            IconSet::Unicode => match icon {
+                Lead => "▸",
+                Reviewer => "◉",
+                Guard => "◆",
+                Subagents => "❖",
+                Back => "◂",
+                Timeline => "≈",
+                Who => "≡",
+                Log => "›",
+                Steps => "·",
+                Usage => "◔",
+                Burn => "▲",
+                Tokens => "⇄",
+                Context => "◍",
+                Agents => "┬",
+                Todos => "✓",
+                Tools => "✦",
+                Files => "▤",
+                Git => "⎇",
+                Ci => "✔",
+                System => "▦",
+                Wall => "▦",
+                Calendar => "▥",
+                Env => "≡",
+                Mix => "◔",
+                Theme => "◐",
+                Inbox => "◈",
+                Changes => "≋",
+                Approval => "◆",
+                Question => "?",
+                Failed => "✗",
+                Concerns => "△",
+                Result => "✓",
+                Stalled => "◌",
+                StateRun => "●",
+                StateWait => "◐",
+                StateDone => "✓",
+                StateErr => "✗",
+                StateIdle => "○",
+                Pace => "┃",
             },
             IconSet::Nerd => match icon {
                 Lead => "\u{f06a9}",      // md-robot
@@ -117,6 +193,20 @@ impl IconSet {
                 Env => "\u{f013}",        // fa-cog
                 Mix => "\u{f0200}",       // md-chart_donut
                 Theme => "\u{f03d8}",     // md-palette
+                Inbox => "\u{f01c}",      // fa-inbox
+                Changes => "\u{f1da}",    // fa-history
+                Approval => "\u{f132}",   // fa-shield
+                Question => "\u{f128}",   // fa-question
+                Failed => "\u{f00d}",     // fa-times
+                Concerns => "\u{f071}",   // fa-warning
+                Result => "\u{f00c}",     // fa-check
+                Stalled => "\u{f254}",    // fa-hourglass
+                StateRun => "\u{f04b}",   // fa-play
+                StateWait => "\u{f254}",  // fa-hourglass
+                StateDone => "\u{f00c}",  // fa-check
+                StateErr => "\u{f00d}",   // fa-times
+                StateIdle => "\u{f10c}",  // fa-circle_o
+                Pace => "┃",
             },
         }
     }
@@ -125,7 +215,7 @@ impl IconSet {
     pub fn spinner(self) -> SpinnerSet {
         match self {
             IconSet::Ascii => SpinnerSet::Line,
-            IconSet::Nerd => SpinnerSet::Braille,
+            IconSet::Unicode | IconSet::Nerd => SpinnerSet::Braille,
         }
     }
 }
@@ -321,6 +411,7 @@ mod tests {
     #[test]
     fn icon_sets() {
         assert_eq!(IconSet::parse("NERD"), Some(IconSet::Nerd));
+        assert_eq!(IconSet::parse("Unicode"), Some(IconSet::Unicode));
         assert_eq!(IconSet::Ascii.get(Icon::Guard), "#");
         assert!(IconSet::Ascii.get(Icon::Lead).is_ascii());
         assert!(!IconSet::Nerd.get(Icon::Lead).is_ascii());

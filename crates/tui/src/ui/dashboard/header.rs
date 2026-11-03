@@ -212,7 +212,7 @@ pub fn target(app: &App, t: &Theme, width: u16) -> Line<'static> {
             Span::styled(" ▶ ", Style::new().fg(t.lead)),
             label(
                 t,
-                "no session yet: press 5 then n to create one in this folder",
+                "no session yet: press 6 then n to create one in this folder",
             ),
         ]);
     };
