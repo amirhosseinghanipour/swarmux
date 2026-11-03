@@ -69,7 +69,7 @@ pub fn framed(
             Border::Dashed => BorderType::LightDoubleDashed,
         })
         .border_style(Style::new().fg(edge))
-        .style(Style::new().bg(theme.panel_bg))
+        .style(Style::new().bg(theme.panel_paint()))
         .title(Line::from(spans))
 }
 

@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use swarmux_application::UiSettings;
+use swarmux_application::{Base16, UiSettings};
 
 use super::grid::layout::{self, LayoutSpec};
 use super::widgets::SpinnerSet;
@@ -16,12 +16,55 @@ pub const LOW_POWER_FPS: u16 = 4;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum IconSet {
     /// Plain ASCII marks that every font has.
-    #[default]
     Ascii,
     /// Geometric Unicode marks that ordinary monospace fonts have.
+    #[default]
     Unicode,
     /// Nerd Font glyphs.
     Nerd,
+}
+
+/// What the environment says about the terminal font, for `icons = "auto"`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct IconHints {
+    /// `SWARMUX_ICONS`: `ascii`, `unicode` or `nerd`.
+    pub icons: Option<String>,
+    /// `NERD_FONT` (or `SWARMUX_NERD_FONT`): any of `1`, `true`, `yes`.
+    pub nerd_font: Option<String>,
+    /// The font's name: the `font` setting, else `SWARMUX_FONT`.
+    pub font: String,
+}
+
+impl IconHints {
+    /// Reads the environment; `font` is the configured font name, if any.
+    pub fn from_env(font: &str) -> IconHints {
+        let var = |k: &str| std::env::var(k).ok();
+        IconHints {
+            icons: var("SWARMUX_ICONS"),
+            nerd_font: var("NERD_FONT").or_else(|| var("SWARMUX_NERD_FONT")),
+            font: if font.trim().is_empty() {
+                var("SWARMUX_FONT").unwrap_or_default()
+            } else {
+                font.to_string()
+            },
+        }
+    }
+}
+
+/// Whether a font name says it is a Nerd Font: "Nerd" in the name, or the
+/// patched-font suffixes `NF`, `NFM` and `NFP` (JetBrainsMono NF, ...).
+fn is_nerd_font_name(font: &str) -> bool {
+    let name = font.trim();
+    let lower = name.to_ascii_lowercase();
+    if lower.contains("nerd") {
+        return true;
+    }
+    let word = lower
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|w| matches!(w, "nf" | "nfm" | "nfp"));
+    // "JetBrainsMonoNF": an upper-case suffix glued to the family name.
+    let glued = ["NFM", "NFP", "NF"].iter().any(|s| name.ends_with(s));
+    word || glued
 }
 
 /// Something with an icon.
@@ -88,6 +131,30 @@ impl IconSet {
             "unicode" => Some(IconSet::Unicode),
             "nerd" => Some(IconSet::Nerd),
             _ => None,
+        }
+    }
+
+    /// The glyph set a setting asks for. `auto` is Unicode unless the
+    /// environment says Nerd Font glyphs are there: `SWARMUX_ICONS`, then
+    /// `NERD_FONT`, then the font's name.
+    pub fn resolve(setting: &str, hints: &IconHints) -> IconSet {
+        if setting.trim().eq_ignore_ascii_case("auto") {
+            if let Some(set) = hints.icons.as_deref().and_then(IconSet::parse) {
+                return set;
+            }
+            let nerd_env = hints.nerd_font.as_deref().is_some_and(|v| {
+                matches!(
+                    v.trim().to_ascii_lowercase().as_str(),
+                    "1" | "true" | "yes" | "on"
+                )
+            });
+            if nerd_env || is_nerd_font_name(&hints.font) {
+                IconSet::Nerd
+            } else {
+                IconSet::Unicode
+            }
+        } else {
+            IconSet::parse(setting).unwrap_or_default()
         }
     }
 
@@ -250,10 +317,18 @@ impl IconSet {
     }
 }
 
+/// The theme `ui.theme` names: one of the user's `[themes.<name>]` tables
+/// (over its `base`), else a built-in.
+fn resolve_theme(ui: &UiSettings) -> Option<Theme> {
+    Theme::resolve(&ui.theme, &ui.themes)
+}
+
 /// Everything about how swarmux looks, resolved from [`UiSettings`].
 #[derive(Clone, Debug)]
 pub struct Look {
     pub theme: Theme,
+    /// `bg = "none"`: themes leave the background to the terminal.
+    pub transparent: bool,
     pub depth: ColorDepth,
     pub icons: IconSet,
     pub gaps: u16,
@@ -271,8 +346,9 @@ impl Default for Look {
     fn default() -> Look {
         Look {
             theme: Theme::default(),
+            transparent: false,
             depth: ColorDepth::TrueColor,
-            icons: IconSet::Ascii,
+            icons: IconSet::Unicode,
             gaps: 1,
             fps: 10,
             low_power: false,
@@ -286,12 +362,32 @@ impl Default for Look {
 impl Look {
     /// The look the settings ask for, and what in them was not understood.
     pub fn from_settings(ui: &UiSettings, depth: ColorDepth) -> (Look, Vec<String>) {
+        Look::from_settings_with(ui, depth, None, &IconHints::from_env(&ui.font))
+    }
+
+    /// Like [`Look::from_settings`], with the palette read from the file the
+    /// theme setting names (`wal`, `base16:<file>`, `matugen:<file>`) and the
+    /// font hints for `icons = "auto"`.
+    pub fn from_settings_with(
+        ui: &UiSettings,
+        depth: ColorDepth,
+        palette: Option<Result<Base16, String>>,
+        hints: &IconHints,
+    ) -> (Look, Vec<String>) {
         let mut problems = Vec::new();
-        let theme = Theme::named(&ui.theme).unwrap_or_else(|| {
-            problems.push(format!("unknown theme \"{}\", using reference", ui.theme));
-            Theme::default()
-        });
-        let icons = IconSet::parse(&ui.icons).unwrap_or_default();
+        let theme = match palette {
+            Some(Ok(p)) => Theme::from_base16(&p),
+            Some(Err(e)) => {
+                problems.push(format!("theme \"{}\": {e}; using reference", ui.theme));
+                Theme::default()
+            }
+            None => resolve_theme(ui).unwrap_or_else(|| {
+                problems.push(format!("unknown theme \"{}\", using reference", ui.theme));
+                Theme::default()
+            }),
+        }
+        .with_transparent(ui.transparent);
+        let icons = IconSet::resolve(&ui.icons, hints);
         let mut layouts = layout::presets();
         for user in &ui.layouts {
             match layout::from_settings(user) {
@@ -312,6 +408,7 @@ impl Look {
         let fps = ui.fps.clamp(1, 30);
         let look = Look {
             theme,
+            transparent: ui.transparent,
             depth,
             icons,
             gaps: ui.gaps.min(4),
@@ -356,7 +453,7 @@ impl Look {
     }
 
     pub fn next_theme(&mut self) -> &Theme {
-        self.theme = self.theme.next();
+        self.theme = self.theme.next().with_transparent(self.transparent);
         &self.theme
     }
 
@@ -386,7 +483,10 @@ mod tests {
         assert!(problems.is_empty(), "{problems:?}");
         assert_eq!(look.theme.name, "reference");
         assert_eq!(look.layout_spec().name, "command");
-        assert_eq!((look.icons, look.gaps, look.fps()), (IconSet::Ascii, 1, 10));
+        assert_eq!(
+            (look.icons, look.gaps, look.fps()),
+            (IconSet::Unicode, 1, 10)
+        );
         assert_eq!(look.frame_time(), Duration::from_millis(100));
     }
 
@@ -446,5 +546,107 @@ mod tests {
         assert!(IconSet::Ascii.get(Icon::Lead).is_ascii());
         assert!(!IconSet::Nerd.get(Icon::Lead).is_ascii());
         assert_eq!(IconSet::Nerd.spinner(), SpinnerSet::Braille);
+    }
+
+    #[test]
+    fn icons_auto_probes_the_environment_then_the_font() {
+        let none = IconHints::default();
+        assert_eq!(IconSet::resolve("auto", &none), IconSet::Unicode);
+        assert_eq!(IconSet::resolve("unicode", &none), IconSet::Unicode);
+        assert_eq!(IconSet::resolve("ascii", &none), IconSet::Ascii);
+        let env = |icons: &str| IconHints {
+            icons: Some(icons.into()),
+            ..IconHints::default()
+        };
+        assert_eq!(IconSet::resolve("auto", &env("nerd")), IconSet::Nerd);
+        assert_eq!(IconSet::resolve("auto", &env("ascii")), IconSet::Ascii);
+        assert_eq!(IconSet::resolve("auto", &env("junk")), IconSet::Unicode);
+        let nerd_font = IconHints {
+            nerd_font: Some("1".into()),
+            ..IconHints::default()
+        };
+        assert_eq!(IconSet::resolve("auto", &nerd_font), IconSet::Nerd);
+        for font in [
+            "JetBrainsMono Nerd Font",
+            "CaskaydiaCove NFM",
+            "FiraCode NF",
+            "JetBrainsMonoNF",
+            "Hack Nerd Font Mono",
+        ] {
+            let hints = IconHints {
+                font: font.into(),
+                ..IconHints::default()
+            };
+            assert_eq!(IconSet::resolve("auto", &hints), IconSet::Nerd, "{font}");
+        }
+        for font in ["Cascadia Mono", "Consolas", "Menlo", "Inf Mono", ""] {
+            let hints = IconHints {
+                font: font.into(),
+                ..IconHints::default()
+            };
+            assert_eq!(IconSet::resolve("auto", &hints), IconSet::Unicode, "{font}");
+        }
+        // Only `auto` consults the environment.
+        assert_eq!(IconSet::resolve("ascii", &env("nerd")), IconSet::Ascii);
+    }
+
+    #[test]
+    fn oled_is_the_default_theme_and_bg_none_is_transparent() {
+        let ui = UiSettings {
+            theme: "oled".into(),
+            transparent: true,
+            ..UiSettings::default()
+        };
+        let (look, problems) = Look::from_settings(&ui, ColorDepth::TrueColor);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(look.theme.name, "reference");
+        assert_eq!(look.theme.bg_paint(), ratatui::style::Color::Reset);
+        assert_eq!(look.theme.panel_paint(), ratatui::style::Color::Reset);
+        assert_eq!(look.theme.bg, ratatui::style::Color::Rgb(0, 0, 0));
+        let mut look = look;
+        assert!(
+            look.next_theme().transparent,
+            "stays transparent when cycled"
+        );
+    }
+
+    #[test]
+    fn user_themes_override_a_base() {
+        use std::collections::BTreeMap;
+        let mut roles = BTreeMap::new();
+        roles.insert("lead".to_string(), vec![0x112233]);
+        let ui = UiSettings {
+            theme: "Mine".into(),
+            themes: vec![swarmux_application::ThemeDef {
+                name: "mine".into(),
+                base: Some("nord".into()),
+                roles,
+            }],
+            ..UiSettings::default()
+        };
+        let (look, problems) = Look::from_settings(&ui, ColorDepth::TrueColor);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(look.theme.name, "mine");
+        assert_eq!(
+            look.theme.lead,
+            ratatui::style::Color::Rgb(0x11, 0x22, 0x33)
+        );
+        assert_eq!(look.theme.bg, crate::theme::NORD.bg);
+    }
+
+    #[test]
+    fn an_unreadable_palette_falls_back_and_says_why() {
+        let ui = UiSettings {
+            theme: "wal".into(),
+            ..UiSettings::default()
+        };
+        let (look, problems) = Look::from_settings_with(
+            &ui,
+            ColorDepth::TrueColor,
+            Some(Err("no such file".into())),
+            &IconHints::default(),
+        );
+        assert_eq!(look.theme.name, "reference");
+        assert!(problems[0].contains("no such file"), "{problems:?}");
     }
 }

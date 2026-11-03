@@ -219,6 +219,7 @@ fn btop_layout_shows_braille_graphs_gauges_and_rings() {
 #[test]
 fn telemetry_panels_wait_for_data() {
     let mut t = reviewed_job();
+    t.app.look.icons = IconSet::Ascii;
     set_layout(&mut t.app, "btop");
     let out = render_to_string(&t.app, 200, 60);
     assert!(out.matches("waiting for data").count() >= 10, "{out}");
@@ -306,4 +307,94 @@ fn render_cost_btop_200x60() {
     }
     let per = start.elapsed() / frames as u32;
     println!("btop 200x60: {per:?} per frame over {frames} frames");
+}
+
+#[test]
+fn bg_none_leaves_every_background_to_the_terminal() {
+    let mut t = riced();
+    for base in THEMES {
+        let theme = base.with_transparent(true);
+        t.app.look.theme = theme;
+        for layout in LAYOUTS {
+            set_layout(&mut t.app, layout);
+            let buf = render_buffer(&t.app, 160, 48);
+            let kept: Vec<_> = buf
+                .content
+                .iter()
+                .filter(|c| c.bg != Color::Reset)
+                .filter(|c| ![theme.lead, theme.warn, theme.border_focus].contains(&c.bg))
+                .collect();
+            assert!(
+                kept.is_empty(),
+                "{} {layout}: {:?}",
+                theme.name,
+                kept.iter().take(3).map(|c| c.bg).collect::<Vec<_>>()
+            );
+            let clear = buf.content.iter().filter(|c| c.bg == Color::Reset).count();
+            assert!(
+                clear * 10 > buf.content.len() * 9,
+                "{} {layout}",
+                theme.name
+            );
+        }
+    }
+}
+
+/// A palette file that can be rewritten while the app runs.
+struct FakePalette {
+    slots: std::rc::Rc<std::cell::Cell<(u32, u64)>>,
+}
+
+impl swarmux_application::PaletteSource for FakePalette {
+    fn load(&self) -> Result<swarmux_application::Base16, String> {
+        let (bg, _) = self.slots.get();
+        let mut slots = [0xcccccc; 16];
+        slots[0] = bg;
+        Ok(swarmux_application::Base16 {
+            origin: "wal",
+            name: "fake".into(),
+            slots,
+        })
+    }
+
+    fn stamp(&self) -> Option<u64> {
+        Some(self.slots.get().1)
+    }
+
+    fn describe(&self) -> String {
+        "fake".into()
+    }
+}
+
+#[test]
+fn an_imported_theme_is_reloaded_when_its_file_changes() {
+    let file = std::rc::Rc::new(std::cell::Cell::new((0x101010, 1)));
+    let mut t = riced();
+    t.app = t.app.with_palette_source(Box::new(FakePalette {
+        slots: file.clone(),
+    }));
+    let ui = swarmux_application::UiSettings {
+        theme: "wal".into(),
+        splash: false,
+        ..swarmux_application::UiSettings::default()
+    };
+    t.app = t.app.with_look(&ui, crate::app::Launch::default());
+    assert_eq!(t.app.look.theme.name, "wal");
+    assert_eq!(t.app.look.theme.bg, Color::Rgb(0x10, 0x10, 0x10));
+
+    // Nothing changed: left alone, however many frames pass.
+    for _ in 0..40 {
+        t.app.frame += 1;
+        t.app.update();
+    }
+    assert_eq!(t.app.look.theme.bg, Color::Rgb(0x10, 0x10, 0x10));
+
+    // The file is rewritten (wal ran again): picked up within a second.
+    file.set((0x202830, 2));
+    for _ in 0..(t.app.look.frames(1_000) + 1) {
+        t.app.frame += 1;
+        t.app.update();
+    }
+    assert_eq!(t.app.look.theme.bg, Color::Rgb(0x20, 0x28, 0x30));
+    assert!(t.app.toast().is_some_and(|s| s.contains("reloaded")));
 }

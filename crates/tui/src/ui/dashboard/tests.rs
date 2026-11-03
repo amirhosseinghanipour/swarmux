@@ -279,6 +279,7 @@ fn full_dashboard_shows_every_panel_with_real_numbers() {
 #[test]
 fn running_job_shows_parallel_work_and_spinners() {
     let mut t = running_job();
+    t.app.look.icons = crate::ui::look::IconSet::Ascii;
     t.app.frame = 2;
     let out = render_to_string(&t.app, 160, 48);
     for needle in [

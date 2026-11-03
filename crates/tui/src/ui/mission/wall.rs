@@ -185,7 +185,7 @@ fn render_card(
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(if selected { t.border_focus } else { t.border }))
-        .style(Style::new().bg(t.panel_bg))
+        .style(Style::new().bg(t.panel_paint()))
         .title(title)
         .title(meta.right_aligned());
     let inner = block.inner(area);

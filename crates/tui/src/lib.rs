@@ -15,6 +15,9 @@ mod queue;
 mod routing;
 pub mod telemetry;
 pub mod theme;
+pub mod theme_export;
+#[cfg(test)]
+mod theme_lint;
 mod ui;
 
 pub use app::{App, Launch};

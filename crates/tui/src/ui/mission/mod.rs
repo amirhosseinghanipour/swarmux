@@ -86,7 +86,7 @@ pub(crate) fn panel<'a>(
     Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(border))
-        .style(Style::new().bg(t.panel_bg))
+        .style(Style::new().bg(t.panel_paint()))
         .title(name)
         .title(meta.right_aligned())
 }

@@ -190,7 +190,7 @@ pub fn render_approval_bar(frame: &mut Frame, area: Rect, app: &App) {
     ]);
     frame.render_widget(Clear, area);
     frame.render_widget(
-        Paragraph::new(line).style(Style::new().bg(t.panel_bg)),
+        Paragraph::new(line).style(Style::new().bg(t.panel_paint())),
         area,
     );
 }

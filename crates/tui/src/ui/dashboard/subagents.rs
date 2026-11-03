@@ -152,7 +152,7 @@ fn cards(frame: &mut Frame, area: Rect, vm: &ViewModel, t: &Theme) {
         let block = Block::bordered()
             .border_type(BorderType::LightDoubleDashed)
             .border_style(Style::new().fg(t.dim))
-            .style(Style::new().bg(t.panel_bg));
+            .style(Style::new().bg(t.panel_paint()));
         frame.render_widget(
             Paragraph::new(vec![
                 Line::raw(""),

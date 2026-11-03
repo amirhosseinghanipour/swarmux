@@ -39,7 +39,7 @@ use crate::theme::Theme;
 pub fn draw(frame: &mut Frame, app: &App) {
     let t = &app.look.theme;
     frame.render_widget(
-        Block::new().style(Style::new().bg(t.bg).fg(t.text)),
+        Block::new().style(Style::new().bg(t.bg_paint()).fg(t.text)),
         frame.area(),
     );
     if app.look.splash_at(app.frame) {
@@ -155,7 +155,7 @@ pub fn rounded(t: &Theme) -> Block<'static> {
     Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(t.border))
-        .style(Style::new().bg(t.panel_bg))
+        .style(Style::new().bg(t.panel_paint()))
 }
 
 /// A job status as a coloured word.

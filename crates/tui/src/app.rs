@@ -12,8 +12,8 @@ use swarmux_application::ports::Clock;
 use swarmux_application::{
     AppError, AppResult, CheckpointService, EvidenceService, FocusTracker, GateService,
     GuardService, HistoryService, HookBus, JobService, MissionService, NotifyService,
-    PendingApproval, PromptService, QueueEntry, QueueStats, RoutingService, SessionService,
-    SessionTerminal, TelemetryService, TelemetrySettings, UiSettings,
+    PaletteSource, PendingApproval, PromptService, QueueEntry, QueueStats, RoutingService,
+    SessionService, SessionTerminal, TelemetryService, TelemetrySettings, UiSettings,
 };
 use swarmux_domain::alarm::{Breakpoint, LoadMeter};
 use swarmux_domain::evidence::{brief, heat_strip};
@@ -30,11 +30,11 @@ use crate::prompts::{FormAction, PendingDispatch, PromptForm, PromptsScreen};
 use crate::queue::{QueueAction, QueueScreen};
 use crate::routing::RoutePayload;
 use crate::telemetry::Telemetry;
-use crate::theme::ColorDepth;
+use crate::theme::{ColorDepth, Theme};
 use crate::ui::anim::Anim;
 use crate::ui::grid::PanelId;
 use crate::ui::input::{Input, InputAction};
-use crate::ui::look::Look;
+use crate::ui::look::{IconHints, Look};
 use crate::ui::splash::SplashInfo;
 
 /// The top-level screens, in tab order: `1` to `6`, then Focus on `0`
@@ -177,6 +177,8 @@ pub struct App {
     hooks: Option<HookBus>,
     /// The done-gate's verdicts.
     gate: Option<GateService>,
+    /// The file the theme comes from (pywal, base16, matugen), watched for changes.
+    palette: Option<PaletteWatch>,
     /// Opens a session in a terminal tab of its own.
     terminal: Option<Rc<dyn SessionTerminal>>,
     /// Where Focus reads a job's worktree and checkpoints.
@@ -208,6 +210,17 @@ fn digest_window(away_since: Option<Millis>, now: Millis) -> (Millis, bool) {
         _ => (now - BRIEF_MS, false),
     }
 }
+
+/// A palette file and what it looked like when last read.
+struct PaletteWatch {
+    source: Box<dyn PaletteSource>,
+    stamp: Option<u64>,
+    /// The frame it was last looked at.
+    checked: u64,
+}
+
+/// How often the palette file is looked at, in milliseconds.
+const PALETTE_CHECK_MS: u64 = 1_000;
 
 /// What the composition root knows at start-up.
 #[derive(Clone, Debug, Default)]
@@ -284,6 +297,7 @@ impl App {
             focus: None,
             toast: None,
             splash: SplashInfo::default(),
+            palette: None,
         };
         app.refresh_sessions(None);
         app.refresh_prompts(None);
@@ -293,7 +307,16 @@ impl App {
     /// Applies the look-and-feel settings and shows the splash unless it is
     /// turned off. Settings it can't use are reported in the status bar.
     pub fn with_look(mut self, ui: &UiSettings, launch: Launch) -> App {
-        let (look, problems) = Look::from_settings(ui, ColorDepth::from_env());
+        let palette = self.palette.as_mut().map(|watch| {
+            watch.stamp = watch.source.stamp();
+            watch.source.load()
+        });
+        let (look, problems) = Look::from_settings_with(
+            ui,
+            ColorDepth::from_env(),
+            palette,
+            &IconHints::from_env(&ui.font),
+        );
         self.look = look;
         if let Some(p) = problems.into_iter().next() {
             self.error = Some(p);
@@ -311,6 +334,47 @@ impl App {
             self.look.splash_until = Some(self.frame + self.look.frames(SPLASH_MS));
         }
         self
+    }
+
+    /// Gives the theme a file to come from (`theme = "wal"`, `"base16:<file>"`,
+    /// `"matugen:<file>"`). Call it before [`App::with_look`]; the theme is
+    /// then re-read whenever the file changes.
+    pub fn with_palette_source(mut self, source: Box<dyn PaletteSource>) -> App {
+        self.palette = Some(PaletteWatch {
+            source,
+            stamp: None,
+            checked: 0,
+        });
+        self
+    }
+
+    /// Re-reads the palette file when it has changed (looked at about once a
+    /// second), while the theme in use still comes from it.
+    fn pump_palette(&mut self) {
+        let every = self.look.frames(PALETTE_CHECK_MS);
+        let Some(watch) = &mut self.palette else {
+            return;
+        };
+        if !matches!(self.look.theme.name, "wal" | "base16" | "matugen")
+            || self.frame < watch.checked + every
+        {
+            return;
+        }
+        watch.checked = self.frame;
+        let stamp = watch.source.stamp();
+        if stamp == watch.stamp {
+            return;
+        }
+        watch.stamp = stamp;
+        match watch.source.load() {
+            Ok(palette) => {
+                self.look.theme =
+                    Theme::from_base16(&palette).with_transparent(self.look.transparent);
+                let name = self.look.theme.name;
+                self.show_toast(format!("theme reloaded · {name}"));
+            }
+            Err(e) => self.error = Some(format!("theme not reloaded: {e}")),
+        }
     }
 
     /// Records the agents' lifecycle events and shows what they say.
@@ -590,6 +654,7 @@ impl App {
         if (report.changed || evidence_changed) && self.screen == Screen::Ledger {
             self.refresh_ledger();
         }
+        self.pump_palette();
         self.refresh_mission();
         self.tick_inbox();
         self.pump_notifications();
