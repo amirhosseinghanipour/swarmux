@@ -373,3 +373,29 @@ fn search_roots_are_the_literal_starts() {
     );
     assert_eq!(g(&["src/*/snap/**"]), ["src"]);
 }
+
+#[test]
+fn hidden_checks_and_tampering_block_without_saying_what_they_are() {
+    let mut f = GateFindings {
+        hidden: Some(HiddenTally { ran: 3, passed: 2 }),
+        ..GateFindings::default()
+    };
+    assert!(!f.clean());
+    assert!(f.checked());
+    let d = digest(&f, GateOutcome::Block, 0, 3, &[]);
+    assert!(d.contains("hidden checks: 1 of 3 failed"), "{d}");
+    assert!(d.contains("kept from you"), "{d}");
+
+    f.hidden = Some(HiddenTally { ran: 3, passed: 3 });
+    assert!(f.clean());
+    assert_eq!(
+        digest(&f, GateOutcome::Pass, 0, 3, &[]),
+        "swarmux gate: 0 checks passed, 3 hidden"
+    );
+
+    f.tampering = vec!["tests/a.rs: a test was switched off (`#[ignore]`)".into()];
+    assert!(!f.clean());
+    let d = digest(&f, GateOutcome::Block, 0, 3, &[]);
+    assert!(d.contains("Tests are the referee"), "{d}");
+    assert!(!GateFindings::default().checked());
+}

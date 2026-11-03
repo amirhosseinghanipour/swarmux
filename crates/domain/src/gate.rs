@@ -11,6 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::guard::glob::{glob_match, is_windows, relative};
 use crate::guard::shell::{collapse, split_commands, strip_wrappers};
+use crate::verifier::HiddenTally;
 
 /// Blocks before the gate gives up and asks the user.
 pub const DEFAULT_MAX_BLOCKS: u32 = 3;
@@ -76,6 +77,26 @@ pub struct GateSpec {
     /// Whether subagents' stops run the checks too (otherwise only the
     /// protected files and the evidence are checked).
     pub subagent_checks: bool,
+    pub verifier: VerifierSpec,
+}
+
+/// How the independent verifier treats a repository.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct VerifierSpec {
+    /// Run the checks in a clean copy of the work made by swarmux, not in
+    /// the agent's worktree (when the repository is a git repository).
+    pub clean: bool,
+    /// Removing, changing or switching off existing tests blocks the stop.
+    pub block_test_edits: bool,
+}
+
+impl Default for VerifierSpec {
+    fn default() -> VerifierSpec {
+        VerifierSpec {
+            clean: true,
+            block_test_edits: true,
+        }
+    }
 }
 
 impl Default for GateSpec {
@@ -86,6 +107,7 @@ impl Default for GateSpec {
             protected: Vec::new(),
             evidence: true,
             subagent_checks: false,
+            verifier: VerifierSpec::default(),
         }
     }
 }
@@ -678,12 +700,25 @@ pub struct GateFindings {
     pub runs: Vec<CheckRun>,
     pub pins: Vec<PinChange>,
     pub gaps: Vec<String>,
+    /// How the hidden checks went, when any ran: counts only.
+    pub hidden: Option<HiddenTally>,
+    /// Changes to the tests that look like gaming them.
+    pub tampering: Vec<String>,
 }
 
 impl GateFindings {
     /// Nothing wrong.
     pub fn clean(&self) -> bool {
-        self.runs.iter().all(CheckRun::passed) && self.pins.is_empty() && self.gaps.is_empty()
+        self.runs.iter().all(CheckRun::passed)
+            && self.pins.is_empty()
+            && self.gaps.is_empty()
+            && self.hidden.is_none_or(|h| h.clean())
+            && self.tampering.is_empty()
+    }
+
+    /// Whether any check ran, visible or hidden.
+    pub fn checked(&self) -> bool {
+        !self.runs.is_empty() || self.hidden.is_some_and(|h| h.ran > 0)
     }
 
     pub fn failed(&self) -> impl Iterator<Item = &CheckRun> {
@@ -736,8 +771,12 @@ pub fn digest(
     let mut out = match outcome {
         GateOutcome::Pass => {
             let n = findings.runs.len();
+            let hidden = findings
+                .hidden
+                .filter(|h| h.ran > 0)
+                .map_or_else(String::new, |h| format!(", {} hidden", h.ran));
             return format!(
-                "swarmux gate: {n} check{} passed",
+                "swarmux gate: {n} check{} passed{hidden}",
                 if n == 1 { "" } else { "s" }
             );
         }
@@ -774,6 +813,18 @@ pub fn digest(
     }
     for gap in &findings.gaps {
         out.push_str(&format!("⚑ {gap}. Run it and report what it printed.\n"));
+    }
+    for t in &findings.tampering {
+        out.push_str(&format!(
+            "⛔ {t}. Tests are the referee, not yours to change: put them back and fix the code.\n"
+        ));
+    }
+    if let Some(h) = findings.hidden.filter(|h| !h.clean()) {
+        out.push_str(&format!(
+            "⛔ hidden checks: {} of {} failed. They are kept from you on purpose; make the change correct in general, not only for the tests you can see.\n",
+            h.failed(),
+            h.ran
+        ));
     }
     if outcome == GateOutcome::Block && !protected.is_empty() {
         out.push_str(&format!(

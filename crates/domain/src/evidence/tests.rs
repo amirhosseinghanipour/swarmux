@@ -49,6 +49,7 @@ fn bundle() -> Bundle {
             hash: "dd".into(),
         },
         checks: vec![check("test", true)],
+        hidden: None,
         gates: vec![
             GateRef {
                 seq: 12,
@@ -293,4 +294,34 @@ fn the_heat_strip_counts_days() {
         card(4, RunOutcome::Done, 0.0, 2 * day, false),
     ];
     assert_eq!(heat_strip(&cards, 10 * day + 100, 4), [0, 1, 0, 2]);
+}
+
+#[test]
+fn hidden_checks_are_counted_in_a_bundle_and_never_named() {
+    let plain = bundle();
+    let before = plain.digest_hex();
+    assert!(
+        !plain.body_json().contains("hidden"),
+        "old bundles keep their digest"
+    );
+    let mut b = bundle();
+    b.hidden = Some(HiddenTally { ran: 3, passed: 3 });
+    assert_ne!(b.digest_hex(), before);
+    b.signature = Some(Signature {
+        alg: "sha256".into(),
+        value: b.digest_hex(),
+    });
+    let text = b.to_json();
+    assert!(text.contains(r#""hidden":{"ran":3,"passed":3}"#), "{text}");
+    let back = Bundle::from_json(&text).unwrap();
+    assert_eq!(back.hidden, Some(HiddenTally { ran: 3, passed: 3 }));
+    assert_eq!(back.signature_ok(), Ok(true));
+}
+
+#[test]
+fn a_verdict_carries_its_hidden_tally() {
+    let v =
+        parse_verdict(r#"{"outcome":"pass","checks":[],"hidden":{"ran":2,"passed":1}}"#).unwrap();
+    assert_eq!(v.hidden, Some(HiddenTally { ran: 2, passed: 1 }));
+    assert_eq!(parse_verdict(r#"{"outcome":"pass"}"#).unwrap().hidden, None);
 }

@@ -20,6 +20,7 @@ pub use verify::{Rerun, VerifyItem, VerifyReport, compare_checks};
 
 use crate::json::Json;
 use crate::ledger::{Hash, Payload, hex, sha256};
+use crate::verifier::HiddenTally;
 use crate::{JobId, Millis};
 
 /// The bundle format version.
@@ -176,6 +177,9 @@ pub struct Bundle {
     pub dirty: bool,
     pub diff: DiffSummary,
     pub checks: Vec<CheckResult>,
+    /// How many hidden checks the passing verdict ran and passed. Never
+    /// which ones: their names, commands and output stay out of bundles.
+    pub hidden: Option<HiddenTally>,
     pub gates: Vec<GateRef>,
     pub review: Option<ReviewRef>,
     pub checkpoints: Vec<CheckpointRef>,
@@ -270,7 +274,7 @@ impl Bundle {
             .int("from_seq", clamp(self.ledger.from_seq))
             .int("to_seq", clamp(self.ledger.to_seq))
             .str("head_hash", &self.ledger.head_hash);
-        Payload::new()
+        let body = Payload::new()
             .int("schema", i64::from(self.schema))
             .json("contract", &contract.build())
             .int("job", self.job)
@@ -282,8 +286,20 @@ impl Bundle {
             .str("head_sha", &self.head_sha)
             .bool("dirty", self.dirty)
             .json("diff", &diff.build())
-            .objects("checks", self.checks.iter().map(check_json).collect())
-            .objects("gates", gates)
+            .objects("checks", self.checks.iter().map(check_json).collect());
+        // Written only when hidden checks ran, so bundles sealed before
+        // they existed keep their digest.
+        let body = match self.hidden {
+            Some(h) => body.json(
+                "hidden",
+                &Payload::new()
+                    .int("ran", i64::from(h.ran))
+                    .int("passed", i64::from(h.passed))
+                    .build(),
+            ),
+            None => body,
+        };
+        body.objects("gates", gates)
             .json("review", &review)
             .objects("checkpoints", checkpoints)
             .json("cost", &cost.build())
@@ -405,6 +421,7 @@ impl Bundle {
                     })
                 })
                 .collect::<Result<_, String>>()?,
+            hidden: verdict::hidden_of(&j),
             gates: items(&j, "gates")
                 .iter()
                 .map(|g| {

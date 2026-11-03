@@ -28,6 +28,7 @@ mod subagent;
 pub mod telemetry;
 mod template;
 mod tokens;
+pub mod verifier;
 mod worktree;
 
 pub use attention::{

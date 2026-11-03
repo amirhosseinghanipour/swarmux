@@ -4,6 +4,21 @@ use super::CheckResult;
 use crate::gate::GateCheck;
 use crate::json::Json;
 use crate::mission::check_of;
+use crate::verifier::HiddenTally;
+
+/// `{"hidden": {"ran": 3, "passed": 3}}`, as verdicts and bundles write it.
+pub(crate) fn hidden_of(j: &Json) -> Option<HiddenTally> {
+    let h = j.get("hidden")?;
+    let count = |k: &str| {
+        h.get(k)
+            .and_then(Json::as_u64)
+            .map(|n| n.min(u64::from(u32::MAX)) as u32)
+    };
+    Some(HiddenTally {
+        ran: count("ran")?,
+        passed: count("passed")?,
+    })
+}
 
 /// What a gate verdict entry says.
 #[derive(Clone, Debug, PartialEq)]
@@ -13,6 +28,8 @@ pub struct VerdictFacts {
     pub event: String,
     pub blocks: u32,
     pub runs: Vec<RunFacts>,
+    /// How many hidden checks ran and passed, when any did.
+    pub hidden: Option<HiddenTally>,
 }
 
 /// One check run, as the verdict recorded it.
@@ -64,6 +81,7 @@ pub fn parse_verdict(payload_json: &str) -> Option<VerdictFacts> {
         event: text(&j, "event"),
         blocks: j.get("blocks").and_then(Json::as_u64).unwrap_or(0) as u32,
         runs,
+        hidden: hidden_of(&j),
     })
 }
 

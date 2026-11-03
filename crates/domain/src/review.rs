@@ -57,13 +57,15 @@ pub enum ReviewState {
         job: Option<JobId>,
         cost_usd: f64,
     },
+    /// Not worth a reviewer: the change's risk was routine. Says why.
+    Skipped { why: String },
 }
 
 impl ReviewState {
     /// The review job, once there is one.
     pub fn job(&self) -> Option<JobId> {
         match self {
-            ReviewState::Requested => None,
+            ReviewState::Requested | ReviewState::Skipped { .. } => None,
             ReviewState::Running { job } | ReviewState::Done { job, .. } => Some(*job),
             ReviewState::Failed { job, .. } => *job,
         }
@@ -109,6 +111,9 @@ impl ReviewState {
                 job(*j),
                 quote(error)
             ),
+            ReviewState::Skipped { why } => {
+                format!(r#"{{"state":"skipped","why":{}}}"#, quote(why))
+            }
         }
     }
 
@@ -136,6 +141,13 @@ impl ReviewState {
                     .to_string(),
                 job,
                 cost_usd,
+            }),
+            Some("skipped") => Ok(ReviewState::Skipped {
+                why: v
+                    .get("why")
+                    .and_then(Json::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
             }),
             _ => Err(bad("unknown state")),
         }

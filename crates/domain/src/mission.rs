@@ -614,6 +614,9 @@ pub fn compile(contract: &Contract) -> Result<Compiled, Vec<Finding>> {
         "\nNever change these (writes are refused): {}\n",
         protected.join(", ")
     ));
+    p.push('\n');
+    p.push_str(crate::verifier::ANTI_EXPLOIT_PREAMBLE);
+    p.push('\n');
     let answered: Vec<&Clarification> = c
         .clarifications
         .iter()
