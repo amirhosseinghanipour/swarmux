@@ -1,64 +1,152 @@
-//! State of the history screen: the rows, the search and the selected job's detail.
+//! State of the Ledger screen: the run cards, the search and filter, the
+//! numbers over all runs, the digest of what happened while the user was
+//! away, and the selected run's detail and bundle.
 
 use crossterm::event::KeyCode;
-use swarmux_application::{JobDetail, JobSummary};
+use swarmux_application::{JobDetail, JobSummary, Stored};
 use swarmux_domain::JobId;
+use swarmux_domain::evidence::{Brief, LabelKind, LedgerStats, RunCard, RunOutcome};
 
-/// What a key on the history screen asks for.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum HistoryAction {
+/// Days the heat strip covers.
+pub const HEAT_DAYS: usize = 28;
+
+/// Which runs the list shows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Filter {
+    #[default]
+    All,
+    /// Missions with a bundle.
+    Delivered,
+    /// Runs that wait for the user.
+    NeedsYou,
+    /// Runs that earned an outcome label (merged, reverted, …).
+    Labelled,
+}
+
+impl Filter {
+    pub fn next(self) -> Filter {
+        match self {
+            Filter::All => Filter::Delivered,
+            Filter::Delivered => Filter::NeedsYou,
+            Filter::NeedsYou => Filter::Labelled,
+            Filter::Labelled => Filter::All,
+        }
+    }
+
+    pub fn title(self) -> &'static str {
+        match self {
+            Filter::All => "all",
+            Filter::Delivered => "delivered",
+            Filter::NeedsYou => "needs you",
+            Filter::Labelled => "labelled",
+        }
+    }
+
+    pub fn admits(self, card: &RunCard) -> bool {
+        match self {
+            Filter::All => true,
+            Filter::Delivered => card.outcome == RunOutcome::Delivered,
+            Filter::NeedsYou => card.outcome.needs_you(),
+            Filter::Labelled => card
+                .labels
+                .last()
+                .is_some_and(|l| l.kind != LabelKind::PrOpen),
+        }
+    }
+}
+
+/// What a key on the Ledger screen asks for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LedgerAction {
     None,
     /// The selection moved; load its detail.
     Moved,
     Search,
+    /// The filter changed; rebuild the list.
+    Filtered,
     Rerun(JobId),
     Fork(JobId),
     View(JobId),
+    /// Verify the bundle of this mission.
+    Verify(String),
+    /// Ask GitHub what became of the delivered work.
+    Labels,
 }
 
 #[derive(Default)]
-pub struct HistoryScreen {
+pub struct LedgerScreen {
+    /// The jobs shown, newest first; `cards` has one card per row.
     pub rows: Vec<JobSummary>,
+    pub cards: Vec<RunCard>,
     pub selected: usize,
     pub query: String,
+    pub filter: Filter,
     pub detail: Option<JobDetail>,
+    /// The bundle of the selected run, when it has one.
+    pub bundle: Option<Stored>,
+    /// Numbers over every run, whatever the search and filter.
+    pub stats: LedgerStats,
+    /// What happened in the digest's window.
+    pub brief: Brief,
+    /// The digest covers the time since the user was last here.
+    pub away: bool,
+    /// Runs per day, oldest day first.
+    pub heat: Vec<u32>,
 }
 
-impl HistoryScreen {
+impl LedgerScreen {
     pub fn selected_row(&self) -> Option<&JobSummary> {
         self.rows.get(self.selected)
     }
 
-    /// Replaces the rows, keeping the selected job selected if it is still there.
-    pub fn set_rows(&mut self, rows: Vec<JobSummary>) {
+    pub fn selected_card(&self) -> Option<&RunCard> {
+        self.cards.get(self.selected)
+    }
+
+    /// Replaces the rows and their cards, keeping the selected job
+    /// selected if it is still there.
+    pub fn set_rows(&mut self, rows: Vec<JobSummary>, cards: Vec<RunCard>) {
+        debug_assert_eq!(rows.len(), cards.len());
         let keep = self.selected_row().map(|r| r.job_id);
         self.rows = rows;
+        self.cards = cards;
         if let Some(i) = keep.and_then(|id| self.rows.iter().position(|r| r.job_id == id)) {
             self.selected = i;
         }
         self.selected = self.selected.min(self.rows.len().saturating_sub(1));
     }
 
-    pub fn handle(&mut self, key: KeyCode) -> HistoryAction {
-        if key == KeyCode::Char('/') {
-            return HistoryAction::Search;
+    pub fn handle(&mut self, key: KeyCode) -> LedgerAction {
+        match key {
+            KeyCode::Char('/') => return LedgerAction::Search,
+            KeyCode::Char('o') => {
+                self.filter = self.filter.next();
+                self.selected = 0;
+                return LedgerAction::Filtered;
+            }
+            KeyCode::Char('l') => return LedgerAction::Labels,
+            _ => {}
         }
         let Some(id) = self.selected_row().map(|r| r.job_id) else {
-            return HistoryAction::None;
+            return LedgerAction::None;
         };
         match key {
             KeyCode::Up if self.selected > 0 => {
                 self.selected -= 1;
-                HistoryAction::Moved
+                LedgerAction::Moved
             }
             KeyCode::Down if self.selected + 1 < self.rows.len() => {
                 self.selected += 1;
-                HistoryAction::Moved
+                LedgerAction::Moved
             }
-            KeyCode::Char('r') => HistoryAction::Rerun(id),
-            KeyCode::Char('f') => HistoryAction::Fork(id),
-            KeyCode::Enter => HistoryAction::View(id),
-            _ => HistoryAction::None,
+            KeyCode::Char('r') => LedgerAction::Rerun(id),
+            KeyCode::Char('f') => LedgerAction::Fork(id),
+            KeyCode::Enter => LedgerAction::View(id),
+            KeyCode::Char('v') => match self.selected_card().and_then(|c| c.mission.clone()) {
+                Some(slug) if self.bundle.is_some() => LedgerAction::Verify(slug),
+                _ => LedgerAction::None,
+            },
+            _ => LedgerAction::None,
         }
     }
 }
@@ -87,28 +175,80 @@ mod tests {
         }
     }
 
+    fn card(id: i64, outcome: RunOutcome) -> RunCard {
+        RunCard {
+            job: JobId(id),
+            mission: None,
+            title: "p".into(),
+            outcome,
+            evidence: None,
+            cost_usd: 0.0,
+            models: Vec::new(),
+            labels: Vec::new(),
+            at: 0,
+        }
+    }
+
+    fn set(h: &mut LedgerScreen, ids: &[i64]) {
+        h.set_rows(
+            ids.iter().map(|i| row(*i)).collect(),
+            ids.iter().map(|i| card(*i, RunOutcome::Done)).collect(),
+        );
+    }
+
     #[test]
     fn moving_and_actions() {
-        let mut h = HistoryScreen::default();
-        assert_eq!(h.handle(KeyCode::Char('r')), HistoryAction::None);
-        assert_eq!(h.handle(KeyCode::Char('/')), HistoryAction::Search);
-        h.set_rows(vec![row(3), row(2)]);
-        assert_eq!(h.handle(KeyCode::Up), HistoryAction::None);
-        assert_eq!(h.handle(KeyCode::Down), HistoryAction::Moved);
-        assert_eq!(h.handle(KeyCode::Down), HistoryAction::None);
-        assert_eq!(h.handle(KeyCode::Char('r')), HistoryAction::Rerun(JobId(2)));
-        assert_eq!(h.handle(KeyCode::Char('f')), HistoryAction::Fork(JobId(2)));
-        assert_eq!(h.handle(KeyCode::Enter), HistoryAction::View(JobId(2)));
+        let mut h = LedgerScreen::default();
+        assert_eq!(h.handle(KeyCode::Char('r')), LedgerAction::None);
+        assert_eq!(h.handle(KeyCode::Char('/')), LedgerAction::Search);
+        assert_eq!(h.handle(KeyCode::Char('l')), LedgerAction::Labels);
+        set(&mut h, &[3, 2]);
+        assert_eq!(h.handle(KeyCode::Up), LedgerAction::None);
+        assert_eq!(h.handle(KeyCode::Down), LedgerAction::Moved);
+        assert_eq!(h.handle(KeyCode::Down), LedgerAction::None);
+        assert_eq!(h.handle(KeyCode::Char('r')), LedgerAction::Rerun(JobId(2)));
+        assert_eq!(h.handle(KeyCode::Char('f')), LedgerAction::Fork(JobId(2)));
+        assert_eq!(h.handle(KeyCode::Enter), LedgerAction::View(JobId(2)));
+        assert_eq!(
+            h.handle(KeyCode::Char('v')),
+            LedgerAction::None,
+            "no bundle, nothing to verify"
+        );
     }
 
     #[test]
     fn new_rows_keep_the_selected_job() {
-        let mut h = HistoryScreen::default();
-        h.set_rows(vec![row(2), row(1)]);
+        let mut h = LedgerScreen::default();
+        set(&mut h, &[2, 1]);
         h.selected = 1;
-        h.set_rows(vec![row(3), row(2), row(1)]);
+        set(&mut h, &[3, 2, 1]);
         assert_eq!(h.selected_row().unwrap().job_id, JobId(1));
-        h.set_rows(vec![row(9)]);
+        set(&mut h, &[9]);
         assert_eq!(h.selected, 0);
+    }
+
+    #[test]
+    fn the_filter_cycles_and_admits() {
+        let mut h = LedgerScreen::default();
+        assert_eq!(h.handle(KeyCode::Char('o')), LedgerAction::Filtered);
+        assert_eq!(h.filter, Filter::Delivered);
+        let mut seen = vec![h.filter];
+        for _ in 0..3 {
+            h.handle(KeyCode::Char('o'));
+            seen.push(h.filter);
+        }
+        assert_eq!(
+            seen,
+            [
+                Filter::Delivered,
+                Filter::NeedsYou,
+                Filter::Labelled,
+                Filter::All
+            ]
+        );
+        assert!(Filter::All.admits(&card(1, RunOutcome::Done)));
+        assert!(Filter::NeedsYou.admits(&card(1, RunOutcome::Escalated)));
+        assert!(!Filter::NeedsYou.admits(&card(1, RunOutcome::Delivered)));
+        assert!(!Filter::Labelled.admits(&card(1, RunOutcome::Delivered)));
     }
 }

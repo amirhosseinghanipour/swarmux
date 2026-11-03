@@ -7,8 +7,8 @@ pub mod editor;
 pub mod focus;
 pub mod grid;
 pub mod guard;
-pub mod history;
 pub mod input;
+pub mod ledger;
 pub mod look;
 pub mod mission;
 pub mod missions;
@@ -80,7 +80,7 @@ fn draw_screens(frame: &mut Frame, app: &App, t: &Theme) {
         Screen::Dashboard => focus::render(frame, body, app),
         Screen::Prompts => prompts::render(frame, body, app),
         Screen::Queue => queue::render(frame, body, app),
-        Screen::History => history::render(frame, body, app),
+        Screen::Ledger => ledger::render(frame, body, app),
         Screen::Sessions => sessions::render(frame, body, app),
     }
     if app.guard.jev().is_some_and(|j| j.wants_consent()) {
@@ -339,7 +339,9 @@ pub(crate) fn hints(app: &App) -> &'static str {
             " p prompt · P route · v review · ↑↓ session · t theme · L layout · tab focus · q quit"
         }
         Screen::Queue => " c cancel · r retry · +/- priority · enter view · ↑↓ select · q quit",
-        Screen::History => " / search · r re-run · f fork · enter view · ↑↓ select · q quit",
+        Screen::Ledger => {
+            " / search · o filter · v verify · l labels · r re-run · f fork · enter view · ↑↓ select · q quit"
+        }
         Screen::Prompts => {
             " n new · e edit · x delete · d dispatch · D route · ↑↓ select · 0-6 screens · q quit"
         }

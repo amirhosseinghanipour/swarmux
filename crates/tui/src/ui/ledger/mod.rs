@@ -1,44 +1,219 @@
+//! The Ledger screen: what happened, what it cost and whether it can be
+//! proven. A strip of numbers and the digest of what happened while the
+//! user was away on top; run cards on the left; the selected run, its
+//! bundle and its verification on the right.
+
+mod detail;
+
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
-    style::{Style, Stylize},
+    style::{Color, Style, Stylize},
     text::{Line, Span},
-    widgets::{Block, Cell, Paragraph, Row, Table, TableState, Wrap},
+    widgets::{Block, Paragraph},
 };
-use swarmux_application::JobDetail;
-use swarmux_domain::{ReviewState, ReviewVerdict, iso_minute};
+use swarmux_domain::evidence::{LabelKind, RunCard, RunOutcome};
+use swarmux_domain::{display_name, iso_minute};
 
-use super::{short, status_span};
 use crate::app::App;
 use crate::theme::Theme;
+use crate::ui::look::IconSet;
+
+/// Rows of the numbers strip, borders included.
+const HEADER_ROWS: u16 = 5;
+/// Windows shorter than this skip the strip.
+const HEADER_MIN_HEIGHT: u16 = 16;
+/// Lines a card takes, and the gap after it.
+const CARD_LINES: usize = 2;
 
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
-    let t = &app.look.theme;
-    let [table_area, detail_area] =
-        Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)]).areas(area);
-    render_table(frame, table_area, app);
-    render_detail(frame, detail_area, app.history.detail.as_ref(), t);
+    let body = if area.height >= HEADER_MIN_HEIGHT {
+        let [head, body] =
+            Layout::vertical([Constraint::Length(HEADER_ROWS), Constraint::Fill(1)]).areas(area);
+        render_header(frame, head, app);
+        body
+    } else {
+        area
+    };
+    let [cards, side] =
+        Layout::horizontal([Constraint::Percentage(56), Constraint::Percentage(44)]).areas(body);
+    render_cards(frame, cards, app);
+    detail::render(frame, side, app);
 }
 
-fn panel(t: &Theme, title: String) -> Block<'static> {
+pub(super) fn panel(t: &Theme, title: String) -> Block<'static> {
     super::rounded(t)
         .border_style(Style::new().fg(t.muted))
         .title(title)
 }
 
-fn render_table(frame: &mut Frame, area: Rect, app: &App) {
-    let t = &app.look.theme;
-    let h = &app.history;
-    let title = if h.query.is_empty() {
-        " history (UTC) ".to_string()
+/// A glyph from the Unicode set, or its ASCII stand-in.
+pub(super) fn g(app: &App, unicode: &'static str, ascii: &'static str) -> &'static str {
+    if app.look.icons == IconSet::Ascii {
+        ascii
     } else {
-        format!(" history · \"{}\" · {} found ", h.query, h.rows.len())
+        unicode
+    }
+}
+
+/// How an outcome looks: its mark and colour.
+fn outcome_look(app: &App, outcome: RunOutcome) -> (&'static str, Color) {
+    let t = &app.look.theme;
+    match outcome {
+        RunOutcome::Delivered => (g(app, "✓", "+"), t.ok),
+        RunOutcome::Escalated => (g(app, "⚑", "!"), t.error),
+        RunOutcome::Refused => (g(app, "⊘", "x"), t.error),
+        RunOutcome::Failed => (g(app, "✗", "x"), t.error),
+        RunOutcome::Cancelled => (g(app, "⊘", "x"), t.muted),
+        RunOutcome::Queued => (g(app, "…", "~"), t.muted),
+        RunOutcome::Running => (g(app, "▶", "*"), t.lead),
+        RunOutcome::Done => (g(app, "·", "."), t.ok),
+    }
+}
+
+/// The colour of an outcome label.
+pub(super) fn label_color(t: &Theme, kind: LabelKind) -> Color {
+    match kind {
+        LabelKind::Merged => t.ok,
+        LabelKind::Reverted => t.error,
+        LabelKind::PrOpen => t.lead,
+        LabelKind::Closed => t.muted,
+    }
+}
+
+/// `label #9`: the newest label of a card.
+fn label_text(card: &RunCard) -> Option<(String, LabelKind)> {
+    card.labels.last().map(|l| {
+        (
+            format!("{} #{}", l.kind.as_str().replace('_', " "), l.pr),
+            l.kind,
+        )
+    })
+}
+
+/// `sonnet+haiku`: the models by the dollars they were paid.
+pub(super) fn model_mix(models: &[(String, f64)]) -> String {
+    let names: Vec<String> = models
+        .iter()
+        .map(|(m, _)| {
+            display_name(m)
+                .split(' ')
+                .next()
+                .unwrap_or("")
+                .to_lowercase()
+        })
+        .fold(Vec::new(), |mut acc, n| {
+            if !n.is_empty() && !acc.contains(&n) {
+                acc.push(n);
+            }
+            acc
+        });
+    if names.is_empty() {
+        "—".to_string()
+    } else {
+        names.join("+")
+    }
+}
+
+fn render_header(frame: &mut Frame, area: Rect, app: &App) {
+    let t = &app.look.theme;
+    let l = &app.ledger;
+    let s = &l.stats;
+    let muted = Style::new().fg(t.muted);
+    let sep = || Span::styled(" · ", Style::new().fg(t.dim));
+    let figure = |text: String, color: Color| Span::styled(text, Style::new().fg(color));
+    let mut numbers: Vec<Span> = Vec::new();
+    match (s.pass_k, s.pass_rate) {
+        (Some(k), Some(rate)) => {
+            let color = if rate >= 0.7 { t.ok } else { t.warn };
+            numbers.push(figure(format!("pass^3 {k:.2}"), color));
+            numbers.push(sep());
+            numbers.push(figure(
+                format!("{}/{} delivered", s.delivered, s.missions),
+                t.text,
+            ));
+        }
+        _ => numbers.push(Span::styled("no mission has ended yet", muted)),
+    }
+    if let Some(c) = s.cost_per_verified {
+        numbers.push(sep());
+        numbers.push(figure(format!("${c:.2}/verified outcome"), t.text));
+    }
+    if let Some(i) = s.interventions_per_task {
+        numbers.push(sep());
+        numbers.push(figure(format!("{i:.1} interventions/task"), t.text));
+    }
+    if s.merged + s.reverted > 0 {
+        numbers.push(sep());
+        numbers.push(figure(format!("{} merged", s.merged), t.ok));
+        numbers.push(Span::styled(" · ", Style::new().fg(t.dim)));
+        numbers.push(figure(format!("{} reverted", s.reverted), t.error));
+    }
+
+    let scope = if l.away {
+        "while you were away"
+    } else {
+        "last 24 h"
     };
-    if h.rows.is_empty() {
-        let hint = if h.query.is_empty() {
-            "no jobs yet"
+    let mut digest = vec![
+        Span::styled(format!("{}d ", l.heat.len()), muted),
+        Span::styled(heat(app, &l.heat), Style::new().fg(t.lead)),
+        Span::raw("  "),
+        Span::styled(format!("{scope}: "), Style::new().fg(t.label)),
+        Span::styled(l.brief.headline(), Style::new().fg(t.text)),
+    ];
+    if l.brief.is_empty() && l.away {
+        digest.truncate(5);
+    }
+    let attention = if l.brief.needs_you.is_empty() {
+        Line::styled("nothing needs you", muted)
+    } else {
+        Line::from(vec![
+            Span::styled("needs you: ", Style::new().fg(t.error)),
+            Span::styled(l.brief.needs_you.join("  ·  "), Style::new().fg(t.text)),
+        ])
+    };
+    frame.render_widget(
+        Paragraph::new(vec![Line::from(numbers), Line::from(digest), attention])
+            .block(panel(t, " the record ".into())),
+        area,
+    );
+}
+
+/// One block per day, taller for busier days.
+fn heat(app: &App, counts: &[u32]) -> String {
+    let ramp: &[char] = if app.look.icons == IconSet::Ascii {
+        &[' ', '.', ':', '-', '=', '+', '*', '#', '%']
+    } else {
+        &[' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█']
+    };
+    let top = counts.iter().copied().max().unwrap_or(0).max(1);
+    counts
+        .iter()
+        .map(|&n| {
+            let level = if n == 0 {
+                0
+            } else {
+                (n as usize * (ramp.len() - 2)).div_ceil(top as usize) + 1
+            };
+            ramp[level.min(ramp.len() - 1)]
+        })
+        .collect()
+}
+
+fn render_cards(frame: &mut Frame, area: Rect, app: &App) {
+    let t = &app.look.theme;
+    let l = &app.ledger;
+    let mut title = format!(" ledger (UTC) · {}", l.filter.title());
+    if !l.query.is_empty() {
+        title.push_str(&format!(" · \"{}\" · {} found", l.query, l.cards.len()));
+    }
+    title.push(' ');
+    if l.cards.is_empty() {
+        let hint = if !l.query.is_empty() || l.filter != crate::ledger::Filter::All {
+            "nothing matches: press / to change the search, o for the filter"
         } else {
-            "nothing matches: press / to change the search"
+            "no runs yet"
         };
         frame.render_widget(
             Paragraph::new(hint).fg(t.muted).block(panel(t, title)),
@@ -46,303 +221,92 @@ fn render_table(frame: &mut Frame, area: Rect, app: &App) {
         );
         return;
     }
-    let rows: Vec<Row> = h
-        .rows
-        .iter()
-        .map(|r| {
-            Row::new(vec![
-                Cell::from(iso_minute(r.created_at)),
-                Cell::from(r.session_name.clone()),
-                Cell::from(status_span(t, r.status)),
-                Cell::from(format!("${:.4}", r.cost_usd)),
-                Cell::from(format!("{}/{}", short(r.tokens_in), short(r.tokens_out))),
-                Cell::from(r.preview(80)),
-            ])
-        })
-        .collect();
-    let widths = [
-        Constraint::Length(16),
-        Constraint::Length(14),
-        Constraint::Length(11),
-        Constraint::Length(8),
-        Constraint::Length(11),
-        Constraint::Fill(1),
-    ];
-    let header = Row::new(["time", "session", "status", "cost", "tokens", "prompt"]).fg(t.muted);
-    let table = Table::new(rows, widths)
-        .header(header)
-        .block(panel(t, title))
-        .highlight_symbol("› ")
-        .row_highlight_style(Style::new().bold());
-    let mut state = TableState::default().with_selected(Some(h.selected));
-    frame.render_stateful_widget(table, area, &mut state);
+    let block = panel(t, title);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let per = CARD_LINES + 1;
+    let visible = (inner.height as usize).div_ceil(per).max(1);
+    let first = (l.selected + 1).saturating_sub(visible);
+    let mut lines: Vec<Line> = Vec::new();
+    for (i, card) in l.cards.iter().enumerate().skip(first).take(visible) {
+        lines.extend(card_lines(app, card, i == l.selected, inner.width as usize));
+        lines.push(Line::raw(""));
+    }
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
-fn render_detail(frame: &mut Frame, area: Rect, detail: Option<&JobDetail>, t: &Theme) {
-    let Some(d) = detail else {
-        frame.render_widget(panel(t, " job ".into()), area);
-        return;
+/// The two lines of a run card: outcome, title and cost; then the
+/// evidence, models, labels and time.
+fn card_lines(app: &App, card: &RunCard, selected: bool, w: usize) -> [Line<'static>; 2] {
+    let t = &app.look.theme;
+    let (mark, color) = outcome_look(app, card.outcome);
+    let cursor = if selected { g(app, "› ", "> ") } else { "  " };
+    let word = format!("{:<10}", card.outcome.as_str());
+    let cost = format!("${:.2}", card.cost_usd);
+    let used = cursor.chars().count() + 2 + word.chars().count() + cost.chars().count() + 1;
+    let room = w.saturating_sub(used);
+    let title = fit(&card.title, room);
+    let pad = " ".repeat(room.saturating_sub(title.chars().count()) + 1);
+    let weight = if selected {
+        Style::new().add_modifier(ratatui::style::Modifier::BOLD)
+    } else {
+        Style::new()
     };
-    let s = &d.summary;
-    let heading = |text: &str| Line::styled(text.to_string(), Style::new().fg(t.lead));
-    let duration = s
-        .duration_ms
-        .map_or_else(String::new, |ms| format!(" · {:.1}s", ms as f64 / 1000.0));
-    let mut lines = vec![
-        Line::from(vec![
-            Span::raw(format!("{} · {} · ", s.session_name, s.model)),
-            status_span(t, s.status),
-        ]),
-        Line::styled(
-            format!(
-                "{} UTC{duration} · ${:.4} · in {} / out {}",
-                iso_minute(s.created_at),
-                s.cost_usd,
-                short(s.tokens_in),
-                short(s.tokens_out)
-            ),
-            Style::new().fg(t.muted),
-        ),
-        Line::raw(""),
-        heading("prompt"),
+    let first = Line::from(vec![
+        Span::styled(cursor, Style::new().fg(t.lead)),
+        Span::styled(format!("{mark} "), Style::new().fg(color)),
+        Span::styled(word, Style::new().fg(color)),
+        Span::styled(title, weight.fg(t.text)),
+        Span::raw(pad),
+        Span::styled(cost, Style::new().fg(t.muted)),
+    ]);
+    let muted = Style::new().fg(t.muted);
+    let dot = || Span::styled(" · ", Style::new().fg(t.dim));
+    let mut second = vec![
+        Span::raw("    "),
+        Span::styled(iso_minute(card.at)[5..].to_string(), muted),
+        dot(),
     ];
-    lines.extend(s.prompt.lines().map(|l| Line::raw(l.to_string())));
-    if let Some(text) = d.result.as_ref().map(|r| r.text.as_str())
-        && !text.is_empty()
-    {
-        lines.push(Line::raw(""));
-        lines.push(heading("result"));
-        lines.extend(text.lines().map(|l| Line::raw(l.to_string())));
+    match &card.evidence {
+        Some(e) => {
+            let all = e.checks_passed == e.checks_total;
+            second.push(Span::styled(
+                format!(
+                    "{} {}/{} {}",
+                    if all {
+                        g(app, "✓", "+")
+                    } else {
+                        g(app, "✗", "x")
+                    },
+                    e.checks_passed,
+                    e.checks_total,
+                    e.digest
+                ),
+                Style::new().fg(if all { t.ok } else { t.error }),
+            ));
+        }
+        None => second.push(Span::styled("no bundle", Style::new().fg(t.dim))),
     }
-    if let Some(review) = &d.review {
-        lines.push(Line::raw(""));
-        lines.push(heading("review"));
-        lines.extend(review_lines(review, t));
+    second.push(dot());
+    second.push(Span::styled(model_mix(&card.models), muted));
+    if let Some((text, kind)) = label_text(card) {
+        second.push(dot());
+        second.push(Span::styled(text, Style::new().fg(label_color(t, kind))));
     }
-    if let Some(e) = &s.error {
-        lines.push(Line::raw(""));
-        lines.push(Line::styled("error", Style::new().fg(t.error)));
-        lines.extend(e.lines().map(|l| Line::raw(l.to_string())));
-    }
-    frame.render_widget(
-        Paragraph::new(lines)
-            .wrap(Wrap { trim: false })
-            .block(panel(t, format!(" job #{} ", s.job_id))),
-        area,
-    );
+    [first, Line::from(second)]
 }
 
-/// The review's outcome, its concerns and what it cost.
-fn review_lines(review: &ReviewState, t: &Theme) -> Vec<Line<'static>> {
-    let cost = |c: f64| Span::styled(format!(" · ${c:.4}"), Style::new().fg(t.muted));
-    match review {
-        ReviewState::Requested => vec![Line::styled("requested", Style::new().fg(t.muted))],
-        ReviewState::Running { job } => vec![Line::styled(
-            format!("running as job #{job}"),
-            Style::new().fg(t.muted),
-        )],
-        ReviewState::Done {
-            review,
-            job,
-            cost_usd,
-        } => {
-            let (text, color) = match review.verdict {
-                ReviewVerdict::Pass => ("passed", t.ok),
-                ReviewVerdict::Concerns => ("concerns", t.error),
-            };
-            let mut lines = vec![Line::from(vec![
-                Span::styled(text, Style::new().fg(color)),
-                Span::raw(format!(
-                    " · {} diffs checked · job #{job}",
-                    review.diffs_checked
-                )),
-                cost(*cost_usd),
-            ])];
-            lines.extend(
-                review
-                    .concerns
-                    .iter()
-                    .map(|c| Line::styled(format!("- {c}"), Style::new().fg(t.error))),
-            );
-            lines
-        }
-        ReviewState::Failed {
-            error, cost_usd, ..
-        } => vec![Line::from(vec![
-            Span::styled(format!("review failed: {error}"), Style::new().fg(t.error)),
-            cost(*cost_usd),
-        ])],
+/// `text` cut to `max` characters, with an ellipsis when it was cut.
+pub(super) fn fit(text: &str, max: usize) -> String {
+    let first = text.lines().next().unwrap_or_default();
+    if first.chars().count() <= max {
+        return first.to_string();
     }
+    let keep = max.saturating_sub(1);
+    let mut out: String = first.chars().take(keep).collect();
+    out.push('…');
+    out
 }
 
 #[cfg(test)]
-mod tests {
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-    use swarmux_application::ports::RunnerMsg;
-    use swarmux_domain::{AgentEvent, SessionId};
-
-    use crate::app::tests_support::{TestApp, test_app};
-    use crate::app::{App, InputPurpose, Mode, Screen};
-    use crate::ui::render_to_string;
-
-    fn press(app: &mut App, code: KeyCode) {
-        app.on_key(KeyEvent::new(code, KeyModifiers::NONE));
-    }
-
-    fn type_str(app: &mut App, s: &str) {
-        for c in s.chars() {
-            press(app, KeyCode::Char(c));
-        }
-    }
-
-    fn init(id: &str) -> RunnerMsg {
-        RunnerMsg::Event(AgentEvent::Init {
-            session_id: id.into(),
-            model: "claude-sonnet".into(),
-            cwd: "/work".into(),
-            permission_mode: "default".into(),
-        })
-    }
-
-    fn result(text: &str) -> RunnerMsg {
-        RunnerMsg::Event(AgentEvent::Result {
-            is_error: false,
-            subtype: "success".into(),
-            cost_usd: 0.25,
-            duration_ms: 2500,
-            num_turns: 1,
-            tokens_in: 1200,
-            tokens_out: 300,
-            cache_read: 0,
-            context_window: None,
-            subagents_spawned: 0,
-            text: text.into(),
-        })
-    }
-
-    /// Two finished jobs in session "demo", on the history screen.
-    fn with_history() -> TestApp {
-        let mut t = test_app();
-        t.with_session("demo");
-        t.send("Fix the parser");
-        let sid = t.runner.request(0).session_id.to_string();
-        t.runner.emit(0, init(&sid));
-        t.runner.emit(0, result("parser fixed"));
-        t.app.update();
-        t.clock.advance(60_000);
-        t.send("write the docs");
-        t.runner.emit(1, RunnerMsg::SpawnFailed("no claude".into()));
-        t.app.update();
-        press(&mut t.app, KeyCode::Char('5'));
-        t
-    }
-
-    #[test]
-    fn table_and_detail() {
-        let t = with_history();
-        let out = render_to_string(&t.app, 140, 16);
-        assert!(out.contains("history (UTC)"), "{out}");
-        assert!(out.contains("1970-01-01 00:01"), "{out}");
-        let docs = out.find("write the docs").unwrap();
-        let parser = out.find("Fix the parser").unwrap();
-        assert!(docs < parser, "newest first: {out}");
-        assert!(out.contains("1.2k/300"), "{out}");
-        assert!(out.contains("job #2"), "{out}");
-        assert!(out.contains("spawn failed: no claude"), "{out}");
-        assert!(out.contains("/ search"), "{out}");
-    }
-
-    #[test]
-    fn detail_follows_selection_and_shows_result() {
-        let mut t = with_history();
-        press(&mut t.app, KeyCode::Down);
-        let out = render_to_string(&t.app, 140, 16);
-        assert!(out.contains("job #1"), "{out}");
-        assert!(out.contains("parser fixed"), "{out}");
-        assert!(out.contains("2.5s · $0.2500"), "{out}");
-    }
-
-    #[test]
-    fn detail_shows_the_review() {
-        use swarmux_application::ports::JobRepository;
-        use swarmux_domain::{JobId, Review, ReviewState, ReviewVerdict};
-        let mut t = with_history();
-        let review = ReviewState::Done {
-            review: Review {
-                verdict: ReviewVerdict::Concerns,
-                concerns: vec!["no test for empty input".into()],
-                diffs_checked: 2,
-            },
-            job: JobId(9),
-            cost_usd: 0.0311,
-        };
-        t.store.set_review(JobId(1), &review).unwrap();
-        press(&mut t.app, KeyCode::Char('5'));
-        press(&mut t.app, KeyCode::Down);
-        let out = render_to_string(&t.app, 160, 30);
-        assert!(
-            out.contains("concerns · 2 diffs checked · job #9 · $0.0311"),
-            "{out}"
-        );
-        assert!(out.contains("- no test for empty input"), "{out}");
-    }
-
-    #[test]
-    fn search_filters_as_you_type_and_esc_clears() {
-        let mut t = with_history();
-        press(&mut t.app, KeyCode::Char('/'));
-        assert!(matches!(t.app.mode, Mode::Input(InputPurpose::Search, _)));
-        type_str(&mut t.app, "PARSER");
-        assert_eq!(t.app.history.rows.len(), 1);
-        assert!(!t.app.quit, "q-like keys type into the search");
-        let out = render_to_string(&t.app, 140, 16);
-        assert!(out.contains("search: PARSER"), "{out}");
-        press(&mut t.app, KeyCode::Enter);
-        assert_eq!(t.app.mode, Mode::Normal);
-        assert!(render_to_string(&t.app, 140, 16).contains("1 found"));
-
-        press(&mut t.app, KeyCode::Char('/'));
-        press(&mut t.app, KeyCode::Esc);
-        assert_eq!(t.app.history.rows.len(), 2);
-        assert!(t.app.history.query.is_empty());
-    }
-
-    #[test]
-    fn rerun_queues_the_prompt_again() {
-        let mut t = with_history();
-        press(&mut t.app, KeyCode::Char('r'));
-        assert_eq!(t.app.error, None);
-        assert_eq!(t.runner.started(), 3);
-        assert_eq!(t.runner.request(2).prompt, "write the docs");
-        assert_eq!(t.app.history.rows.len(), 3);
-    }
-
-    #[test]
-    fn fork_creates_a_new_session_once_claude_reports_it() {
-        let mut t = with_history();
-        press(&mut t.app, KeyCode::Down);
-        press(&mut t.app, KeyCode::Char('f'));
-        let req = t.runner.request(2);
-        assert!(req.fork && req.resume);
-        let new_id = SessionId::random();
-        t.runner.emit(2, init(&new_id.to_string()));
-        t.app.update();
-        let names: Vec<&str> = t.app.sessions.iter().map(|s| s.name.as_str()).collect();
-        assert!(names.contains(&"demo fork"), "{names:?}");
-        assert_eq!(t.app.selected_session().unwrap().name, "demo");
-    }
-
-    #[test]
-    fn enter_replays_a_job_from_an_earlier_run() {
-        let t = with_history();
-        // A new app over the same store: its jobs are history, not live.
-        let mut t2 = crate::app::tests_support::test_app_with_store(t.store.clone());
-        press(&mut t2.app, KeyCode::Char('5'));
-        press(&mut t2.app, KeyCode::Down);
-        press(&mut t2.app, KeyCode::Enter);
-        assert_eq!(t2.app.screen, Screen::Dashboard);
-        let out = render_to_string(&t2.app, 160, 48);
-        assert!(out.contains("done"), "{out}");
-        assert!(out.contains("$0.2500"), "{out}");
-    }
-}
+mod tests;

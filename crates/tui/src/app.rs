@@ -10,17 +10,18 @@ use std::rc::Rc;
 
 use swarmux_application::ports::Clock;
 use swarmux_application::{
-    AppError, AppResult, CheckpointService, GateService, GuardService, HistoryService, HookBus,
-    JobService, MissionService, PendingApproval, PromptService, QueueEntry, QueueStats,
-    RoutingService, SessionService, SessionTerminal, TelemetryService, TelemetrySettings,
-    UiSettings,
+    AppError, AppResult, CheckpointService, EvidenceService, GateService, GuardService,
+    HistoryService, HookBus, JobService, MissionService, PendingApproval, PromptService,
+    QueueEntry, QueueStats, RoutingService, SessionService, SessionTerminal, TelemetryService,
+    TelemetrySettings, UiSettings,
 };
+use swarmux_domain::evidence::{brief, heat_strip};
 use swarmux_domain::mission::Contract;
 use swarmux_domain::{AttentionKind, JobId, JobProgress, Millis, PromptId, Session, SessionId};
 
 use crate::dashboard::DashboardState;
 use crate::focus::{Checkpoints, FocusState};
-use crate::history::{HistoryAction, HistoryScreen};
+use crate::ledger::{HEAT_DAYS, LedgerAction, LedgerScreen};
 use crate::mission::{Cadence, MissionState, Pane, Tile, wall_tiles};
 use crate::missions::{Composer, ComposerAction, MissionsScreen};
 use crate::prompts::{FormAction, PendingDispatch, PromptForm, PromptsScreen};
@@ -45,7 +46,8 @@ pub enum Screen {
     Missions,
     Prompts,
     Queue,
-    History,
+    /// What happened, what it cost and whether it can be proven.
+    Ledger,
     Sessions,
     /// The followed job in detail (the dashboard's panels).
     Dashboard,
@@ -57,7 +59,7 @@ impl Screen {
         Screen::Missions,
         Screen::Prompts,
         Screen::Queue,
-        Screen::History,
+        Screen::Ledger,
         Screen::Sessions,
         Screen::Dashboard,
     ];
@@ -69,7 +71,7 @@ impl Screen {
             Screen::Dashboard => "focus",
             Screen::Prompts => "prompts",
             Screen::Queue => "queue",
-            Screen::History => "history",
+            Screen::Ledger => "ledger",
             Screen::Sessions => "sessions",
         }
     }
@@ -81,7 +83,7 @@ impl Screen {
             Screen::Missions => '2',
             Screen::Prompts => '3',
             Screen::Queue => '4',
-            Screen::History => '5',
+            Screen::Ledger => '5',
             Screen::Sessions => '6',
             Screen::Dashboard => '0',
         }
@@ -100,7 +102,7 @@ pub enum InputPurpose {
     RoutedPrompt,
     /// A value for the template variable `prompts.pending` is asking for.
     Variable,
-    /// The history search; applied as it is typed.
+    /// The ledger search; applied as it is typed.
     Search,
 }
 
@@ -129,7 +131,7 @@ pub struct App {
     pub notice: Option<String>,
     pub prompts: PromptsScreen,
     pub queue: QueueScreen,
-    pub history: HistoryScreen,
+    pub ledger: LedgerScreen,
     pub dashboard: DashboardState,
     /// Scroll, human events and the "you were here" spot of Focus.
     pub focus_state: FocusState,
@@ -139,6 +141,10 @@ pub struct App {
     pub missions_screen: MissionsScreen,
     /// Writes, lints and follows missions.
     missions: Option<MissionService>,
+    /// Bundles, their verification and outcome labels.
+    evidence: Option<Rc<EvidenceService>>,
+    /// When the user was last here: what happened since is the digest.
+    away_since: Option<Millis>,
     clock: Option<Rc<dyn Clock>>,
     pub(crate) session_service: SessionService,
     pub(crate) jobs: JobService,
@@ -171,6 +177,20 @@ pub struct App {
     checkpoints: Option<Rc<CheckpointService>>,
     /// What was last read for the job Focus shows, and when.
     focus_checkpoints: Option<(JobId, Millis, Checkpoints)>,
+}
+
+/// The user counts as away after this long without opening swarmux.
+const AWAY_AFTER_MS: Millis = 30 * 60_000;
+/// The morning brief covers this long.
+const BRIEF_MS: Millis = 24 * 3_600_000;
+
+/// What the digest covers: the time since the user was last here when
+/// that was a while ago, else the last day. And whether it is the former.
+fn digest_window(away_since: Option<Millis>, now: Millis) -> (Millis, bool) {
+    match away_since {
+        Some(at) if now - at >= AWAY_AFTER_MS => (at, true),
+        _ => (now - BRIEF_MS, false),
+    }
 }
 
 /// What the composition root knows at start-up.
@@ -215,12 +235,14 @@ impl App {
             notice: None,
             prompts: PromptsScreen::default(),
             queue: QueueScreen::default(),
-            history: HistoryScreen::default(),
+            ledger: LedgerScreen::default(),
             dashboard: DashboardState::default(),
             focus_state: FocusState::default(),
             mission: MissionState::default(),
             missions_screen: MissionsScreen::default(),
             missions: None,
+            evidence: None,
+            away_since: None,
             clock: None,
             session_service,
             jobs,
@@ -293,9 +315,41 @@ impl App {
     }
 
     /// Lets the Missions screen write, lint, run and follow missions.
-    pub fn with_missions(mut self, missions: MissionService) -> App {
+    pub fn with_missions(mut self, mut missions: MissionService) -> App {
+        if let Some(evidence) = &self.evidence {
+            missions.set_evidence(evidence.clone());
+        }
         self.missions = Some(missions);
         self
+    }
+
+    /// Shows evidence on the Ledger screen. `away_since` is when the
+    /// user was last here (the ledger's newest entry before this run).
+    pub fn with_evidence(
+        mut self,
+        evidence: Rc<EvidenceService>,
+        away_since: Option<Millis>,
+    ) -> App {
+        self.attach_evidence(evidence, away_since);
+        self
+    }
+
+    /// Also lets the missions seal a bundle when they are delivered.
+    pub(crate) fn attach_evidence(
+        &mut self,
+        evidence: Rc<EvidenceService>,
+        away_since: Option<Millis>,
+    ) {
+        if let Some(missions) = &mut self.missions {
+            missions.set_evidence(evidence.clone());
+        }
+        self.evidence = Some(evidence);
+        self.away_since = away_since;
+    }
+
+    /// Where bundles are verified and labelled, when evidence is set up.
+    pub(crate) fn evidence(&self) -> Option<&Rc<EvidenceService>> {
+        self.evidence.as_ref()
     }
 
     /// Every mission, oldest first.
@@ -469,8 +523,9 @@ impl App {
             // Jobs touch their sessions, which re-sorts the list.
             self.refresh_sessions(None);
         }
-        if report.changed && self.screen == Screen::History {
-            self.refresh_history();
+        let evidence_changed = self.pump_evidence();
+        if (report.changed || evidence_changed) && self.screen == Screen::Ledger {
+            self.refresh_ledger();
         }
         self.refresh_mission();
         if let Some(e) = self.pump_missions().into_iter().last() {
@@ -567,16 +622,16 @@ impl App {
             match input.handle(key) {
                 InputAction::None => {
                     if purpose == InputPurpose::Search {
-                        self.history.query = input.text.clone();
-                        self.refresh_history();
+                        self.ledger.query = input.text.clone();
+                        self.refresh_ledger();
                     }
                 }
                 InputAction::Cancel => {
                     self.mode = Mode::Normal;
                     self.prompts.pending = None;
                     if purpose == InputPurpose::Search {
-                        self.history.query.clear();
-                        self.refresh_history();
+                        self.ledger.query.clear();
+                        self.refresh_ledger();
                     }
                 }
                 InputAction::Submit(text) => {
@@ -637,8 +692,8 @@ impl App {
             KeyCode::Char('q') => self.quit = true,
             KeyCode::Char(c) if Screen::by_key(c).is_some() => {
                 self.screen = Screen::by_key(c).unwrap_or_default();
-                if self.screen == Screen::History {
-                    self.refresh_history();
+                if self.screen == Screen::Ledger {
+                    self.refresh_ledger();
                 }
             }
             KeyCode::Char('t') if self.on_focus() => {
@@ -717,8 +772,8 @@ impl App {
                 let result = self.queue_key(code);
                 self.show(result);
             }
-            code if self.screen == Screen::History => {
-                let result = self.history_key(code);
+            code if self.screen == Screen::Ledger => {
+                let result = self.ledger_key(code);
                 self.show(result);
             }
             KeyCode::Up if self.screen == Screen::Prompts => self.prompts.up(),
@@ -1157,25 +1212,58 @@ impl App {
         Ok(())
     }
 
-    fn history_key(&mut self, code: KeyCode) -> AppResult<()> {
-        match self.history.handle(code) {
-            HistoryAction::None => {}
-            HistoryAction::Moved => self.load_detail(),
-            HistoryAction::Search => {
-                let input = Input::with_text(&self.history.query);
+    fn ledger_key(&mut self, code: KeyCode) -> AppResult<()> {
+        match self.ledger.handle(code) {
+            LedgerAction::None => {}
+            LedgerAction::Moved => self.load_detail(),
+            LedgerAction::Filtered => self.refresh_ledger(),
+            LedgerAction::Search => {
+                let input = Input::with_text(&self.ledger.query);
                 self.mode = Mode::Input(InputPurpose::Search, input);
             }
-            HistoryAction::Rerun(id) => {
+            LedgerAction::Rerun(id) => {
                 self.jobs.retry(id)?;
-                self.refresh_history();
+                self.refresh_ledger();
             }
-            HistoryAction::Fork(id) => {
+            LedgerAction::Fork(id) => {
                 self.jobs.fork(id)?;
-                self.refresh_history();
+                self.refresh_ledger();
             }
-            HistoryAction::View(id) => self.view(id)?,
+            LedgerAction::View(id) => self.view(id)?,
+            LedgerAction::Verify(slug) => {
+                if let Some(evidence) = &self.evidence {
+                    evidence.start_verify(&slug)?;
+                    self.show_toast(format!("verifying {slug}"));
+                }
+            }
+            LedgerAction::Labels => match &self.evidence {
+                Some(evidence) => {
+                    let asked = evidence.request_labels()?;
+                    self.show_toast(format!("asked GitHub about {asked} branch(es)"));
+                }
+                None => self.notice = Some("evidence is not set up in this run".into()),
+            },
         }
         Ok(())
+    }
+
+    /// Collects finished verifications and label answers; whether any
+    /// arrived.
+    fn pump_evidence(&mut self) -> bool {
+        let Some(evidence) = &self.evidence else {
+            return false;
+        };
+        let verified = evidence.pump_verify();
+        let labelled = evidence.pump_labels();
+        let toast = verified.last().map(|slug| {
+            let verdict = evidence.report(slug).map_or("no report", |r| r.verdict());
+            format!("{slug}: {verdict}")
+        });
+        let any = !verified.is_empty() || !labelled.is_empty();
+        if let Some(text) = toast {
+            self.show_toast(text);
+        }
+        any
     }
 
     /// Shows `job` on the dashboard, rebuilding it from history if it is
@@ -1205,19 +1293,55 @@ impl App {
         Ok(())
     }
 
-    fn refresh_history(&mut self) {
-        match self.history_service.list(&self.history.query) {
-            Ok(rows) => self.history.set_rows(rows),
-            Err(e) => self.error = Some(e.to_string()),
-        }
+    /// Rebuilds the run cards: every job joined with its mission and
+    /// bundle, then the search and filter applied.
+    fn refresh_ledger(&mut self) {
+        let rows = match self.history_service.list("") {
+            Ok(rows) => rows,
+            Err(e) => {
+                self.error = Some(e.to_string());
+                return;
+            }
+        };
+        let rows: Vec<_> = rows.into_iter().filter(|r| r.review_of.is_none()).collect();
+        let stored = match &self.evidence {
+            Some(e) => e.list().unwrap_or_else(|err| {
+                self.error = Some(err.to_string());
+                Vec::new()
+            }),
+            None => Vec::new(),
+        };
+        let all = swarmux_application::build_cards(&rows, self.missions(), &stored);
+        let now = self.now();
+        let (since, away) = digest_window(self.away_since, now);
+        let l = &mut self.ledger;
+        l.stats = swarmux_domain::evidence::LedgerStats::of(&all);
+        l.heat = heat_strip(&all, now, HEAT_DAYS);
+        l.brief = brief(&all, since, now);
+        l.away = away;
+        let (rows, cards): (Vec<_>, Vec<_>) = rows
+            .into_iter()
+            .zip(all)
+            .filter(|(r, c)| l.filter.admits(c) && (r.matches(&l.query) || c.matches(&l.query)))
+            .unzip();
+        l.set_rows(rows, cards);
         self.load_detail();
     }
 
     fn load_detail(&mut self) {
-        self.history.detail = None;
-        if let Some(id) = self.history.selected_row().map(|r| r.job_id) {
-            match self.history_service.detail(id) {
-                Ok(d) => self.history.detail = Some(d),
+        self.ledger.detail = None;
+        self.ledger.bundle = None;
+        let Some(id) = self.ledger.selected_row().map(|r| r.job_id) else {
+            return;
+        };
+        match self.history_service.detail(id) {
+            Ok(d) => self.ledger.detail = Some(d),
+            Err(e) => self.error = Some(e.to_string()),
+        }
+        let slug = self.ledger.selected_card().and_then(|c| c.mission.clone());
+        if let (Some(slug), Some(evidence)) = (slug, &self.evidence) {
+            match evidence.get(&slug) {
+                Ok(stored) => self.ledger.bundle = stored,
                 Err(e) => self.error = Some(e.to_string()),
             }
         }
@@ -1557,6 +1681,19 @@ pub(crate) mod tests_support {
             self.keys([KeyCode::Char('0'), KeyCode::Char('p')]);
             self.keys(prompt.chars().map(KeyCode::Char));
             self.keys([KeyCode::Enter]);
+        }
+
+        /// Seals a bundle for every mission delivered from now on, on a
+        /// ledger in memory the returned kit shares with the app.
+        pub(crate) fn with_evidence(
+            &mut self,
+        ) -> swarmux_application::evidence::testing::EvidenceKit {
+            let kit = swarmux_application::evidence::testing::EvidenceKit::new(
+                self.store.clone(),
+                self.clock.clone(),
+            );
+            self.app.attach_evidence(kit.service.clone(), None);
+            kit
         }
 
         /// Saves a prompt straight to the store and reloads the list.
