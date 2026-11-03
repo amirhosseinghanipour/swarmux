@@ -24,6 +24,10 @@ review live in one terminal.
 - **Done-gate**: when an agent says it is finished, swarmux runs the
   repository's tests itself and sends it back with the failure until they
   pass; tests and other oracles it may not edit are protected
+- **Missions**: state the outcome, the checks that prove it, what the agent
+  may not touch and the budget; swarmux lints it (at most three questions),
+  runs it as a job under its own gate and calls it delivered only when the
+  gate passes
 - **History**: every prompt with cost, outcome and review; re-run or fork from any point
 - **Lean mode** per session: skip your user-level Claude Code settings
 - **Audit ledger**: a tamper-evident, hash-chained record of every job,
@@ -34,7 +38,7 @@ Single Rust binary. Windows, macOS, Linux. Works with Claude Code only.
 ## Try it
 
 ```sh
-cargo run              # TUI: 1-6 switch screens (1 is Mission control), p sends a prompt, t theme, L layout, q quits
+cargo run              # TUI: 1-6 switch screens (1 Mission control, 2 Missions), 0 Focus, p sends a prompt, q quits
 cargo run -- doctor    # checks Claude Code, the settings, the Guard hook and telemetry
 ```
 
@@ -114,7 +118,8 @@ need me, who is doing what, and will I hit a limit.
   Cards never move when a state changes.
 - **Top strip**: sessions by state, queue, burn, machine load, the 5-hour and
   weekly limits with a marker for how far through the window you are, and a
-  note on any data source that has gone stale.
+  note on any data source that has gone stale: usage, system, git, GitHub,
+  `claude agents`, and the sessions' status lines while a job runs.
 - **Changes**: what happened, newest first.
 
 The screen fills the window it gets. Up to about 120x36 it shows the strip, the
@@ -131,21 +136,75 @@ pull requests, MCP servers, system load and a 12-week activity calendar. From
 | `y` / `n` / `a` | approve, deny or always allow the selected held tool call (from any other screen they answer the oldest) |
 | `x` | dismiss an item (held tool calls stay until answered) |
 
-## Focus (screen 2)
+## Missions (screen 2)
 
-Screen 2 is one agent in detail: the job you last sent, or the one you open
-with `Enter` from Mission control, the queue or history. It opens with the same
-sigil and colour the card had. From top to bottom:
+A mission is an outcome contract: the goal, the checks that prove it, where
+the agent may work, what it may never change and what it may cost. swarmux
+keeps each one in `.swarmux/missions/<name>.toml` in the repository (agents
+can't write there) and in its database:
 
-- **Header**: session, state, the prompt, model, permission mode, folder,
-  time, cost and context.
+```toml
+title = "Fast search"
+goal = "make search answer in under 50 ms on the bench corpus"
+
+[acceptance]
+checks = ["cargo test -p search", "sh scripts/bench.sh --max-ms 50"]
+
+[constraints]
+paths_rw = ["src/search/**"]
+protected = ["tests/**", "scripts/bench.sh"]
+
+[budget]
+usd = 2.0
+wall_minutes = 90
+on_exhaust = "escalate"   # or "warn"
+```
+
+Saving a mission lints it at once: no checks (it can't run), checks whose
+tests or scripts the agent could edit (`f` protects them), paths both
+writable and protected, a goal too short to act on, no budget, no scope. One
+Haiku call (no tools, no session file; `--bare` when `ANTHROPIC_API_KEY` is
+set) adds at most three clarifying questions, which you answer inline. `r`
+compiles the mission into a job for its session: the prompt states the goal,
+the checks, the paths and your answers, and the job's done-gate gets the
+mission's checks and protected paths on top of the repository's.
+
+A mission goes `draft › linted › queued › running › verifying › delivered`.
+It is delivered only when the gate passes after the job has ended; if no
+stop of the job was judged, swarmux runs the checks itself. A failed job, a
+gate that gave up or a spent budget escalates it; a mission nothing can check
+is refused. Each card shows that path, a chip per check, the budget split by
+phase (plan 10%, implement 60%, verify 20%, review 10%) and the topology
+(one session for now). Every change of state is in the audit ledger.
+
+| Key | Does |
+| --- | --- |
+| `n` | new mission (for the selected session) |
+| `e` | edit the selected mission and answer its questions (not while it is out) |
+| `Tab` / `Shift+Tab` | next / previous field or answer in the composer |
+| `Ctrl+S` | save and lint |
+| `Ctrl+F` / `f` | protect the oracles the lint found |
+| `Ctrl+R` / `r` | run it |
+| `l` | lint again |
+| `Enter` | open its job in Focus |
+| `Esc` | close the composer |
+
+## Focus (`0`)
+
+Focus is one agent in detail: the job you last sent, or the one you open
+with `Enter` from Mission control, Missions, the queue or history (`0` goes
+back to it). It opens with the same sigil and colour the card had. From top
+to bottom:
+
+- **Header**: session, state, the prompt, model, permission mode, the job's
+  branch and worktree (or its folder), time, cost and context.
 - **Situation**: `doing`, `because`, `next`, how `sure` swarmux is and what it
   is `unsure` about. All of it comes from what swarmux saw: the last tool
   call, the todo list, the done-gate, the review, loop stops and failed tool
   calls. Nothing is guessed by a model.
 - **Gate**: the done-gate's checks and the review as chips, then the
-  checkpoints (empty until the job has any) and the recovery trail (loop-breaker
-  stops).
+  checkpoints taken when the gate passed or before a compact, and the recovery
+  trail (loop-breaker stops).
 - **Timeline**: one row per actor, with your own prompts and answers marked.
 - **Action stream**: tool calls as a tree with their results, subagents
   indented, diff lines tinted, and a "you were here" line where you last looked.
@@ -157,6 +216,7 @@ sigil and colour the card had. From top to bottom:
 | --- | --- |
 | `Up` / `Down`, `PgUp` / `PgDn`, `Home` / `End` | scroll the stream (`End` follows the newest row) |
 | `J` / `K` | scroll the answer or diff |
+| `[` / `]` | step through the job's checkpoints |
 | `d` | working-tree diff in place of the answer |
 | `t` | open the session in a new Windows Terminal tab (`wt -w 0 nt -d <folder> claude --resume <id>`) |
 | `p` / `P` | prompt the session / let swarmux pick one |
