@@ -7,6 +7,7 @@ mod attention;
 pub mod checkpoint;
 mod decision;
 mod error;
+pub mod evidence;
 pub mod gate;
 mod guard;
 mod history;
@@ -30,6 +31,10 @@ pub use attention::{AttentionService, Change, ChangeKind};
 pub use checkpoint::{CheckpointService, HandoffBoard, Notes};
 pub use decision::{DecisionRecord, Outcome, Source};
 pub use error::{AppError, AppResult};
+pub use evidence::{
+    Checkout, Checkouts, EvidenceService, EvidenceStore, HashSigner, HeadFacts, OutcomeProbe,
+    ProbeReply, ProbeRequest, ProbeSink, Rerunner, Signer, Stored, Vcs, build_cards,
+};
 pub use gate::{
     Checker, ExecutionLog, GateKeeper, GateRecord, GateService, GateSource, GateState, JobGates,
     LoadedGate, WriteFence, run_checks,

@@ -18,6 +18,7 @@ use swarmux_domain::mission::{
 };
 use swarmux_domain::{JobId, JobStatus, Millis, SessionId, slug};
 
+use crate::evidence::EvidenceService;
 use crate::gate::{GateState, JobGates};
 use crate::jobs::{JobFact, JobService};
 use crate::ledger::LedgerService;
@@ -75,6 +76,9 @@ pub struct MissionService {
     ledger: Option<Rc<LedgerService>>,
     linter: Option<Rc<dyn MissionLinter>>,
     gates: Option<Rc<dyn JobGates>>,
+    evidence: Option<Rc<EvidenceService>>,
+    /// Bundles of missions delivered earlier were looked for.
+    backfilled: bool,
     /// Oldest first.
     missions: Vec<Mission>,
     tx: Sender<(String, u64, LintReply)>,
@@ -96,6 +100,8 @@ impl MissionService {
             ledger: None,
             linter: None,
             gates: None,
+            evidence: None,
+            backfilled: false,
             missions,
             tx,
             rx,
@@ -115,6 +121,18 @@ impl MissionService {
     pub fn with_gates(mut self, gates: Rc<dyn JobGates>) -> MissionService {
         self.gates = Some(gates);
         self
+    }
+
+    /// Seals an evidence bundle for every mission that is delivered. A
+    /// mission whose bundle can't be sealed is escalated instead.
+    pub fn with_evidence(mut self, evidence: Rc<EvidenceService>) -> MissionService {
+        self.set_evidence(evidence);
+        self
+    }
+
+    /// Like [`MissionService::with_evidence`], for a service already built.
+    pub fn set_evidence(&mut self, evidence: Rc<EvidenceService>) {
+        self.evidence = Some(evidence);
     }
 
     /// Records every change of state in the ledger.
@@ -348,6 +366,14 @@ impl MissionService {
     /// and keeps budgets.
     pub fn pump(&mut self, facts: &[JobFact], gates: &HashMap<JobId, GateState>) -> MissionReport {
         let mut report = MissionReport::default();
+        if let (false, Some(evidence)) = (self.backfilled, &self.evidence) {
+            self.backfilled = true;
+            for (slug, e) in evidence.backfill(&self.missions) {
+                report
+                    .errors
+                    .push(AppError::Mission(format!("no bundle for {slug}: {e}")));
+            }
+        }
         while let Ok((slug, ticket, reply)) = self.rx.try_recv() {
             if self.linting.get(&slug) != Some(&ticket) {
                 continue;
@@ -506,7 +532,27 @@ impl MissionService {
         }
         let slug = self.missions[i].slug.clone();
         self.record(&slug, from)?;
+        if self.missions[i].state == MissionState::Delivered {
+            self.seal(i, now)?;
+        }
         Ok(true)
+    }
+
+    /// Delivered means a bundle exists: without one the mission goes to
+    /// the user instead.
+    fn seal(&mut self, i: usize, now: Millis) -> AppResult<()> {
+        let Some(evidence) = self.evidence.clone() else {
+            return Ok(());
+        };
+        let Err(why) = evidence.seal(&self.missions[i]) else {
+            return Ok(());
+        };
+        let m = &mut self.missions[i];
+        m.state = MissionState::Escalated;
+        m.note = Some(format!("no evidence bundle: {why}"));
+        m.updated_at = now;
+        let slug = m.slug.clone();
+        self.record(&slug, MissionState::Delivered)
     }
 
     fn record(&self, slug: &str, from: MissionState) -> AppResult<()> {

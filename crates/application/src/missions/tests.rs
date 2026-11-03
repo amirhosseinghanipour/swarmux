@@ -1,4 +1,5 @@
 use super::*;
+use crate::evidence::EvidenceStore;
 use crate::gate::GateState;
 use crate::ports::{RunnerMsg, SessionRepository};
 use crate::testing::{
@@ -17,6 +18,8 @@ struct Fixture {
     gates: Rc<FakeJobGates>,
     runner: Rc<FakeRunner>,
     ledger: Rc<InMemoryLedger>,
+    ledger_service: Rc<LedgerService>,
+    db: Rc<InMemoryStore>,
     clock: Rc<FixedClock>,
     session: Session,
 }
@@ -27,16 +30,17 @@ fn fixture() -> Fixture {
     SessionRepository::insert(&*db, &session).unwrap();
     let runner = Rc::new(FakeRunner::default());
     let clock = Rc::new(FixedClock::new(10_000));
-    let jobs = JobService::new(db.clone(), db, runner.clone(), clock.clone());
+    let jobs = JobService::new(db.clone(), db.clone(), runner.clone(), clock.clone());
     let store = Rc::new(InMemoryMissions::default());
     let linter = Rc::new(FakeLinter::default());
     let gates = Rc::new(FakeJobGates::default());
     let ledger = Rc::new(InMemoryLedger::default());
+    let ledger_service = Rc::new(LedgerService::new(ledger.clone(), clock.clone()));
     let svc = MissionService::new(store.clone(), clock.clone())
         .unwrap()
         .with_linter(linter.clone())
         .with_gates(gates.clone())
-        .with_ledger(Rc::new(LedgerService::new(ledger.clone(), clock.clone())));
+        .with_ledger(ledger_service.clone());
     Fixture {
         svc,
         jobs,
@@ -45,6 +49,8 @@ fn fixture() -> Fixture {
         gates,
         runner,
         ledger,
+        ledger_service,
+        db,
         clock,
         session,
     }
@@ -425,5 +431,129 @@ fn missions_reload_from_the_store_in_order() {
     assert!(
         f.svc.create(Contract::default(), "/r", None).is_err(),
         "a goal is needed"
+    );
+}
+
+/// A fixture whose missions are sealed by an evidence service on the same
+/// ledger; `sealed` says whether the repository can be read.
+fn evidenced(f: &mut Fixture, sealed: bool) -> Rc<crate::evidence::testing::InMemoryEvidence> {
+    use crate::evidence::testing::{FakeVcs, InMemoryEvidence};
+    let bundles = Rc::new(InMemoryEvidence::default());
+    let vcs = Rc::new(FakeVcs::at("cafe0000"));
+    if !sealed {
+        *vcs.facts.borrow_mut() = None;
+    }
+    let evidence = Rc::new(EvidenceService::new(
+        bundles.clone(),
+        f.ledger_service.clone(),
+        f.db.clone(),
+        vcs,
+        f.clock.clone(),
+    ));
+    let svc = std::mem::replace(
+        &mut f.svc,
+        MissionService::new(f.store.clone(), f.clock.clone()).unwrap(),
+    );
+    f.svc = svc.with_evidence(evidence);
+    bundles
+}
+
+/// Records a passing stop of `job` on the ledger, as the gate would.
+fn pass_on_ledger(f: &Fixture, job: JobId) {
+    use swarmux_domain::gate::{CheckRun, GateFindings, GateOrigin};
+    let run = CheckRun {
+        name: "cargo test".into(),
+        command: "cargo test".into(),
+        exit: Some(0),
+        timed_out: false,
+        spawn_error: None,
+        duration_ms: 10,
+        output: String::new(),
+        flaky: false,
+    };
+    let record = crate::gate::GateRecord {
+        job: Some(job),
+        session: String::new(),
+        event: Some(swarmux_domain::HookEvent::Stop),
+        root: "/repo".into(),
+        origin: GateOrigin::File,
+        outcome: GateOutcome::Pass,
+        blocks: 0,
+        max_blocks: 3,
+        findings: GateFindings {
+            runs: vec![run],
+            ..GateFindings::default()
+        },
+        digest: String::new(),
+        problem: None,
+    };
+    f.ledger_service
+        .record_gate(&record, Some(f.session.id), f.clock.now())
+        .unwrap();
+}
+
+#[test]
+fn a_delivered_mission_has_a_bundle() {
+    let mut f = fixture();
+    let bundles = evidenced(&mut f, true);
+    let slug = f.create(contract(&["cargo test"], &["tests/**"]));
+    let job = f.svc.launch(&slug, &mut f.jobs).unwrap();
+    f.pump();
+    f.finish(0, 0.4, 0);
+    pass_on_ledger(&f, job);
+    f.pump_with(job, GateOutcome::Pass, f.clock.now());
+    assert_eq!(f.state(&slug), MissionState::Delivered);
+    let stored = bundles.get(&slug).unwrap().expect("a bundle");
+    assert_eq!(stored.bundle.job, job.0);
+    assert_eq!(stored.bundle.head_sha, "cafe0000");
+    assert_eq!(stored.bundle.checks[0].name, "cargo test");
+}
+
+#[test]
+fn without_a_bundle_a_mission_is_not_delivered() {
+    let mut f = fixture();
+    let bundles = evidenced(&mut f, false);
+    let slug = f.create(contract(&["cargo test"], &["tests/**"]));
+    let job = f.svc.launch(&slug, &mut f.jobs).unwrap();
+    f.pump();
+    f.finish(0, 0.4, 0);
+    pass_on_ledger(&f, job);
+    f.pump_with(job, GateOutcome::Pass, f.clock.now());
+    let m = f.svc.get(&slug).unwrap();
+    assert_eq!(m.state, MissionState::Escalated);
+    assert!(
+        m.note.as_deref().unwrap().contains("no evidence bundle"),
+        "{:?}",
+        m.note
+    );
+    assert!(bundles.list().unwrap().is_empty());
+}
+
+#[test]
+fn missions_delivered_before_bundles_existed_get_one() {
+    let mut f = fixture();
+    let slug = f.create(contract(&["cargo test"], &["tests/**"]));
+    let job = f.svc.launch(&slug, &mut f.jobs).unwrap();
+    f.pump();
+    f.finish(0, 0.4, 0);
+    pass_on_ledger(&f, job);
+    f.pump_with(job, GateOutcome::Pass, f.clock.now());
+    assert_eq!(f.state(&slug), MissionState::Delivered);
+    let bundles = Rc::new(crate::evidence::testing::InMemoryEvidence::default());
+    // The new service starts from the stored missions, like a restart.
+    f.svc = MissionService::new(f.store.clone(), f.clock.clone())
+        .unwrap()
+        .with_evidence(Rc::new(EvidenceService::new(
+            bundles.clone(),
+            f.ledger_service.clone(),
+            f.db.clone(),
+            Rc::new(crate::evidence::testing::FakeVcs::at("beef0000")),
+            f.clock.clone(),
+        )));
+    let report = f.pump();
+    assert!(report.errors.is_empty(), "{:?}", report.errors);
+    assert_eq!(
+        bundles.get(&slug).unwrap().unwrap().bundle.head_sha,
+        "beef0000"
     );
 }

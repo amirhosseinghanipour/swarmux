@@ -190,6 +190,40 @@ impl LedgerService {
         self.append(now, LedgerKind::Mission, SWARMUX, m.job, m.session, payload)
     }
 
+    /// A mission's evidence bundle was sealed; returns the entry's `seq`.
+    pub fn record_evidence(
+        &self,
+        slug: &str,
+        job: Option<JobId>,
+        digest: &str,
+        head_sha: &str,
+        to_seq: u64,
+        now: Millis,
+    ) -> AppResult<u64> {
+        let payload = Payload::new()
+            .str("mission", slug)
+            .str("digest", digest)
+            .str("head_sha", head_sha)
+            .int("to_seq", i64::try_from(to_seq).unwrap_or(i64::MAX));
+        self.append_entry(now, LedgerKind::Evidence, SWARMUX, job, None, payload)
+    }
+
+    /// An outcome label attached to a delivered mission.
+    pub fn record_label(
+        &self,
+        slug: &str,
+        job: Option<JobId>,
+        label: &swarmux_domain::evidence::Label,
+        now: Millis,
+    ) -> AppResult<()> {
+        let payload = Payload::new()
+            .str("mission", slug)
+            .str("label", label.kind.as_str())
+            .int("pr", i64::try_from(label.pr).unwrap_or(i64::MAX))
+            .int("at", label.at);
+        self.append(now, LedgerKind::Label, SWARMUX, job, None, payload)
+    }
+
     /// A checkpoint; returns the entry's `seq`.
     pub fn record_checkpoint(
         &self,
