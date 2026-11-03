@@ -281,6 +281,8 @@ fn stop(
                 .collect(),
             protected_changed: 0,
             evidence_gaps: 0,
+            hidden: None,
+            tampering: 0,
             digest: String::new(),
             problem: None,
             at,

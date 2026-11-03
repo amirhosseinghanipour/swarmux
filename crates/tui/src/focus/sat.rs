@@ -196,6 +196,12 @@ fn confidence(s: &Signals) -> (Confidence, Vec<String>) {
         if g.protected_changed > 0 {
             low.push(format!("{} protected file(s) changed", g.protected_changed));
         }
+        if g.tampering > 0 {
+            low.push(format!("{} test file(s) tampered with", g.tampering));
+        }
+        if let Some(h) = g.hidden.filter(|h| !h.clean()) {
+            low.push(format!("{} of {} hidden checks failed", h.failed(), h.ran));
+        }
         if g.evidence_gaps > 0 {
             mid.push("tests claimed but not seen running".to_string());
         }
@@ -257,6 +263,8 @@ mod tests {
             checks: vec![("tests".into(), outcome == GateOutcome::Pass, false)],
             protected_changed: 0,
             evidence_gaps: 0,
+            hidden: None,
+            tampering: 0,
             digest: String::new(),
             problem: None,
             at: 0,

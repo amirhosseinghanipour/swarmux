@@ -421,6 +421,14 @@ pub(crate) fn gate_chips(g: &GateState) -> Vec<Chip> {
     if g.evidence_gaps > 0 {
         out.push(chip("evidence missing".into(), Tone::Warn));
     }
+    if g.tampering > 0 {
+        out.push(chip("tests tampered".into(), Tone::Bad));
+    }
+    // Hidden checks are counted, never named.
+    if let Some(h) = g.hidden.filter(|h| h.ran > 0) {
+        let tone = if h.clean() { Tone::Good } else { Tone::Bad };
+        out.push(chip(format!("hidden {}", h.text()), tone));
+    }
     out
 }
 
@@ -463,6 +471,7 @@ pub(crate) fn review_chip(review: &ReviewState) -> Chip {
         ),
         ReviewState::Done { .. } => chip("review pass".into(), Tone::Good),
         ReviewState::Failed { .. } => chip("review failed".into(), Tone::Bad),
+        ReviewState::Skipped { .. } => chip("review skipped".into(), Tone::Info),
     }
 }
 
@@ -770,6 +779,8 @@ mod tests {
             ],
             protected_changed: 1,
             evidence_gaps: 1,
+            hidden: None,
+            tampering: 0,
             digest: String::new(),
             problem: None,
             at: 0,
@@ -810,6 +821,47 @@ mod tests {
                 text: "cargo test".into(),
                 tone: Tone::Good
             }]
+        );
+    }
+
+    #[test]
+    fn hidden_checks_show_as_a_count_and_tampering_as_a_chip() {
+        let gate = GateState {
+            outcome: GateOutcome::Block,
+            blocks: 1,
+            max_blocks: 3,
+            checks: vec![("cargo test".into(), true, false)],
+            protected_changed: 0,
+            evidence_gaps: 0,
+            hidden: Some(swarmux_domain::verifier::HiddenTally { ran: 3, passed: 2 }),
+            tampering: 1,
+            digest: String::new(),
+            problem: None,
+            at: 0,
+        };
+        let chips: Vec<(String, Tone)> = gate_chips(&gate)
+            .into_iter()
+            .map(|c| (c.text, c.tone))
+            .collect();
+        assert_eq!(
+            chips,
+            [
+                ("gate 1/3".to_string(), Tone::Warn),
+                ("cargo test".to_string(), Tone::Good),
+                ("tests tampered".to_string(), Tone::Bad),
+                ("hidden 2/3".to_string(), Tone::Bad),
+            ]
+        );
+        let passed = GateState {
+            hidden: Some(swarmux_domain::verifier::HiddenTally { ran: 3, passed: 3 }),
+            tampering: 0,
+            outcome: GateOutcome::Pass,
+            ..gate
+        };
+        assert!(
+            gate_chips(&passed)
+                .iter()
+                .any(|c| c.text == "hidden 3/3" && c.tone == Tone::Good)
         );
     }
 }

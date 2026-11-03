@@ -190,6 +190,7 @@ impl Panel for Reviewer {
                 format!("review failed: {}", fit(error, 60)),
                 Style::new().fg(t.error),
             ),
+            Some(ReviewState::Skipped { why }) => dim(t, format!("skipped · {}", fit(why, 60))),
         });
         Line::from(spans)
     }
@@ -201,6 +202,7 @@ fn state_name(r: &ReviewState) -> &'static str {
         ReviewState::Running { .. } => "running",
         ReviewState::Done { .. } => "done",
         ReviewState::Failed { .. } => "failed",
+        ReviewState::Skipped { .. } => "skipped",
     }
 }
 
@@ -229,6 +231,12 @@ fn verdict_lines(
     match review {
         None => vec![Line::from(dim(t, "  not requested"))],
         Some(ReviewState::Requested) => vec![Line::from(dim(t, "  waits for the job to finish"))],
+        Some(ReviewState::Skipped { why }) => {
+            vec![Line::from(dim(
+                t,
+                format!("  skipped: {}", fit(why, w.saturating_sub(11))),
+            ))]
+        }
         Some(ReviewState::Running { .. }) => {
             let spin = match view.review.map(|r| r.status) {
                 Some(JobStatus::Running) => format!("[{}]", vm.spin()),

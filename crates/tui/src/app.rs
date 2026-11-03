@@ -1656,7 +1656,7 @@ pub(crate) mod tests_support {
     };
     use swarmux_application::{
         Governor, GovernorSettings, GuardService, HistoryService, Jev, JobService, MissionService,
-        PromptService, ReviewSettings, RoutingService, SessionService, SharedPolicy,
+        PromptService, ReviewSettings, ReviewWhen, RoutingService, SessionService, SharedPolicy,
         TelemetryService, TelemetrySettings,
     };
     use swarmux_domain::{GuardPolicy, PromptDraft};
@@ -1717,7 +1717,14 @@ pub(crate) mod tests_support {
         let jobs = JobService::new(store.clone(), store.clone(), runner.clone(), clock.clone())
             .with_governor(governor)
             .with_monitor(monitor.clone())
-            .with_review(workspace.clone(), &ReviewSettings::default())
+            .with_review(
+                workspace.clone(),
+                &ReviewSettings {
+                    // The fixtures exercise the reviewer on small diffs.
+                    when: ReviewWhen::Always,
+                    ..ReviewSettings::default()
+                },
+            )
             .with_agent_catalog(catalog.clone());
         let prompts = PromptService::new(store.clone(), store.clone(), workspace, clock.clone());
         let history = HistoryService::new(store.clone());

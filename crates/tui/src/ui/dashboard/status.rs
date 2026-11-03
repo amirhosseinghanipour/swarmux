@@ -36,6 +36,7 @@ pub fn line(app: &App, view: &View, t: &Theme) -> Line<'static> {
         Some(ReviewState::Done { review, .. }) if review.concerns.is_empty() => "passed".into(),
         Some(ReviewState::Done { review, .. }) => format!("{} concerns", review.concerns.len()),
         Some(ReviewState::Failed { .. }) => "failed".into(),
+        Some(ReviewState::Skipped { .. }) => "skipped".into(),
     };
     let decisions = format!("{} decisions", thousands(app.guard.stats().total()));
     let mut spans = vec![Span::styled(" |", Style::new().fg(t.label))];

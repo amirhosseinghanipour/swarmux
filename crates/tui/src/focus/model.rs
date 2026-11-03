@@ -376,6 +376,9 @@ fn review_column(
             col.headline = format!("no verdict: {error}");
             col.cost_usd = Some(*cost_usd);
         }
+        Some(ReviewState::Skipped { why }) => {
+            col.headline = format!("skipped: {why}");
+        }
     }
     Some(col)
 }

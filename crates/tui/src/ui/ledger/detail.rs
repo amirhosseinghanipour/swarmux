@@ -348,5 +348,11 @@ fn review_lines(review: &ReviewState, t: &Theme) -> Vec<Line<'static>> {
             Span::styled(format!("review failed: {error}"), Style::new().fg(t.error)),
             cost(*cost_usd),
         ])],
+        ReviewState::Skipped { why } => {
+            vec![Line::styled(
+                format!("skipped: {why}"),
+                Style::new().fg(t.muted),
+            )]
+        }
     }
 }

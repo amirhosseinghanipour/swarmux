@@ -368,6 +368,7 @@ fn verdict(job: &JobProgress, t: &Theme) -> Line<'static> {
             format!("review failed: {error}"),
             Style::new().fg(t.error),
         )),
+        Some(ReviewState::Skipped { why }) => Line::from(dim(t, format!("review skipped · {why}"))),
     }
 }
 

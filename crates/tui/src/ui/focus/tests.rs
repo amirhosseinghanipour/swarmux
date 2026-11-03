@@ -34,6 +34,8 @@ fn gate(t: &mut TestApp, outcome: GateOutcome) {
             ],
             protected_changed: 0,
             evidence_gaps: usize::from(outcome != GateOutcome::Pass),
+            hidden: None,
+            tampering: 0,
             digest: String::new(),
             problem: None,
             at: 0,

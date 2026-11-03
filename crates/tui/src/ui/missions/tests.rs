@@ -86,6 +86,8 @@ fn gate(t: &mut TestApp, job: JobId, outcome: GateOutcome, checks: &[(&str, bool
                 .collect(),
             protected_changed: 0,
             evidence_gaps: 0,
+            hidden: None,
+            tampering: 0,
             digest: String::new(),
             problem: None,
             at,

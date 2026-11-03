@@ -964,6 +964,7 @@ fn gate_record(
             }],
             pins: Vec::new(),
             gaps: vec!["you said \"done\", but no test run succeeded in this session".into()],
+            ..GateFindings::default()
         },
         digest: "swarmux gate: still failing after 3 blocks.\n✗ cargo test: `cargo test` exited 101 after 4.0 s".into(),
         problem: None,

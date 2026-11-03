@@ -139,6 +139,7 @@ pub fn command(frame: &mut Frame, area: Rect, view: &View, t: &Theme) {
                 Some(ReviewState::Requested | ReviewState::Running { .. }) => "reviewer on call",
                 Some(ReviewState::Done { .. }) => "reviewer done",
                 Some(ReviewState::Failed { .. }) => "review failed",
+                Some(ReviewState::Skipped { .. }) => "review skipped",
             };
             format!("{} subagents mounted · {reviewer} ", job.subagents.len())
         }
