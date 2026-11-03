@@ -408,7 +408,8 @@ layout = "btop"         # command, btop, minimal or one of [[layouts]]
 icons = "unicode"       # "unicode" (default), "ascii", "nerd", or "auto" (see Themes)
 gaps = 1                # blank cells between panels, 0-4
 fps = 10                # frames per second, 1-30
-low_power = false       # true: 4 fps, no easing or pulses
+low_power = false       # true: 4 fps, no easing or pulses (same as motion = "reduced")
+motion = "auto"         # "auto", "full", "reduced" or "off" (see Showcase)
 splash = true           # the start-up screen (or run with --no-splash)
 
 [[layouts]]             # your own: rows top to bottom
@@ -478,6 +479,45 @@ swarmux theme export wal --format kitty > wal.conf # imports can be exported too
 
 Colours are truecolor when `COLORTERM` is `truecolor` or `24bit` (or inside
 Windows Terminal) and fall back to the 256-colour palette otherwise.
+
+## Showcase
+
+**`swarmux fetch`** prints a neofetch-style card: the logo in your theme's
+gradient, version, theme, sessions, agents running, today's spend and burn,
+the 5-hour and 7-day limits, missions delivered, the ledger head, the Claude
+Code version and OS, a stacked bar of spend by model, and the terminal's 16
+colours. It reads only and creates nothing.
+
+```
+swarmux fetch                      # the theme from your config
+swarmux fetch --theme nocturne     # any theme, or wal / base16:<file> / matugen:<file>
+swarmux fetch --color never        # also: NO_COLOR=1, or piping the output
+```
+
+Colour is truecolor, 256 or 16 colours by what the terminal says, and off
+under `NO_COLOR` or when the output is not a terminal (`--color always` forces
+it, except against `NO_COLOR`).
+
+Two screens for the screenshot, from Mission control, Focus or Sessions:
+
+- **`z` Constellation.** Agents orbit a core on a braille canvas: the orbit's
+  radius is the agent's context fill, the star's brightness its tokens per
+  second, a comet tail follows tool calls, a star that needs an approval
+  flares, and a finished agent goes nova and settles as a dim check.
+- **`S` Spectrum.** Cava-style bars per agent: prompt tokens per minute rise
+  above the line, output tokens hang below it, caps hold the recent peaks.
+
+`z` / `S` switch between them, `esc` leaves, `t` still changes the theme, and
+`bg = "none"` shows your wallpaper through both. When a P1 or P2 item reaches
+the inbox the animation stops, everything but the star that needs you dims,
+and a one-line banner says what is waiting; `y` / `n` still answer a held
+call, `1` goes to Mission control.
+
+`motion` sets how much moves. `full` runs every effect, `reduced` keeps data
+updates and spinners at 4 fps and holds the showcase still, `off` keeps only
+data updates. The default `auto` is `full` and drops to `reduced` on battery,
+over SSH (`SSH_CONNECTION` or `SSH_TTY`) and when drawing a frame takes more
+than 8 ms; an explicit `full` is never lowered.
 
 ## Review step
 
