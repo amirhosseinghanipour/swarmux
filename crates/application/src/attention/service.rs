@@ -404,6 +404,19 @@ impl AttentionService {
         self.save_tally(&row);
     }
 
+    /// The open ask with this request id, shown or not.
+    pub fn find_request(&self, request: u64) -> Option<&AttentionItem> {
+        self.open.iter().find(|i| i.request == Some(request))
+    }
+
+    /// [`answered`](Self::answered) for the open ask with this request id.
+    pub fn answered_request(&mut self, request: u64, approved: bool) {
+        let item = self.open.iter().find(|i| i.request == Some(request));
+        if let Some(item) = item.cloned() {
+            self.answered(&item, approved);
+        }
+    }
+
     fn save_tally(&mut self, row: &TallyRow) {
         if let Some(store) = &self.store
             && let Err(e) = store.save_tally(row)
