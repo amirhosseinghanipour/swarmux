@@ -11,6 +11,7 @@ pub mod history;
 pub mod input;
 pub mod look;
 pub mod mission;
+pub mod missions;
 pub mod prompts;
 pub mod queue;
 pub mod sessions;
@@ -74,6 +75,7 @@ fn draw_screens(frame: &mut Frame, app: &App, t: &Theme) {
 
     match app.screen {
         Screen::Mission => mission::render(frame, body, app),
+        Screen::Missions => missions::render(frame, body, app),
         Screen::Dashboard if app.dashboard.classic => dashboard::render(frame, body, app),
         Screen::Dashboard => focus::render(frame, body, app),
         Screen::Prompts => prompts::render(frame, body, app),
@@ -212,8 +214,8 @@ fn stats_line(t: &Theme, s: QueueStats, approvals: usize, routing: usize) -> Lin
 /// The screens as chips, the active one filled; theme and layout on the right.
 fn draw_tabs(frame: &mut Frame, area: Rect, app: &App, t: &Theme) {
     let mut spans = Vec::new();
-    for (i, s) in Screen::ALL.iter().enumerate() {
-        let label = format!(" {} {} ", i + 1, s.title());
+    for s in Screen::ALL.iter() {
+        let label = format!(" {} {} ", s.key(), s.title());
         spans.push(if *s == app.screen {
             Span::styled(
                 label,
@@ -320,9 +322,15 @@ pub(crate) fn hints(app: &App) -> &'static str {
     if app.prompts.form.is_some() {
         return " tab next field · ctrl+s save · esc cancel";
     }
+    if app.screen == Screen::Missions && app.missions_screen.composer.is_some() {
+        return " tab next field · ctrl+s save & lint · ctrl+f protect oracles · ctrl+r save & run · esc close";
+    }
     match app.screen {
         Screen::Mission => {
             " ↑↓ select · tab inbox/wall · ⏎ open · y/n/a answer · p/P prompt · x dismiss · q quit"
+        }
+        Screen::Missions => {
+            " n new · e edit · l lint · f protect oracles · r run · ⏎ focus · ↑↓ select · q quit"
         }
         Screen::Dashboard if !app.dashboard.classic => {
             " ↑↓ scroll · d diff · t open session · p prompt · v review · D classic · q quit"
@@ -333,9 +341,9 @@ pub(crate) fn hints(app: &App) -> &'static str {
         Screen::Queue => " c cancel · r retry · +/- priority · enter view · ↑↓ select · q quit",
         Screen::History => " / search · r re-run · f fork · enter view · ↑↓ select · q quit",
         Screen::Prompts => {
-            " n new · e edit · x delete · d dispatch · D route · ↑↓ select · 1-6 screens · q quit"
+            " n new · e edit · x delete · d dispatch · D route · ↑↓ select · 0-6 screens · q quit"
         }
-        Screen::Sessions => " n new session · l lean on/off · ↑↓ select · 1-6 screens · q quit",
+        Screen::Sessions => " n new session · l lean on/off · ↑↓ select · 0-6 screens · q quit",
     }
 }
 

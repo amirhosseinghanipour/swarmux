@@ -18,14 +18,14 @@ use swarmux_application::ledger::{LedgerService, LedgeredDecisions, LedgeredJobs
 use swarmux_application::ports::Clock;
 use swarmux_application::{
     CombinedStatusline, GateKeeper, GateService, GuardService, HandoffBoard, HistoryService,
-    HookBus, Jev, JobService, PromptService, RoutingService, SessionService, SharedPolicy,
-    StatuslineFeed, TruthBoard,
+    HookBus, Jev, JobService, MissionService, PromptService, RoutingService, SessionService,
+    SharedPolicy, StatuslineFeed, TruthBoard,
 };
 use swarmux_infrastructure::hook::{self, HookServer, Responders};
 use swarmux_infrastructure::{
-    ClaudeCli, ConfigRuleWriter, FsAgentCatalog, FsGateSource, GitCli, GuardHook, HaikuRouter,
-    Paths, ProcessChecker, SqliteLedger, SqliteStore, SysinfoMonitor, SystemClock, WindowsTerminal,
-    load_settings,
+    ClaudeCli, ConfigRuleWriter, FsAgentCatalog, FsGateSource, GitCli, GuardHook, HaikuLinter,
+    HaikuRouter, MissionFiles, Paths, ProcessChecker, SqliteLedger, SqliteStore, SysinfoMonitor,
+    SystemClock, WindowsTerminal, load_settings,
 };
 use swarmux_tui::{App, Launch};
 
@@ -283,6 +283,14 @@ fn run_tui(no_splash: bool) -> anyhow::Result<()> {
         server.clone(),
         Rc::new(hook::SpoolFeed::new(hook::spool_dir(&paths.data_dir))),
     ]));
+    // Missions: contracts written into their repositories, linted by Haiku
+    // (`--bare` only works with an API key), judged by the gate.
+    let linter = HaikuLinter::new(doctor::claude_bin(), rt.handle().clone())
+        .with_bare(std::env::var_os("ANTHROPIC_API_KEY").is_some());
+    let missions = MissionService::new(Rc::new(MissionFiles::new(store.clone())), clock.clone())?
+        .with_linter(Rc::new(linter))
+        .with_gates(Rc::new(keeper.clone()))
+        .with_ledger(ledger.clone());
     let hook_bus = HookBus::new(server.clone(), ledger, store.clone(), clock.clone())
         .with_checkpoints(checkpoints.clone())
         .with_truth(truth.clone());
@@ -339,6 +347,7 @@ fn run_tui(no_splash: bool) -> anyhow::Result<()> {
     .with_clock(Rc::new(SystemClock))
     .with_hook_bus(hook_bus)
     .with_gate(gate)
+    .with_missions(missions)
     .with_checkpoints(checkpoints)
     .with_terminal(Rc::new(WindowsTerminal::new(doctor::claude_bin())))
     .with_telemetry_feed(telemetry, &settings.telemetry)

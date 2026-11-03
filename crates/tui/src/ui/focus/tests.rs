@@ -146,7 +146,7 @@ fn enter_on_a_card_lands_on_its_job_with_the_same_sigil_and_hue() {
     let wall = render_buffer(&t.app, 160, 48);
     let card = find_sigil(&wall, 'A').expect("the api card has a sigil");
     // ... and in the Focus header, once the arrival highlight has settled.
-    t.keys([KeyCode::Char('2')]);
+    t.keys([KeyCode::Char('0')]);
     t.app.frame += 100;
     let focus = render_buffer(&t.app, 160, 48);
     let head = find_sigil(&focus, 'A').expect("the header has the sigil");
@@ -254,7 +254,7 @@ fn you_were_here_marks_what_happened_while_away() {
         emit_text(&t, &format!("progress note {i}"));
     }
     t.app.update();
-    t.keys([KeyCode::Char('2')]);
+    t.keys([KeyCode::Char('0')]);
     t.app.update();
     let out = render_to_string(&t.app, 160, 48);
     assert!(out.contains("you were here"), "{out}");

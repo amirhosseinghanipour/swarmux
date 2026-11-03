@@ -11,15 +11,18 @@ use std::rc::Rc;
 use swarmux_application::ports::Clock;
 use swarmux_application::{
     AppError, AppResult, CheckpointService, GateService, GuardService, HistoryService, HookBus,
-    JobService, PendingApproval, PromptService, QueueEntry, QueueStats, RoutingService,
-    SessionService, SessionTerminal, TelemetryService, TelemetrySettings, UiSettings,
+    JobService, MissionService, PendingApproval, PromptService, QueueEntry, QueueStats,
+    RoutingService, SessionService, SessionTerminal, TelemetryService, TelemetrySettings,
+    UiSettings,
 };
+use swarmux_domain::mission::Contract;
 use swarmux_domain::{AttentionKind, JobId, JobProgress, Millis, PromptId, Session, SessionId};
 
 use crate::dashboard::DashboardState;
 use crate::focus::{Checkpoints, FocusState};
 use crate::history::{HistoryAction, HistoryScreen};
 use crate::mission::{Cadence, MissionState, Pane, Tile, wall_tiles};
+use crate::missions::{Composer, ComposerAction, MissionsScreen};
 use crate::prompts::{FormAction, PendingDispatch, PromptForm, PromptsScreen};
 use crate::queue::{QueueAction, QueueScreen};
 use crate::routing::RoutePayload;
@@ -31,39 +34,61 @@ use crate::ui::input::{Input, InputAction};
 use crate::ui::look::Look;
 use crate::ui::splash::SplashInfo;
 
-/// The top-level screens, in key order (`1` to `6`).
+/// The top-level screens, in tab order: `1` to `6`, then Focus on `0`
+/// (and `⏎` from any card or row).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Screen {
     /// Mission control: the home screen.
     #[default]
     Mission,
-    /// The followed job in detail (the dashboard's panels).
-    Dashboard,
+    /// Outcomes in flight: mission cards and the composer.
+    Missions,
     Prompts,
     Queue,
     History,
     Sessions,
+    /// The followed job in detail (the dashboard's panels).
+    Dashboard,
 }
 
 impl Screen {
-    pub const ALL: [Screen; 6] = [
+    pub const ALL: [Screen; 7] = [
         Screen::Mission,
-        Screen::Dashboard,
+        Screen::Missions,
         Screen::Prompts,
         Screen::Queue,
         Screen::History,
         Screen::Sessions,
+        Screen::Dashboard,
     ];
 
     pub fn title(self) -> &'static str {
         match self {
             Screen::Mission => "mission",
+            Screen::Missions => "missions",
             Screen::Dashboard => "focus",
             Screen::Prompts => "prompts",
             Screen::Queue => "queue",
             Screen::History => "history",
             Screen::Sessions => "sessions",
         }
+    }
+
+    /// The number key that shows it.
+    pub fn key(self) -> char {
+        match self {
+            Screen::Mission => '1',
+            Screen::Missions => '2',
+            Screen::Prompts => '3',
+            Screen::Queue => '4',
+            Screen::History => '5',
+            Screen::Sessions => '6',
+            Screen::Dashboard => '0',
+        }
+    }
+
+    pub fn by_key(c: char) -> Option<Screen> {
+        Screen::ALL.into_iter().find(|s| s.key() == c)
     }
 }
 
@@ -110,6 +135,10 @@ pub struct App {
     pub focus_state: FocusState,
     /// Mission control's inbox, change log and feeds.
     pub mission: MissionState,
+    /// The Missions screen's selection and composer.
+    pub missions_screen: MissionsScreen,
+    /// Writes, lints and follows missions.
+    missions: Option<MissionService>,
     clock: Option<Rc<dyn Clock>>,
     pub(crate) session_service: SessionService,
     pub(crate) jobs: JobService,
@@ -190,6 +219,8 @@ impl App {
             dashboard: DashboardState::default(),
             focus_state: FocusState::default(),
             mission: MissionState::default(),
+            missions_screen: MissionsScreen::default(),
+            missions: None,
             clock: None,
             session_service,
             jobs,
@@ -259,6 +290,28 @@ impl App {
     pub fn with_terminal(mut self, terminal: Rc<dyn SessionTerminal>) -> App {
         self.terminal = Some(terminal);
         self
+    }
+
+    /// Lets the Missions screen write, lint, run and follow missions.
+    pub fn with_missions(mut self, missions: MissionService) -> App {
+        self.missions = Some(missions);
+        self
+    }
+
+    /// Every mission, oldest first.
+    pub fn missions(&self) -> &[swarmux_domain::mission::Mission] {
+        self.missions.as_ref().map_or(&[], MissionService::missions)
+    }
+
+    /// The mission service, for tests that set missions up directly.
+    #[cfg(test)]
+    pub(crate) fn mission_service(&mut self) -> &mut MissionService {
+        self.missions.as_mut().expect("the test app has missions")
+    }
+
+    /// A lint is out for the mission.
+    pub fn mission_linting(&self, slug: &str) -> bool {
+        self.missions.as_ref().is_some_and(|m| m.linting(slug))
     }
 
     /// Lets Focus show the job's branch, worktree and checkpoints.
@@ -420,6 +473,9 @@ impl App {
             self.refresh_history();
         }
         self.refresh_mission();
+        if let Some(e) = self.pump_missions().into_iter().last() {
+            self.error = Some(e.to_string());
+        }
         self.refresh_checkpoints();
         let on_focus = (self.screen == Screen::Dashboard && !self.dashboard.classic)
             .then(|| self.current_job().map(|j| (j.job_id, j.log.len())))
@@ -537,6 +593,16 @@ impl App {
             }
             return;
         }
+        if self.screen == Screen::Missions
+            && let Some(composer) = &mut self.missions_screen.composer
+        {
+            self.error = None;
+            self.notice = None;
+            let action = composer.handle(key);
+            let result = self.composer_action(action);
+            self.show(result);
+            return;
+        }
         if let Some(form) = &mut self.prompts.form {
             self.error = None;
             match form.handle(key) {
@@ -569,8 +635,8 @@ impl App {
         let confirming_delete = std::mem::take(&mut self.prompts.confirm_delete);
         match key.code {
             KeyCode::Char('q') => self.quit = true,
-            KeyCode::Char(c @ '1'..='6') => {
-                self.screen = Screen::ALL[(c as u8 - b'1') as usize];
+            KeyCode::Char(c) if Screen::by_key(c).is_some() => {
+                self.screen = Screen::by_key(c).unwrap_or_default();
                 if self.screen == Screen::History {
                     self.refresh_history();
                 }
@@ -643,6 +709,10 @@ impl App {
                 self.cycle_focus(key.code == KeyCode::Tab);
             }
             KeyCode::Esc if self.focus.is_some() => self.focus = None,
+            code if self.screen == Screen::Missions => {
+                let result = self.missions_key(code);
+                self.show(result);
+            }
             code if self.screen == Screen::Queue => {
                 let result = self.queue_key(code);
                 self.show(result);
@@ -700,6 +770,190 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    /// Takes the linter's replies, follows the missions' jobs and stops
+    /// the jobs of missions out of budget.
+    fn pump_missions(&mut self) -> Vec<AppError> {
+        let Some(service) = &mut self.missions else {
+            return Vec::new();
+        };
+        let report = service.pump(&self.mission.facts, &self.mission.gates);
+        if let Some(composer) = &mut self.missions_screen.composer
+            && let Some(m) = composer.slug.as_deref().and_then(|s| service.get(s))
+        {
+            composer.sync(m);
+        }
+        let mut errors = report.errors;
+        for job in report.cancel {
+            errors.extend(self.jobs.cancel(job).err());
+        }
+        errors
+    }
+
+    /// The mission of the selected card.
+    fn selected_mission(&self) -> Option<&swarmux_domain::mission::Mission> {
+        self.missions().get(self.missions_screen.selected)
+    }
+
+    fn missions_key(&mut self, code: KeyCode) -> AppResult<()> {
+        let count = self.missions().len();
+        let slug = self.selected_mission().map(|m| m.slug.clone());
+        match code {
+            KeyCode::Up | KeyCode::Char('k') => self.missions_screen.move_by(-1, count),
+            KeyCode::Down | KeyCode::Char('j') => self.missions_screen.move_by(1, count),
+            KeyCode::Char('n') => {
+                if self.missions.is_none() {
+                    self.notice = Some("missions are not set up in this run".into());
+                } else if self.sessions.is_empty() {
+                    self.error = Some("create a session first: press 6 then n".into());
+                } else {
+                    self.missions_screen.composer = Some(Composer::blank());
+                }
+            }
+            KeyCode::Char('e') => {
+                if let Some(m) = self.selected_mission() {
+                    if m.state.in_flight() {
+                        self.notice =
+                            Some(format!("{} is {}: it can't change now", m.slug, m.state));
+                    } else {
+                        self.missions_screen.composer = Some(Composer::edit(m));
+                    }
+                }
+            }
+            KeyCode::Char('l') => {
+                if let (Some(service), Some(slug)) = (&mut self.missions, slug) {
+                    service.lint(&slug)?;
+                }
+            }
+            KeyCode::Char('f') => {
+                if let Some(slug) = slug {
+                    self.fix_mission(&slug)?;
+                }
+            }
+            KeyCode::Char('r') => {
+                if let Some(slug) = slug {
+                    self.launch_mission(&slug)?;
+                }
+            }
+            KeyCode::Enter => match self.selected_mission().and_then(|m| m.job) {
+                Some(job) => self.view(job)?,
+                None => self.notice = Some("that mission has not run yet: r runs it".into()),
+            },
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn composer_action(&mut self, action: ComposerAction) -> AppResult<()> {
+        match action {
+            ComposerAction::None => Ok(()),
+            ComposerAction::Cancel => {
+                self.missions_screen.composer = None;
+                Ok(())
+            }
+            ComposerAction::Save => self.save_composer().map(drop),
+            ComposerAction::Fix => {
+                let slug = self.save_composer()?;
+                self.fix_mission(&slug)?;
+                if let (Some(service), Some(composer)) =
+                    (&self.missions, &mut self.missions_screen.composer)
+                    && let Some(m) = service.get(&slug)
+                {
+                    *composer = Composer::edit(m);
+                }
+                Ok(())
+            }
+            ComposerAction::Run => {
+                let slug = self.save_composer()?;
+                self.launch_mission(&slug)?;
+                self.missions_screen.composer = None;
+                Ok(())
+            }
+        }
+    }
+
+    /// Saves what the composer holds: a new mission, a changed one (linted
+    /// again), or only new answers. Returns its slug.
+    fn save_composer(&mut self) -> AppResult<String> {
+        let session = self.selected_session().cloned();
+        let (Some(service), Some(composer)) =
+            (&mut self.missions, &mut self.missions_screen.composer)
+        else {
+            return Err(AppError::Mission("nothing to save".into()));
+        };
+        let current = composer
+            .slug
+            .as_deref()
+            .and_then(|s| service.get(s))
+            .cloned();
+        let asked = current
+            .as_ref()
+            .map(|m| m.contract.clarifications.clone())
+            .unwrap_or_default();
+        let contract = composer.contract(&asked).map_err(AppError::Mission)?;
+        let slug = match current {
+            None => {
+                let session = session.ok_or(AppError::SessionNotFound)?;
+                let root = session.cwd.display().to_string();
+                let slug = service.create(contract, &root, Some(session.id))?;
+                composer.slug = Some(slug.clone());
+                slug
+            }
+            Some(m) => {
+                let unchanged = Contract {
+                    clarifications: Vec::new(),
+                    ..contract.clone()
+                } == Contract {
+                    clarifications: Vec::new(),
+                    ..m.contract.clone()
+                };
+                if unchanged {
+                    for (i, q) in contract.clarifications.iter().enumerate() {
+                        service.answer(&m.slug, i, &q.answer)?;
+                    }
+                } else {
+                    service.edit(&m.slug, contract)?;
+                }
+                m.slug
+            }
+        };
+        if let Some(m) = service.get(&slug) {
+            composer.sync(m);
+        }
+        if let Some(at) = service.missions().iter().position(|m| m.slug == slug) {
+            self.missions_screen.selected = at;
+        }
+        self.notice = Some(format!("{slug} saved and linted"));
+        Ok(slug)
+    }
+
+    fn fix_mission(&mut self, slug: &str) -> AppResult<()> {
+        let Some(service) = &mut self.missions else {
+            return Ok(());
+        };
+        let n = service.fix(slug)?;
+        self.notice = Some(match n {
+            0 => "nothing to protect".to_string(),
+            1 => "protected 1 oracle".to_string(),
+            n => format!("protected {n} oracles"),
+        });
+        Ok(())
+    }
+
+    /// Compiles the mission into a job and follows it.
+    fn launch_mission(&mut self, slug: &str) -> AppResult<()> {
+        let Some(service) = &mut self.missions else {
+            return Ok(());
+        };
+        let job = service.launch(slug, &mut self.jobs)?;
+        self.focus_state.note_human(job, self.now());
+        self.dashboard.follow(job, None);
+        self.refresh_sessions(None);
+        self.notice = Some(format!(
+            "{slug} is out as job #{job}; the gate decides when it is done"
+        ));
+        Ok(())
     }
 
     /// Makes the session of the selected inbox item the one prompts go to.
@@ -1142,13 +1396,14 @@ pub(crate) mod tests_support {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use swarmux_application::ports::PromptRepository;
     use swarmux_application::testing::{
-        FakeAdvisor, FakeAgentCatalog, FakeConsents, FakeDecisionRepo, FakeHookInbox, FakeMonitor,
-        FakeRouter, FakeRuleWriter, FakeRunner, FakeTelemetry, FakeTerminal, FakeWorkspace,
-        FixedClock, InMemoryStore,
+        FakeAdvisor, FakeAgentCatalog, FakeConsents, FakeDecisionRepo, FakeHookInbox, FakeJobGates,
+        FakeLinter, FakeMonitor, FakeRouter, FakeRuleWriter, FakeRunner, FakeTelemetry,
+        FakeTerminal, FakeWorkspace, FixedClock, InMemoryMissions, InMemoryStore,
     };
     use swarmux_application::{
-        GuardService, HistoryService, Jev, JobService, PromptService, ReviewSettings,
-        RoutingService, SessionService, SharedPolicy, TelemetryService, TelemetrySettings,
+        GuardService, HistoryService, Jev, JobService, MissionService, PromptService,
+        ReviewSettings, RoutingService, SessionService, SharedPolicy, TelemetryService,
+        TelemetrySettings,
     };
     use swarmux_domain::{GuardPolicy, PromptDraft};
 
@@ -1171,6 +1426,12 @@ pub(crate) mod tests_support {
         pub terminal: Rc<FakeTerminal>,
         /// Set by [`test_app_with_jev`].
         pub advisor: Option<Rc<FakeAdvisor>>,
+        /// Where the Missions screen keeps its missions.
+        pub missions: Rc<InMemoryMissions>,
+        /// Answers mission lints when told to.
+        pub linter: Rc<FakeLinter>,
+        /// The gates mission jobs were given.
+        pub job_gates: Rc<FakeJobGates>,
     }
 
     /// An app wired to in-memory fakes.
@@ -1234,6 +1495,13 @@ pub(crate) mod tests_support {
             routing = routing.with_jev(jev);
             advisor = Some(fake);
         }
+        let missions = Rc::new(InMemoryMissions::default());
+        let linter = Rc::new(FakeLinter::default());
+        let job_gates = Rc::new(FakeJobGates::default());
+        let mission_service = MissionService::new(missions.clone(), clock.clone())
+            .unwrap()
+            .with_linter(linter.clone())
+            .with_gates(job_gates.clone());
         let mut app = App::new(
             sessions,
             jobs,
@@ -1243,6 +1511,7 @@ pub(crate) mod tests_support {
             routing,
             "/work".into(),
         )
+        .with_missions(mission_service)
         .with_clock(clock.clone())
         .with_terminal(terminal.clone())
         .with_telemetry_feed(service, &TelemetrySettings::default());
@@ -1263,6 +1532,9 @@ pub(crate) mod tests_support {
             feed,
             terminal,
             advisor,
+            missions,
+            linter,
+            job_gates,
         }
     }
 
@@ -1277,12 +1549,12 @@ pub(crate) mod tests_support {
         pub(crate) fn with_session(&mut self, name: &str) {
             self.keys([KeyCode::Char('6'), KeyCode::Char('n')]);
             self.keys(name.chars().map(KeyCode::Char));
-            self.keys([KeyCode::Enter, KeyCode::Char('2')]);
+            self.keys([KeyCode::Enter, KeyCode::Char('0')]);
         }
 
         /// Sends a prompt to the selected session from the dashboard.
         pub(crate) fn send(&mut self, prompt: &str) {
-            self.keys([KeyCode::Char('2'), KeyCode::Char('p')]);
+            self.keys([KeyCode::Char('0'), KeyCode::Char('p')]);
             self.keys(prompt.chars().map(KeyCode::Char));
             self.keys([KeyCode::Enter]);
         }
@@ -1319,7 +1591,7 @@ mod tests {
         press(app, KeyCode::Char('n'));
         type_str(app, "demo");
         press(app, KeyCode::Enter);
-        press(app, KeyCode::Char('2'));
+        press(app, KeyCode::Char('0'));
     }
 
     #[test]
@@ -1328,7 +1600,11 @@ mod tests {
         press(&mut t.app, KeyCode::Char('4'));
         assert_eq!(t.app.screen, Screen::Queue);
         press(&mut t.app, KeyCode::Char('2'));
+        assert_eq!(t.app.screen, Screen::Missions);
+        press(&mut t.app, KeyCode::Char('0'));
         assert_eq!(t.app.screen, Screen::Dashboard);
+        press(&mut t.app, KeyCode::Char('7'));
+        assert_eq!(t.app.screen, Screen::Dashboard, "no such screen");
         press(&mut t.app, KeyCode::Char('1'));
         assert_eq!(t.app.screen, Screen::Mission);
         assert_eq!(Screen::default(), Screen::Mission, "the home screen");
@@ -1365,7 +1641,7 @@ mod tests {
         assert!(t.app.notice.as_deref().unwrap().contains("is lean"));
         let out = crate::ui::render_to_string(&t.app, 100, 8);
         assert!(out.contains("lean"), "{out}");
-        press(&mut t.app, KeyCode::Char('2'));
+        press(&mut t.app, KeyCode::Char('0'));
         press(&mut t.app, KeyCode::Char('p'));
         type_str(&mut t.app, "hi");
         press(&mut t.app, KeyCode::Enter);
@@ -1385,7 +1661,7 @@ mod tests {
         t.with_session("test session");
         t.clock.advance(1_000);
         t.with_session("demo-shop");
-        t.keys([KeyCode::Char('6'), KeyCode::Char('l'), KeyCode::Char('2')]);
+        t.keys([KeyCode::Char('6'), KeyCode::Char('l'), KeyCode::Char('0')]);
         assert!(t.app.selected_session().unwrap().lean);
         t.send("hi");
         assert_eq!(

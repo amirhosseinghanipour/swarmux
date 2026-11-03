@@ -8,6 +8,7 @@ mod dashboard;
 mod focus;
 mod history;
 mod mission;
+mod missions;
 mod prompts;
 mod queue;
 mod routing;
