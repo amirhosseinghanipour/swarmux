@@ -24,6 +24,7 @@ mod subagent;
 pub mod telemetry;
 mod template;
 mod tokens;
+mod worktree;
 
 pub use attention::{
     AttentionId, AttentionItem, AttentionKind, HeldCall, Likelihood, Priority, STALL_AFTER_MS,
@@ -50,6 +51,9 @@ pub use session::{DEFAULT_MODEL, DEFAULT_PERMISSION_MODE, Session, SessionId};
 pub use subagent::{Subagent, SubagentStatus, ToolOutcome};
 pub use template::{render, variables};
 pub use tokens::TokenTally;
+pub use worktree::{
+    Checkpoint, CheckpointReason, Handoff, PortPlan, WorktreeRecord, branch_name, slug,
+};
 
 /// Unix time in milliseconds.
 pub type Millis = i64;

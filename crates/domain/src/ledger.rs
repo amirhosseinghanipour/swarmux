@@ -62,10 +62,14 @@ pub enum LedgerKind {
     Label,
     /// The done-gate judged a stop, or its checks were run by hand.
     GateVerdict,
+    /// A resumable point was taken: Claude session, commit, handoff.
+    Checkpoint,
+    /// A job worktree was created or reclaimed.
+    Worktree,
 }
 
 impl LedgerKind {
-    pub const ALL: [LedgerKind; 10] = [
+    pub const ALL: [LedgerKind; 12] = [
         LedgerKind::Genesis,
         LedgerKind::JobQueued,
         LedgerKind::JobStarted,
@@ -76,6 +80,8 @@ impl LedgerKind {
         LedgerKind::Acknowledged,
         LedgerKind::Label,
         LedgerKind::GateVerdict,
+        LedgerKind::Checkpoint,
+        LedgerKind::Worktree,
     ];
 
     /// The stable name stored and hashed.
@@ -91,6 +97,8 @@ impl LedgerKind {
             LedgerKind::Acknowledged => "acknowledged",
             LedgerKind::Label => "label",
             LedgerKind::GateVerdict => "gate_verdict",
+            LedgerKind::Checkpoint => "checkpoint",
+            LedgerKind::Worktree => "worktree",
         }
     }
 
@@ -459,6 +467,8 @@ mod tests {
                 "acknowledged",
                 "label",
                 "gate_verdict",
+                "checkpoint",
+                "worktree",
             ]
         );
     }

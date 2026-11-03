@@ -43,6 +43,9 @@ pub struct Session {
     pub archived: bool,
     /// Run jobs without the user's own Claude Code settings (hooks, plugins).
     pub lean: bool,
+    /// Run each job in its own git worktree. `None` follows the folder:
+    /// on in a git repository, off elsewhere.
+    pub worktree: Option<bool>,
 }
 
 impl Session {
@@ -71,6 +74,7 @@ impl Session {
             last_used_at: None,
             archived: false,
             lean: false,
+            worktree: None,
         })
     }
 
