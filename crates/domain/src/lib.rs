@@ -3,6 +3,7 @@
 //! Depends on nothing but `uuid` and `thiserror`. No I/O, no clocks, no
 //! frameworks; time is always passed in by the caller.
 
+mod attention;
 mod date;
 mod error;
 mod event;
@@ -21,6 +22,10 @@ pub mod telemetry;
 mod template;
 mod tokens;
 
+pub use attention::{
+    AttentionId, AttentionItem, AttentionKind, HeldCall, Likelihood, Priority, STALL_AFTER_MS,
+    is_destructive, rank,
+};
 pub use date::{iso_date, iso_minute, parse_iso_millis};
 pub use error::DomainError;
 pub use event::{Actor, AgentEvent};
