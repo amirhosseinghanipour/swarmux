@@ -6,14 +6,19 @@ use std::path::PathBuf;
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::DefaultTerminal;
+use std::rc::Rc;
+
+use swarmux_application::ports::Clock;
 use swarmux_application::{
-    AppError, AppResult, GuardService, HistoryService, JobService, PromptService, QueueEntry,
-    QueueStats, RoutingService, SessionService, UiSettings,
+    AppError, AppResult, GuardService, HistoryService, JobService, PendingApproval, PromptService,
+    QueueEntry, QueueStats, RoutingService, SessionService, TelemetryService, TelemetrySettings,
+    UiSettings,
 };
-use swarmux_domain::{JobId, JobProgress, PromptId, Session, SessionId};
+use swarmux_domain::{AttentionKind, JobId, JobProgress, Millis, PromptId, Session, SessionId};
 
 use crate::dashboard::DashboardState;
 use crate::history::{HistoryAction, HistoryScreen};
+use crate::mission::{Cadence, MissionState};
 use crate::prompts::{FormAction, PendingDispatch, PromptForm, PromptsScreen};
 use crate::queue::{QueueAction, QueueScreen};
 use crate::routing::RoutePayload;
@@ -25,10 +30,13 @@ use crate::ui::input::{Input, InputAction};
 use crate::ui::look::Look;
 use crate::ui::splash::SplashInfo;
 
-/// The five top-level screens.
+/// The top-level screens, in key order (`1` to `6`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Screen {
+    /// Mission control: the home screen.
     #[default]
+    Mission,
+    /// The followed job in detail (the dashboard's panels).
     Dashboard,
     Prompts,
     Queue,
@@ -37,7 +45,8 @@ pub enum Screen {
 }
 
 impl Screen {
-    pub const ALL: [Screen; 5] = [
+    pub const ALL: [Screen; 6] = [
+        Screen::Mission,
         Screen::Dashboard,
         Screen::Prompts,
         Screen::Queue,
@@ -47,7 +56,8 @@ impl Screen {
 
     pub fn title(self) -> &'static str {
         match self {
-            Screen::Dashboard => "dashboard",
+            Screen::Mission => "mission",
+            Screen::Dashboard => "focus",
             Screen::Prompts => "prompts",
             Screen::Queue => "queue",
             Screen::History => "history",
@@ -95,6 +105,9 @@ pub struct App {
     pub queue: QueueScreen,
     pub history: HistoryScreen,
     pub dashboard: DashboardState,
+    /// Mission control's inbox, change log and feeds.
+    pub mission: MissionState,
+    clock: Option<Rc<dyn Clock>>,
     pub(crate) session_service: SessionService,
     pub(crate) jobs: JobService,
     pub(crate) prompt_service: PromptService,
@@ -158,6 +171,8 @@ impl App {
             queue: QueueScreen::default(),
             history: HistoryScreen::default(),
             dashboard: DashboardState::default(),
+            mission: MissionState::default(),
+            clock: None,
             session_service,
             jobs,
             prompt_service,
@@ -199,6 +214,52 @@ impl App {
             self.look.splash_until = Some(self.frame + self.look.frames(SPLASH_MS));
         }
         self
+    }
+
+    /// Time for ages and countdowns; without it the screens show no ages.
+    pub fn with_clock(mut self, clock: Rc<dyn Clock>) -> App {
+        self.clock = Some(clock);
+        self
+    }
+
+    /// Feeds Mission control with the machine-wide telemetry.
+    pub fn with_telemetry_feed(
+        mut self,
+        feed: TelemetryService,
+        settings: &TelemetrySettings,
+    ) -> App {
+        let mission = std::mem::take(&mut self.mission);
+        self.mission = mission.with_feed(feed, Cadence::from_settings(settings));
+        self.refresh_mission();
+        self
+    }
+
+    /// Now, in milliseconds since the epoch.
+    pub fn now(&self) -> Millis {
+        self.clock.as_ref().map_or(0, |c| c.now())
+    }
+
+    /// The held tool call `y`/`n`/`a` answer: the selected one on Mission
+    /// control, else the oldest.
+    pub fn approval_target(&self) -> Option<PendingApproval> {
+        let approvals = self.guard.approvals();
+        if self.screen == Screen::Mission
+            && let Some(item) = self.mission.selected_item()
+            && item.kind == AttentionKind::Approval
+            && let Some(found) = approvals
+                .iter()
+                .find(|a| Some(a.request.request_id) == item.request)
+        {
+            return Some(found.clone());
+        }
+        approvals.into_iter().next()
+    }
+
+    fn refresh_mission(&mut self) {
+        let now = self.now();
+        let cwd = self.selected_session().map(|s| s.cwd.clone());
+        self.mission
+            .refresh(&self.guard, &self.jobs, now, cwd.as_deref());
     }
 
     /// New data for the telemetry panels.
@@ -256,6 +317,7 @@ impl App {
         if report.changed && self.screen == Screen::History {
             self.refresh_history();
         }
+        self.refresh_mission();
     }
 
     pub fn selected_session(&self) -> Option<&Session> {
@@ -400,7 +462,7 @@ impl App {
         let confirming_delete = std::mem::take(&mut self.prompts.confirm_delete);
         match key.code {
             KeyCode::Char('q') => self.quit = true,
-            KeyCode::Char(c @ '1'..='5') => {
+            KeyCode::Char(c @ '1'..='6') => {
                 self.screen = Screen::ALL[(c as u8 - b'1') as usize];
                 if self.screen == Screen::History {
                     self.refresh_history();
@@ -413,6 +475,21 @@ impl App {
             KeyCode::Char('L') => {
                 let name = self.look.next_layout().name.clone();
                 self.show_toast(format!("layout · {name}"));
+            }
+            KeyCode::Up | KeyCode::Char('k') if self.screen == Screen::Mission => {
+                self.mission.move_selection(-1);
+            }
+            KeyCode::Down | KeyCode::Char('j') if self.screen == Screen::Mission => {
+                self.mission.move_selection(1);
+            }
+            KeyCode::Char('x') if self.screen == Screen::Mission => {
+                if !self.mission.acknowledge_selected() {
+                    self.notice = Some("held tool calls stay until you answer them".into());
+                }
+            }
+            KeyCode::Enter if self.screen == Screen::Mission => {
+                let result = self.open_selected();
+                self.show(result);
             }
             KeyCode::Tab | KeyCode::BackTab if self.screen == Screen::Dashboard => {
                 self.cycle_focus(key.code == KeyCode::Tab);
@@ -458,7 +535,7 @@ impl App {
             }
             KeyCode::Char(c @ ('p' | 'P')) if self.screen == Screen::Dashboard => {
                 if self.sessions.is_empty() {
-                    self.error = Some("create a session first: press 5 then n".into());
+                    self.error = Some("create a session first: press 6 then n".into());
                 } else {
                     let purpose = if c == 'P' {
                         InputPurpose::RoutedPrompt
@@ -470,6 +547,17 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    /// Opens the job of the selected inbox item in Focus and marks what it
+    /// left in the inbox as read.
+    fn open_selected(&mut self) -> AppResult<()> {
+        let Some(job) = self.mission.selected_item().and_then(|i| i.job) else {
+            return Ok(());
+        };
+        self.view(job)?;
+        self.mission.acknowledge_job(job);
+        Ok(())
     }
 
     /// Moves the focus highlight to the next (or previous) boxed panel of
@@ -498,7 +586,7 @@ impl App {
 
     /// `y` approves, `n` denies, `a` always allows the oldest held tool call.
     fn answer_approval(&mut self, key: char) -> AppResult<()> {
-        let Some(id) = self.guard.approvals().first().map(|a| a.request.request_id) else {
+        let Some(id) = self.approval_target().map(|a| a.request.request_id) else {
             return Ok(());
         };
         match key {
@@ -643,7 +731,7 @@ impl App {
             return Ok(());
         };
         let Some(session) = self.selected_session() else {
-            self.error = Some("create a session first: press 5 then n".into());
+            self.error = Some("create a session first: press 6 then n".into());
             return Ok(());
         };
         self.prompts.pending = Some(PendingDispatch {
@@ -765,11 +853,12 @@ pub(crate) mod tests_support {
     use swarmux_application::ports::PromptRepository;
     use swarmux_application::testing::{
         FakeAdvisor, FakeAgentCatalog, FakeConsents, FakeDecisionRepo, FakeHookInbox, FakeMonitor,
-        FakeRouter, FakeRuleWriter, FakeRunner, FakeWorkspace, FixedClock, InMemoryStore,
+        FakeRouter, FakeRuleWriter, FakeRunner, FakeTelemetry, FakeWorkspace, FixedClock,
+        InMemoryStore,
     };
     use swarmux_application::{
         GuardService, HistoryService, Jev, JobService, PromptService, ReviewSettings,
-        RoutingService, SessionService, SharedPolicy,
+        RoutingService, SessionService, SharedPolicy, TelemetryService, TelemetrySettings,
     };
     use swarmux_domain::{GuardPolicy, PromptDraft};
 
@@ -786,6 +875,8 @@ pub(crate) mod tests_support {
         pub rules: Rc<FakeRuleWriter>,
         pub router: Rc<FakeRouter>,
         pub catalog: Rc<FakeAgentCatalog>,
+        /// What Mission control's telemetry strip reads.
+        pub feed: Rc<FakeTelemetry>,
         /// Set by [`test_app_with_jev`].
         pub advisor: Option<Rc<FakeAdvisor>>,
     }
@@ -836,6 +927,8 @@ pub(crate) mod tests_support {
             clock.clone(),
         )
         .with_router(router.clone());
+        let feed = Rc::new(FakeTelemetry::default());
+        let service = TelemetryService::new(feed.clone(), store.clone(), clock.clone());
         let mut advisor = None;
         if let Some(consented) = jev {
             let fake = Rc::new(FakeAdvisor::default());
@@ -857,7 +950,9 @@ pub(crate) mod tests_support {
                 guard,
                 routing,
                 "/work".into(),
-            ),
+            )
+            .with_clock(clock.clone())
+            .with_telemetry_feed(service, &TelemetrySettings::default()),
             store,
             runner,
             clock,
@@ -867,6 +962,7 @@ pub(crate) mod tests_support {
             rules,
             router,
             catalog,
+            feed,
             advisor,
         }
     }
@@ -880,14 +976,14 @@ pub(crate) mod tests_support {
 
         /// Creates a session through the sessions screen, then goes back to the dashboard.
         pub(crate) fn with_session(&mut self, name: &str) {
-            self.keys([KeyCode::Char('5'), KeyCode::Char('n')]);
+            self.keys([KeyCode::Char('6'), KeyCode::Char('n')]);
             self.keys(name.chars().map(KeyCode::Char));
-            self.keys([KeyCode::Enter, KeyCode::Char('1')]);
+            self.keys([KeyCode::Enter, KeyCode::Char('2')]);
         }
 
         /// Sends a prompt to the selected session from the dashboard.
         pub(crate) fn send(&mut self, prompt: &str) {
-            self.keys([KeyCode::Char('1'), KeyCode::Char('p')]);
+            self.keys([KeyCode::Char('2'), KeyCode::Char('p')]);
             self.keys(prompt.chars().map(KeyCode::Char));
             self.keys([KeyCode::Enter]);
         }
@@ -920,20 +1016,23 @@ mod tests {
     }
 
     fn with_session(app: &mut App) {
-        press(app, KeyCode::Char('5'));
+        press(app, KeyCode::Char('6'));
         press(app, KeyCode::Char('n'));
         type_str(app, "demo");
         press(app, KeyCode::Enter);
-        press(app, KeyCode::Char('1'));
+        press(app, KeyCode::Char('2'));
     }
 
     #[test]
     fn number_keys_switch_screens() {
         let mut t = test_app();
-        press(&mut t.app, KeyCode::Char('3'));
+        press(&mut t.app, KeyCode::Char('4'));
         assert_eq!(t.app.screen, Screen::Queue);
-        press(&mut t.app, KeyCode::Char('1'));
+        press(&mut t.app, KeyCode::Char('2'));
         assert_eq!(t.app.screen, Screen::Dashboard);
+        press(&mut t.app, KeyCode::Char('1'));
+        assert_eq!(t.app.screen, Screen::Mission);
+        assert_eq!(Screen::default(), Screen::Mission, "the home screen");
     }
 
     #[test]
@@ -961,18 +1060,18 @@ mod tests {
     fn l_toggles_lean_and_jobs_follow() {
         let mut t = test_app();
         with_session(&mut t.app);
-        press(&mut t.app, KeyCode::Char('5'));
+        press(&mut t.app, KeyCode::Char('6'));
         press(&mut t.app, KeyCode::Char('l'));
         assert!(t.app.sessions[0].lean);
         assert!(t.app.notice.as_deref().unwrap().contains("is lean"));
         let out = crate::ui::render_to_string(&t.app, 100, 8);
         assert!(out.contains("lean"), "{out}");
-        press(&mut t.app, KeyCode::Char('1'));
+        press(&mut t.app, KeyCode::Char('2'));
         press(&mut t.app, KeyCode::Char('p'));
         type_str(&mut t.app, "hi");
         press(&mut t.app, KeyCode::Enter);
         assert!(t.runner.request(0).lean);
-        press(&mut t.app, KeyCode::Char('5'));
+        press(&mut t.app, KeyCode::Char('6'));
         press(&mut t.app, KeyCode::Char('l'));
         assert!(!t.app.sessions[0].lean);
     }
@@ -987,7 +1086,7 @@ mod tests {
         t.with_session("test session");
         t.clock.advance(1_000);
         t.with_session("demo-shop");
-        t.keys([KeyCode::Char('5'), KeyCode::Char('l'), KeyCode::Char('1')]);
+        t.keys([KeyCode::Char('6'), KeyCode::Char('l'), KeyCode::Char('2')]);
         assert!(t.app.selected_session().unwrap().lean);
         t.send("hi");
         assert_eq!(
@@ -1025,7 +1124,7 @@ mod tests {
     #[test]
     fn q_inside_input_types_instead_of_quitting() {
         let mut t = test_app();
-        press(&mut t.app, KeyCode::Char('5'));
+        press(&mut t.app, KeyCode::Char('6'));
         press(&mut t.app, KeyCode::Char('n'));
         press(&mut t.app, KeyCode::Char('q'));
         assert!(!t.app.quit);
@@ -1035,9 +1134,10 @@ mod tests {
     #[test]
     fn prompt_without_session_shows_hint() {
         let mut t = test_app();
+        t.app.screen = Screen::Dashboard;
         press(&mut t.app, KeyCode::Char('p'));
         assert_eq!(t.app.mode, Mode::Normal);
-        assert!(t.app.error.as_deref().unwrap().contains("press 5 then n"));
+        assert!(t.app.error.as_deref().unwrap().contains("press 6 then n"));
     }
 
     #[test]
@@ -1102,7 +1202,7 @@ mod tests {
     }
 
     fn new_prompt(app: &mut App, name: &str, tags: &str, body: &str) {
-        press(app, KeyCode::Char('2'));
+        press(app, KeyCode::Char('3'));
         press(app, KeyCode::Char('n'));
         type_str(app, name);
         press(app, KeyCode::Tab);
@@ -1147,7 +1247,7 @@ mod tests {
     #[test]
     fn invalid_form_stays_open_with_error() {
         let mut t = test_app();
-        press(&mut t.app, KeyCode::Char('2'));
+        press(&mut t.app, KeyCode::Char('3'));
         press(&mut t.app, KeyCode::Char('n'));
         ctrl_s(&mut t.app);
         assert!(t.app.prompts.form.is_some());
@@ -1233,7 +1333,7 @@ mod tests {
         let mut t = test_app();
         new_prompt(&mut t.app, "p", "", "body");
         press(&mut t.app, KeyCode::Char('d'));
-        assert!(t.app.error.as_deref().unwrap().contains("press 5 then n"));
+        assert!(t.app.error.as_deref().unwrap().contains("press 6 then n"));
         assert_eq!(t.runner.started(), 0);
     }
 

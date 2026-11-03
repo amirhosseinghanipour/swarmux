@@ -9,6 +9,7 @@ pub mod guard;
 pub mod history;
 pub mod input;
 pub mod look;
+pub mod mission;
 pub mod prompts;
 pub mod queue;
 pub mod sessions;
@@ -71,6 +72,7 @@ fn draw_screens(frame: &mut Frame, app: &App, t: &Theme) {
     draw_tabs(frame, tabs, app, t);
 
     match app.screen {
+        Screen::Mission => mission::render(frame, body, app),
         Screen::Dashboard => dashboard::render(frame, body, app),
         Screen::Prompts => prompts::render(frame, body, app),
         Screen::Queue => queue::render(frame, body, app),
@@ -292,15 +294,16 @@ pub(crate) fn hints(app: &App) -> &'static str {
         return " tab next field · ctrl+s save · esc cancel";
     }
     match app.screen {
+        Screen::Mission => " ↑↓ select · ⏎ open · y/n/a answer · x dismiss · 2 focus · q quit",
         Screen::Dashboard => {
             " p prompt · P route · v review · ↑↓ session · t theme · L layout · tab focus · q quit"
         }
         Screen::Queue => " c cancel · r retry · +/- priority · enter view · ↑↓ select · q quit",
         Screen::History => " / search · r re-run · f fork · enter view · ↑↓ select · q quit",
         Screen::Prompts => {
-            " n new · e edit · x delete · d dispatch · D route · ↑↓ select · 1-5 screens · q quit"
+            " n new · e edit · x delete · d dispatch · D route · ↑↓ select · 1-6 screens · q quit"
         }
-        Screen::Sessions => " n new session · l lean on/off · ↑↓ select · 1-5 screens · q quit",
+        Screen::Sessions => " n new session · l lean on/off · ↑↓ select · 1-6 screens · q quit",
     }
 }
 
@@ -343,7 +346,7 @@ mod tests {
         t.app.screen = Screen::Queue;
         let out = render_to_string(&t.app, 80, 10);
         assert!(out.contains("SWARMUX"));
-        assert!(out.contains("3 queue"));
+        assert!(out.contains("4 queue"));
     }
 
     #[test]

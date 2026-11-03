@@ -3,6 +3,7 @@
 //! Depends only on the domain. Adapters (SQLite, the `claude` CLI, the TUI)
 //! live in other crates and plug in through the traits in [`ports`].
 
+mod attention;
 mod decision;
 mod error;
 mod guard;
@@ -19,6 +20,7 @@ mod telemetry;
 #[cfg(any(test, feature = "test-support"))]
 pub mod testing;
 
+pub use attention::{AttentionService, Change, ChangeKind};
 pub use decision::{DecisionRecord, Outcome, Source};
 pub use error::{AppError, AppResult};
 pub use guard::{
@@ -26,7 +28,7 @@ pub use guard::{
 };
 pub use history::{HISTORY_LIMIT, HistoryService, JobDetail, JobSummary};
 pub use jev::{Jev, JevState, SUMMARY_MAX, summarize};
-pub use jobs::{JobService, PumpReport, QueueEntry, QueueStats};
+pub use jobs::{JobFact, JobService, PumpReport, QueueEntry, QueueStats};
 pub use prompts::{BUILTIN_VARIABLES, PromptService, RenderedPrompt};
 pub use routing::{ROUTE_PROMPT_MAX, RouteReport, Routed, RoutingService};
 pub use sessions::SessionService;

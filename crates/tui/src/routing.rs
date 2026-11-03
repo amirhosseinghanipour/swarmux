@@ -177,7 +177,7 @@ mod tests {
         t.with_session("api");
         t.with_session("web");
         t.add_prompt("fix", "fix {{file}}", &[]);
-        t.keys([KeyCode::Char('2'), KeyCode::Char('D')]);
+        t.keys([KeyCode::Char('3'), KeyCode::Char('D')]);
         t.keys("a.css".chars().map(KeyCode::Char));
         t.keys([KeyCode::Enter]);
         assert_eq!(t.app.screen, Screen::Dashboard);
@@ -192,6 +192,7 @@ mod tests {
     #[test]
     fn consent_overlay_asks_once_and_y_turns_jev_on() {
         let mut t = test_app_with_jev(false);
+        t.app.screen = Screen::Dashboard;
         let out = render_to_string(&t.app, 160, 48);
         assert!(out.contains("fake.example"), "{out}");
         assert!(out.contains("Never file contents"), "{out}");
@@ -206,6 +207,7 @@ mod tests {
     #[test]
     fn n_keeps_jev_off_and_nothing_is_sent() {
         let mut t = test_app_with_jev(false);
+        t.app.screen = Screen::Dashboard;
         t.keys([KeyCode::Char('n')]);
         assert_eq!(t.app.guard.jev().unwrap().state(), JevState::Declined);
         let out = render_to_string(&t.app, 160, 48);
@@ -250,7 +252,8 @@ mod tests {
 
     #[test]
     fn jev_off_panel_explains_how_to_turn_it_on() {
-        let t = test_app();
+        let mut t = test_app();
+        t.app.screen = Screen::Dashboard;
         let out = render_to_string(&t.app, 160, 48);
         assert!(
             out.contains("JEV off · bring your own key: swarmux jev set-key typesafe"),
@@ -261,6 +264,7 @@ mod tests {
     #[test]
     fn without_a_key_no_consent_is_asked() {
         let mut t = test_app_with_jev(false);
+        t.app.screen = Screen::Dashboard;
         t.advisor.as_ref().unwrap().set_no_key(true);
         let out = render_to_string(&t.app, 160, 48);
         assert!(!out.contains("Never file contents"), "{out}");

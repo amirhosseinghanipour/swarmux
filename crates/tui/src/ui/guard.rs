@@ -149,7 +149,7 @@ pub(crate) fn decision_line<'a>(d: &'a DecisionRecord, t: &Theme) -> Line<'a> {
 pub fn render_approval(frame: &mut Frame, area: Rect, app: &App) {
     let t = &app.look.theme;
     let approvals = app.guard.approvals();
-    let Some(first) = approvals.first() else {
+    let Some(first) = app.approval_target() else {
         return;
     };
     let r = &first.request;

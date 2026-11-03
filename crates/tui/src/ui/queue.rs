@@ -79,7 +79,7 @@ mod tests {
         t.with_session("demo");
         t.send("first job");
         t.send("second job");
-        press(&mut t.app, KeyCode::Char('3'));
+        press(&mut t.app, KeyCode::Char('4'));
         t
     }
 

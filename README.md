@@ -31,7 +31,7 @@ Single Rust binary. Windows, macOS, Linux. Works with Claude Code only.
 ## Try it
 
 ```sh
-cargo run              # TUI: 1-5 switch screens, p sends a prompt, t theme, L layout, q quits
+cargo run              # TUI: 1-6 switch screens (1 is Mission control), p sends a prompt, t theme, L layout, q quits
 cargo run -- doctor    # checks Claude Code, the settings, the Guard hook and telemetry
 ```
 
@@ -96,9 +96,38 @@ output = 20.0
 cache_read = 0.20
 ```
 
-## Dashboard
+## Mission control
 
-Screen 1 follows the job you last sent (or the one you open from the queue or
+Screen 1 is where swarmux starts. It answers three questions: does anything
+need me, who is doing what, and will I hit a limit.
+
+- **Needs you** (left): held tool calls, failed jobs, reviews with concerns,
+  finished results and stalled jobs, most urgent first. Only things that need
+  a human decision or a look are here; everything else goes to the change log.
+- **Wall**: one card per session in a fixed order (by creation), with model,
+  permission mode, task, context, activity, todo progress and cost. Cards never
+  move when a state changes.
+- **Top strip**: sessions by state, queue, burn, machine load, the 5-hour and
+  weekly limits with a marker for how far through the window you are, and a
+  note on any data source that has gone stale.
+- **Changes**: what happened, newest first.
+
+The screen fills the window it gets. Up to about 120x36 it shows the strip, the
+inbox and a session list. Around 160x48 it adds the wall, the change log and
+the token flow. From 220x60 it adds burn, model mix, agents, tools, files, git,
+pull requests, MCP servers, system load and a 12-week activity calendar. From
+300x80 it adds a peek at the agent the inbox selection points to.
+
+| Key | Does |
+| --- | --- |
+| `Up` / `Down` | select an item |
+| `Enter` | open the item's job in Focus |
+| `y` / `n` / `a` | approve, deny or always allow the selected held tool call (from any other screen they answer the oldest) |
+| `x` | dismiss an item (held tool calls stay until answered) |
+
+## Dashboard (screen 2, Focus)
+
+Screen 2 follows the job you last sent (or the one you open from the queue or
 history). From top to bottom:
 
 - **Header**: which model orchestrates and which audits, a legend of the
