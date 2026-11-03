@@ -9,6 +9,7 @@ mod guard;
 mod history;
 mod jev;
 mod jobs;
+pub mod ledger;
 pub mod ports;
 mod prompts;
 mod routing;

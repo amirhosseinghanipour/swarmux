@@ -9,6 +9,7 @@ use swarmux_domain::{
     ReviewState, Session, SessionId,
 };
 
+use crate::ledger::Ledger;
 use crate::ports::{
     Advice, AdviceAnswer, AdviceError, AdviceReply, AdviceRequest, AdviceSink, AgentCatalog,
     AgentProfile, AgentRunner, Clock, ConsentStore, DecisionAdvisor, DecisionRepository, HookInbox,
@@ -17,6 +18,7 @@ use crate::ports::{
     SessionRepository, StoredEvent, SystemMonitor, TelemetryFeed, TelemetryStore, Workspace,
 };
 use crate::{AppError, AppResult, DecisionRecord, JobSummary, TelemetrySnapshot};
+use swarmux_domain::ledger::{LedgerDraft, LedgerEntry};
 use swarmux_domain::telemetry::{Environment, RateLimit};
 
 /// A clock that only moves when told to.
@@ -798,6 +800,62 @@ impl TelemetryStore for FakeTelemetryStore {
             .environments
             .borrow()
             .iter()
+            .take(limit)
+            .cloned()
+            .collect())
+    }
+}
+
+/// A ledger in memory; tests can forge or drop entries to check verification.
+#[derive(Default)]
+pub struct InMemoryLedger {
+    entries: RefCell<Vec<LedgerEntry>>,
+}
+
+impl InMemoryLedger {
+    pub fn entries(&self) -> Vec<LedgerEntry> {
+        self.entries.borrow().clone()
+    }
+
+    /// Replaces the payload of entry `seq` without rehashing it.
+    pub fn tamper(&self, seq: u64, payload_json: &str) {
+        for e in self.entries.borrow_mut().iter_mut() {
+            if e.seq == seq {
+                e.draft.payload_json = payload_json.into();
+            }
+        }
+    }
+
+    /// Drops entry `seq`.
+    pub fn remove(&self, seq: u64) {
+        self.entries.borrow_mut().retain(|e| e.seq != seq);
+    }
+}
+
+impl Ledger for InMemoryLedger {
+    fn append(&self, draft: LedgerDraft) -> AppResult<LedgerEntry> {
+        let mut entries = self.entries.borrow_mut();
+        if entries.is_empty() {
+            entries.push(LedgerEntry::next(
+                None,
+                LedgerDraft::genesis(draft.ts, "test"),
+            ));
+        }
+        let entry = LedgerEntry::next(entries.last(), draft);
+        entries.push(entry.clone());
+        Ok(entry)
+    }
+
+    fn head(&self) -> AppResult<Option<LedgerEntry>> {
+        Ok(self.entries.borrow().last().cloned())
+    }
+
+    fn range(&self, from_seq: u64, limit: usize) -> AppResult<Vec<LedgerEntry>> {
+        Ok(self
+            .entries
+            .borrow()
+            .iter()
+            .filter(|e| e.seq >= from_seq)
             .take(limit)
             .cloned()
             .collect())

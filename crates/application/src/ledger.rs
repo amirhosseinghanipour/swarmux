@@ -1,0 +1,437 @@
+//! The ledger use cases: recording what swarmux observed or decided, and
+//! checking that nothing recorded was changed since.
+//!
+//! Recording happens through [`LedgeredJobs`] and [`LedgeredDecisions`]:
+//! they wrap the job and decision repositories, so every job status, job
+//! event, review and decision that is stored is also appended to the
+//! ledger, on the same thread, right after it is stored. The `events` and
+//! `decisions` tables stay the fast indexes; the ledger is the record.
+
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::Rc;
+
+use swarmux_domain::ledger::{
+    ChainBreak, ChainVerifier, Hash, LedgerDraft, LedgerEntry, LedgerKind, Payload,
+};
+use swarmux_domain::{Job, JobId, JobResult, JobStatus, Millis, ReviewState, SessionId};
+
+use crate::ports::{Clock, DecisionRepository, JobRepository, NewJob, StoredEvent};
+use crate::{AppResult, DecisionRecord, JobSummary};
+
+/// The append-only, hash-chained log.
+///
+/// Only swarmux's own use cases hold one; the agent runner never does.
+pub trait Ledger {
+    /// Chains `draft` after the head and stores it. On an empty ledger the
+    /// genesis entry is stored first.
+    fn append(&self, draft: LedgerDraft) -> AppResult<LedgerEntry>;
+    /// The newest entry.
+    fn head(&self) -> AppResult<Option<LedgerEntry>>;
+    /// Up to `limit` entries with `seq >= from_seq`, in `seq` order.
+    fn range(&self, from_seq: u64, limit: usize) -> AppResult<Vec<LedgerEntry>>;
+}
+
+/// Who appends entries for swarmux itself.
+const SWARMUX: &str = "swarmux";
+/// Entries read per page while verifying.
+const VERIFY_PAGE: usize = 1000;
+
+/// What [`verify_all`] found.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VerifyReport {
+    /// Entries that verified before the end or the break.
+    pub entries: u64,
+    /// The stored head, verified or not.
+    pub head: Option<(u64, Hash)>,
+    /// The first entry where the chain breaks.
+    pub broken: Option<ChainBreak>,
+}
+
+impl VerifyReport {
+    pub fn is_ok(&self) -> bool {
+        self.broken.is_none()
+    }
+}
+
+/// Walks the whole ledger in pages and checks the chain.
+pub fn verify_all(ledger: &dyn Ledger) -> AppResult<VerifyReport> {
+    verify_in_pages(ledger, VERIFY_PAGE)
+}
+
+fn verify_in_pages(ledger: &dyn Ledger, page: usize) -> AppResult<VerifyReport> {
+    let head = ledger.head()?.map(|e| (e.seq, e.hash));
+    let mut v = ChainVerifier::default();
+    let mut from = 1;
+    loop {
+        let entries = ledger.range(from, page)?;
+        let Some(last) = entries.last() else { break };
+        from = last.seq + 1;
+        for e in &entries {
+            if let Err(broken) = v.push(e) {
+                return Ok(VerifyReport {
+                    entries: v.checked(),
+                    head,
+                    broken: Some(broken),
+                });
+            }
+        }
+        if entries.len() < page {
+            break;
+        }
+    }
+    Ok(VerifyReport {
+        entries: v.checked(),
+        head,
+        broken: None,
+    })
+}
+
+/// The newest `n` entries, oldest first.
+pub fn tail(ledger: &dyn Ledger, n: usize) -> AppResult<Vec<LedgerEntry>> {
+    let Some(head) = ledger.head()? else {
+        return Ok(Vec::new());
+    };
+    let from = head.seq.saturating_sub(n as u64).saturating_add(1);
+    ledger.range(from, n)
+}
+
+/// Turns what swarmux stores into ledger entries.
+pub struct LedgerService {
+    ledger: Rc<dyn Ledger>,
+    clock: Rc<dyn Clock>,
+}
+
+impl LedgerService {
+    pub fn new(ledger: Rc<dyn Ledger>, clock: Rc<dyn Clock>) -> LedgerService {
+        LedgerService { ledger, clock }
+    }
+
+    pub fn ledger(&self) -> &dyn Ledger {
+        &*self.ledger
+    }
+
+    fn append(
+        &self,
+        ts: Millis,
+        kind: LedgerKind,
+        actor: &str,
+        job: Option<JobId>,
+        session: Option<SessionId>,
+        payload: Payload,
+    ) -> AppResult<()> {
+        self.ledger
+            .append(LedgerDraft {
+                ts,
+                kind,
+                actor: actor.to_string(),
+                job,
+                session: session.map(|s| s.to_string()),
+                payload_json: payload.build(),
+            })
+            .map(drop)
+    }
+
+    pub fn record_job_queued(&self, id: JobId, job: &NewJob, now: Millis) -> AppResult<()> {
+        let payload = Payload::new()
+            .text("prompt", &job.prompt)
+            .opt_int("prompt_id", job.prompt_id.map(|p| p.0))
+            .str("model", &job.model)
+            .int("priority", i64::from(job.priority))
+            .bool("fork", job.fork)
+            .bool("wants_review", job.wants_review)
+            .opt_int("review_of", job.review_of.map(|j| j.0));
+        self.append(
+            now,
+            LedgerKind::JobQueued,
+            SWARMUX,
+            Some(id),
+            Some(job.session_id),
+            payload,
+        )
+    }
+
+    pub fn record_job_started(
+        &self,
+        id: JobId,
+        session: Option<SessionId>,
+        now: Millis,
+    ) -> AppResult<()> {
+        let payload = Payload::new().str("status", JobStatus::Running.as_str());
+        self.append(
+            now,
+            LedgerKind::JobStarted,
+            SWARMUX,
+            Some(id),
+            session,
+            payload,
+        )
+    }
+
+    /// A job reached `status`. `revised` marks new final numbers for a job
+    /// that had already finished.
+    pub fn record_job_finished(
+        &self,
+        id: JobId,
+        session: Option<SessionId>,
+        status: JobStatus,
+        result: Option<&JobResult>,
+        revised: bool,
+        now: Millis,
+    ) -> AppResult<()> {
+        let mut payload = Payload::new().str("status", status.as_str());
+        if let Some(r) = result {
+            payload = payload
+                .str("outcome", &r.outcome)
+                .opt_str("error", r.error.as_deref())
+                .num("cost_usd", r.cost_usd)
+                .int("duration_ms", saturating(r.duration_ms))
+                .int("tokens_in", saturating(r.tokens_in))
+                .int("tokens_out", saturating(r.tokens_out))
+                .int("cache_read", saturating(r.cache_read))
+                .text("answer", &r.text);
+        }
+        if revised {
+            payload = payload.bool("revised", true);
+        }
+        self.append(
+            now,
+            LedgerKind::JobFinished,
+            SWARMUX,
+            Some(id),
+            session,
+            payload,
+        )
+    }
+
+    /// Jobs a previous run left running were marked interrupted.
+    pub fn record_interrupted(&self, count: usize, now: Millis) -> AppResult<()> {
+        let payload = Payload::new()
+            .str("status", JobStatus::Interrupted.as_str())
+            .int("count", count as i64);
+        self.append(now, LedgerKind::JobFinished, SWARMUX, None, None, payload)
+    }
+
+    /// An agent event as stored for the job (`summary` is its log line).
+    pub fn record_agent_event(
+        &self,
+        id: JobId,
+        session: Option<SessionId>,
+        event: &str,
+        actor: &str,
+        summary: &str,
+        now: Millis,
+    ) -> AppResult<()> {
+        let payload = Payload::new().str("event", event).text("summary", summary);
+        self.append(
+            now,
+            LedgerKind::AgentEvent,
+            actor,
+            Some(id),
+            session,
+            payload,
+        )
+    }
+
+    pub fn record_decision(&self, d: &DecisionRecord) -> AppResult<()> {
+        let payload = Payload::new()
+            .str("source", d.source.as_str())
+            .str("outcome", d.outcome.as_str())
+            .str("tool", &d.tool)
+            .text("subject", &d.subject)
+            .opt_str("rule", d.rule.as_deref())
+            .int("latency_us", saturating(d.latency_us))
+            .opt_num("confidence", d.confidence);
+        self.append(
+            d.ts,
+            LedgerKind::GuardDecision,
+            d.source.as_str(),
+            d.job_id,
+            None,
+            payload,
+        )
+    }
+
+    pub fn record_review(
+        &self,
+        id: JobId,
+        session: Option<SessionId>,
+        review: &ReviewState,
+    ) -> AppResult<()> {
+        let payload = Payload::new().json("review", &review.encode());
+        self.append(
+            self.clock.now(),
+            LedgerKind::ReviewVerdict,
+            "reviewer",
+            Some(id),
+            session,
+            payload,
+        )
+    }
+}
+
+fn saturating(n: u64) -> i64 {
+    i64::try_from(n).unwrap_or(i64::MAX)
+}
+
+/// A job repository that also records every change in the ledger.
+pub struct LedgeredJobs {
+    inner: Rc<dyn JobRepository>,
+    ledger: Rc<LedgerService>,
+    /// Which session each job of this run belongs to.
+    sessions: RefCell<HashMap<JobId, SessionId>>,
+}
+
+impl LedgeredJobs {
+    pub fn new(inner: Rc<dyn JobRepository>, ledger: Rc<LedgerService>) -> LedgeredJobs {
+        LedgeredJobs {
+            inner,
+            ledger,
+            sessions: RefCell::default(),
+        }
+    }
+
+    fn session_of(&self, id: JobId) -> AppResult<Option<SessionId>> {
+        if let Some(s) = self.sessions.borrow().get(&id) {
+            return Ok(Some(*s));
+        }
+        let session = self.inner.get(id)?.map(|j| j.session_id);
+        if let Some(s) = session {
+            self.sessions.borrow_mut().insert(id, s);
+        }
+        Ok(session)
+    }
+}
+
+impl JobRepository for LedgeredJobs {
+    fn insert(&self, job: &NewJob, now: Millis) -> AppResult<JobId> {
+        let id = self.inner.insert(job, now)?;
+        self.sessions.borrow_mut().insert(id, job.session_id);
+        self.ledger.record_job_queued(id, job, now)?;
+        Ok(id)
+    }
+
+    fn get(&self, id: JobId) -> AppResult<Option<Job>> {
+        self.inner.get(id)
+    }
+
+    fn queued(&self) -> AppResult<Vec<Job>> {
+        self.inner.queued()
+    }
+
+    fn set_status(&self, id: JobId, status: JobStatus, now: Millis) -> AppResult<()> {
+        self.inner.set_status(id, status, now)?;
+        let session = self.session_of(id)?;
+        if status == JobStatus::Running {
+            self.ledger.record_job_started(id, session, now)
+        } else if status.is_finished() {
+            let result = self.inner.result(id)?;
+            self.ledger
+                .record_job_finished(id, session, status, result.as_ref(), false, now)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn status(&self, id: JobId) -> AppResult<JobStatus> {
+        self.inner.status(id)
+    }
+
+    fn set_priority(&self, id: JobId, priority: i32) -> AppResult<()> {
+        self.inner.set_priority(id, priority)
+    }
+
+    fn set_session(&self, id: JobId, session: SessionId) -> AppResult<()> {
+        self.inner.set_session(id, session)?;
+        self.sessions.borrow_mut().insert(id, session);
+        Ok(())
+    }
+
+    fn save_result(&self, id: JobId, result: &JobResult) -> AppResult<()> {
+        // Before a job ends its result is recorded with the final status;
+        // after, a new result revises the finished job's numbers.
+        let status = self.inner.status(id)?;
+        self.inner.save_result(id, result)?;
+        if status.is_finished() {
+            let session = self.session_of(id)?;
+            let now = self.ledger.clock.now();
+            self.ledger
+                .record_job_finished(id, session, status, Some(result), true, now)?;
+        }
+        Ok(())
+    }
+
+    fn result(&self, id: JobId) -> AppResult<Option<JobResult>> {
+        self.inner.result(id)
+    }
+
+    fn append_event(
+        &self,
+        id: JobId,
+        kind: &str,
+        actor: &str,
+        payload: &str,
+        now: Millis,
+    ) -> AppResult<()> {
+        self.inner.append_event(id, kind, actor, payload, now)?;
+        let session = self.session_of(id)?;
+        self.ledger
+            .record_agent_event(id, session, kind, actor, payload, now)
+    }
+
+    fn events(&self, id: JobId) -> AppResult<Vec<StoredEvent>> {
+        self.inner.events(id)
+    }
+
+    fn interrupt_running(&self, now: Millis) -> AppResult<usize> {
+        let n = self.inner.interrupt_running(now)?;
+        if n > 0 {
+            self.ledger.record_interrupted(n, now)?;
+        }
+        Ok(n)
+    }
+
+    fn summaries(&self, limit: usize) -> AppResult<Vec<JobSummary>> {
+        self.inner.summaries(limit)
+    }
+
+    fn summary(&self, id: JobId) -> AppResult<Option<JobSummary>> {
+        self.inner.summary(id)
+    }
+
+    fn set_review(&self, id: JobId, review: &ReviewState) -> AppResult<()> {
+        self.inner.set_review(id, review)?;
+        let session = self.session_of(id)?;
+        self.ledger.record_review(id, session, review)
+    }
+
+    fn review(&self, id: JobId) -> AppResult<Option<ReviewState>> {
+        self.inner.review(id)
+    }
+}
+
+/// A decision log that also records every decision in the ledger.
+pub struct LedgeredDecisions {
+    inner: Rc<dyn DecisionRepository>,
+    ledger: Rc<LedgerService>,
+}
+
+impl LedgeredDecisions {
+    pub fn new(inner: Rc<dyn DecisionRepository>, ledger: Rc<LedgerService>) -> LedgeredDecisions {
+        LedgeredDecisions { inner, ledger }
+    }
+}
+
+impl DecisionRepository for LedgeredDecisions {
+    fn record(&self, decision: &DecisionRecord) -> AppResult<()> {
+        self.inner.record(decision)?;
+        self.ledger.record_decision(decision)
+    }
+
+    fn recent_decisions(&self, limit: usize) -> AppResult<Vec<DecisionRecord>> {
+        self.inner.recent_decisions(limit)
+    }
+}
+
+#[cfg(test)]
+mod tests;
