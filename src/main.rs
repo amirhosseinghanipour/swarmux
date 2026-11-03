@@ -17,8 +17,9 @@ use clap::{Parser, Subcommand};
 use swarmux_application::ledger::{LedgerService, LedgeredDecisions, LedgeredJobs};
 use swarmux_application::ports::Clock;
 use swarmux_application::{
-    GateKeeper, GateService, GuardService, HandoffBoard, HistoryService, HookBus, Jev, JobService,
-    PromptService, RoutingService, SessionService, SharedPolicy,
+    CombinedStatusline, GateKeeper, GateService, GuardService, HandoffBoard, HistoryService,
+    HookBus, Jev, JobService, PromptService, RoutingService, SessionService, SharedPolicy,
+    StatuslineFeed, TruthBoard,
 };
 use swarmux_infrastructure::hook::{self, HookServer, Responders};
 use swarmux_infrastructure::{
@@ -64,6 +65,14 @@ enum Command {
     Worktree {
         #[command(subcommand)]
         action: WorktreeAction,
+    },
+    /// The status line command: forwards Claude Code's status line data to
+    /// swarmux and prints a compact line. Add it to a session you start by
+    /// hand with --print-settings.
+    Statusline {
+        /// Print the `statusLine` setting that runs this command, and exit.
+        #[arg(long)]
+        print_settings: bool,
     },
     /// Hooks Claude Code runs inside swarmux jobs (not for direct use).
     #[command(hide = true)]
@@ -183,12 +192,28 @@ fn main() -> anyhow::Result<ExitCode> {
         Some(Command::Jev {
             action: JevAction::Test { provider },
         }) => jev::test(provider.as_deref()),
+        Some(Command::Statusline { print_settings }) => statusline(print_settings),
         Some(Command::Hook { event }) => {
             hook::hook_main(&event);
             Ok(())
         }
     }?;
     Ok(ExitCode::SUCCESS)
+}
+
+fn statusline(print_settings: bool) -> anyhow::Result<()> {
+    if print_settings {
+        let exe = std::env::current_exe().context("cannot find the swarmux executable")?;
+        println!("{}", hook::statusline_settings(&exe));
+        return Ok(());
+    }
+    // Without a home folder there is nowhere to leave the data; the line
+    // is still printed.
+    let spool = Paths::default_home()
+        .ok()
+        .map(|p| hook::spool_dir(&p.data_dir));
+    hook::statusline_main(spool.as_deref());
+    Ok(())
 }
 
 fn run_tui(no_splash: bool) -> anyhow::Result<()> {
@@ -251,8 +276,15 @@ fn run_tui(no_splash: bool) -> anyhow::Result<()> {
     );
     let gate = GateService::new(gate_records, ledger.clone(), store.clone(), clock.clone())
         .with_checkpoints(checkpoints.clone());
+    // What the sessions report themselves: status lines and loaded instructions.
+    let truth = Rc::new(TruthBoard::new(clock.clone()));
+    let statuslines: Rc<dyn StatuslineFeed> = Rc::new(CombinedStatusline(vec![
+        server.clone(),
+        Rc::new(hook::SpoolFeed::new(hook::spool_dir(&paths.data_dir))),
+    ]));
     let hook_bus = HookBus::new(server.clone(), ledger, store.clone(), clock.clone())
-        .with_checkpoints(checkpoints);
+        .with_checkpoints(checkpoints)
+        .with_truth(truth.clone());
     let mut guard = GuardService::new(policy, server, decisions.clone(), clock.clone())
         .with_timeout_secs(guard_settings.approval_timeout_secs)
         .with_rule_writer(Rc::new(ConfigRuleWriter::new(paths.config.clone())));
@@ -282,7 +314,8 @@ fn run_tui(no_splash: bool) -> anyhow::Result<()> {
     );
     let history = HistoryService::new(jobs_log.clone());
     // Collectors run from the start so the stations have data once shown.
-    let telemetry = telemetry::start(&settings, &paths, store.clone(), clock.clone());
+    let telemetry = telemetry::start(&settings, &paths, store.clone(), clock.clone())
+        .with_truth(truth, statuslines);
     let mut jobs = JobService::new(store.clone(), jobs_log, runner, clock)
         .with_telemetry_store(store)
         .with_limits(settings.limits())
