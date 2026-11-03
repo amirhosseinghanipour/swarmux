@@ -1,6 +1,7 @@
 use std::process::Command;
 
 use super::*;
+use swarmux_application::Settings;
 
 fn config(dir: &Path) -> CollectorConfig {
     let transcripts = dir.join("projects");
@@ -115,4 +116,46 @@ fn default_transcripts_folder() {
             home.join(".claude").join("projects")
         );
     }
+}
+
+/// Runs every collector on this machine at the default cadences and prints
+/// the process CPU use. `cargo test --release -- --ignored collector_overhead`
+#[test]
+#[ignore = "reads this machine's transcripts and takes over a minute"]
+fn collector_overhead() {
+    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
+    let paths = Paths::default_home().unwrap();
+    let settings = Settings::default();
+    let c = TelemetryCollector::start(CollectorConfig::new(&settings, &paths));
+    c.focus(Path::new(env!("CARGO_MANIFEST_DIR")));
+    // Let the first transcript pass (from the cache) finish.
+    eventually(&c, |s| {
+        s.usage.data.is_some() && s.github.updated_at.is_some()
+    });
+    let me = Pid::from_u32(std::process::id());
+    let mut sys = System::new().unwrap();
+    let cpu_ms = |sys: &mut System| {
+        sys.refresh_processes_specifics(
+            ProcessesToUpdate::Some(&[me]),
+            true,
+            ProcessRefreshKind::nothing().with_cpu(),
+        );
+        sys.process(me).map_or(0, |p| p.accumulated_cpu_time())
+    };
+    let before = cpu_ms(&mut sys);
+    let started = Instant::now();
+    std::thread::sleep(Duration::from_secs(60));
+    let used = cpu_ms(&mut sys) - before;
+    let wall = started.elapsed().as_millis() as u64;
+    let cores = std::thread::available_parallelism().map_or(1, |n| n.get()) as f64;
+    let snap = c.snapshot();
+    eprintln!(
+        "cpu {used} ms over {wall} ms wall: {:.2}% of one core, {:.3}% of {cores} cores; usage pass {:?} ms, system {:?} ms, git {:?} ms, gh {:?} ms",
+        used as f64 * 100.0 / wall as f64,
+        used as f64 * 100.0 / wall as f64 / cores,
+        snap.usage.took_ms,
+        snap.system.took_ms,
+        snap.git.took_ms,
+        snap.github.took_ms
+    );
 }
