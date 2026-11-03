@@ -19,6 +19,7 @@ fn config(dir: &Path) -> CollectorConfig {
             usage_secs: 1,
             git_secs: 1,
             github_secs: 1,
+            agents: false,
             ..TelemetrySettings::default()
         },
         pricing: PriceTable::builtin(),
@@ -27,6 +28,7 @@ fn config(dir: &Path) -> CollectorConfig {
         home: dir.to_path_buf(),
         git: "git".into(),
         gh: dir.join("no-such-gh"),
+        claude: dir.join("no-such-claude"),
     }
 }
 
@@ -158,4 +160,66 @@ fn collector_overhead() {
         snap.git.took_ms,
         snap.github.took_ms
     );
+}
+
+struct FakePoll(Result<Vec<swarmux_domain::telemetry::ExternalSession>, String>);
+
+impl AgentsPoll for FakePoll {
+    fn list(&self) -> Result<Vec<swarmux_domain::telemetry::ExternalSession>, String> {
+        self.0.clone()
+    }
+}
+
+fn shared() -> Shared {
+    Shared {
+        snap: Mutex::new(TelemetrySnapshot {
+            external: Collected::pending(),
+            ..TelemetrySnapshot::default()
+        }),
+        focus: Mutex::new((0, None)),
+        stop: AtomicBool::new(false),
+        bell: Condvar::new(),
+        bell_lock: Mutex::new(()),
+    }
+}
+
+#[test]
+fn the_agents_worker_keeps_the_last_list_when_a_poll_fails() {
+    use swarmux_domain::telemetry::{ExternalKind, ExternalSession, ExternalState};
+    let sh = shared();
+    let one = ExternalSession {
+        session_id: "s".into(),
+        name: "n".into(),
+        cwd: "/w".into(),
+        kind: ExternalKind::Background,
+        pid: None,
+        state: ExternalState::Blocked,
+        waiting_for: Some("permission prompt".into()),
+        started_at: None,
+    };
+    agents_worker(Box::new(FakePoll(Ok(vec![one.clone()]))))(&sh);
+    let snap = lock(&sh.snap).clone();
+    assert_eq!(snap.external.data, Some(vec![one.clone()]));
+    assert!(snap.external.updated_at.is_some() && snap.external.error.is_none());
+
+    agents_worker(Box::new(FakePoll(Err(
+        "claude agents: not installed".into()
+    ))))(&sh);
+    let snap = lock(&sh.snap).clone();
+    assert_eq!(snap.external.data, Some(vec![one]), "stale data is kept");
+    assert_eq!(
+        snap.external.error.as_deref(),
+        Some("claude agents: not installed")
+    );
+}
+
+#[test]
+#[ignore = "runs the real claude CLI"]
+fn the_real_claude_lists_its_sessions() {
+    let sessions = agents::ClaudeAgents::new("claude".into()).list().unwrap();
+    assert!(
+        sessions.iter().all(|s| !s.session_id.is_empty()),
+        "{sessions:?}"
+    );
+    eprintln!("{} sessions", sessions.len());
 }

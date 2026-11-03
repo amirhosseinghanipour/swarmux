@@ -2,9 +2,11 @@
 
 use swarmux_domain::Millis;
 use swarmux_domain::telemetry::{
-    Environment, FileTouch, FlowBucket, LimitProjection, LimitState, ToolCall, ToolStat,
-    UsageReport, local_clock,
+    Environment, ExternalSession, FileTouch, FlowBucket, LimitProjection, LimitSource, LimitState,
+    ToolCall, ToolStat, UsageReport, local_clock,
 };
+
+use super::truth::{InstructionsView, StatuslineView};
 
 /// Everything the stations show, in one value.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -28,6 +30,13 @@ pub struct TelemetrySnapshot {
     pub activity: ActivityView,
     /// Latest environment per Claude session swarmux ran, newest first.
     pub environments: Vec<EnvironmentView>,
+    /// The latest status line of each session that reports one, newest first:
+    /// context, cost, prompt cache and pull request.
+    pub statuslines: Vec<StatuslineView>,
+    /// Claude Code sessions swarmux didn't start (`claude agents`).
+    pub external: Collected<Vec<ExternalSession>>,
+    /// Instruction files loaded by each session.
+    pub instructions: Vec<InstructionsView>,
 }
 
 /// One collector's latest result and health.
@@ -220,10 +229,12 @@ pub struct LimitView {
     pub hits_at_clock: Option<String>,
     /// The window has reset since the reading.
     pub stale: bool,
+    /// Where the reading came from; the freshest source wins.
+    pub source: LimitSource,
 }
 
 impl LimitView {
-    pub fn new(state: &LimitState, now: Millis, offset_min: i32) -> LimitView {
+    pub fn new(state: &LimitState, now: Millis, offset_min: i32, source: LimitSource) -> LimitView {
         let projection = state.projection(now);
         LimitView {
             window: state.limit.window.clone(),
@@ -236,6 +247,7 @@ impl LimitView {
             hits_at_clock: projection.map(|p| local_clock(p.hits_at, offset_min)),
             projection,
             stale: state.is_stale(now),
+            source,
         }
     }
 }

@@ -144,3 +144,32 @@ fn default_seams_allow_and_add_nothing() {
     };
     assert_eq!(NoSessionContext.context(&start), None);
 }
+
+#[test]
+fn loaded_instruction_files_are_kept_per_session() {
+    let f = fixture();
+    let board = Rc::new(TruthBoard::new(f.clock.clone()));
+    let mut bus = f.bus.with_truth(board.clone());
+    for (path, detail) in [
+        (
+            "/w/CLAUDE.md",
+            InstructionFile::detail("session_start", "Project"),
+        ),
+        (
+            "/home/.claude/CLAUDE.md",
+            InstructionFile::detail("session_start", "User"),
+        ),
+    ] {
+        let mut n = notice(HookEvent::InstructionsLoaded, Some(3));
+        n.summary = path.into();
+        n.detail = detail;
+        f.feed.push(n);
+    }
+    assert!(bus.pump().is_empty());
+    let views = board.instructions();
+    assert_eq!(views.len(), 1);
+    assert_eq!(views[0].job, Some(JobId(3)));
+    assert_eq!(views[0].files.len(), 2);
+    assert_eq!(views[0].files[0].path, "/w/CLAUDE.md");
+    assert_eq!(views[0].files[1].memory_type, "User");
+}

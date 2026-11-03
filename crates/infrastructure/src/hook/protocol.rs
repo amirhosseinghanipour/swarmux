@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 use swarmux_application::HookNotice;
 use swarmux_application::ports::HookRequest;
 use swarmux_domain::ledger::{hex, sha256};
+use swarmux_domain::telemetry::InstructionFile;
 use swarmux_domain::{Decision, HookEvent, JobId, Verdict};
 
 /// Longest tool input kept for display, in characters.
@@ -18,6 +19,9 @@ pub const RAW_MAX: usize = 16 * 1024;
 const SUMMARY_MAX: usize = 200;
 /// Longest detail text (a last message), in characters.
 const DETAIL_MAX: usize = 4000;
+
+/// The `event` of a request that carries a status line payload.
+pub const STATUSLINE_EVENT: &str = "Statusline";
 
 /// Hook client → app.
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -126,6 +130,10 @@ impl WireRequest {
                 let error = str_at(&v, "error");
                 (error.clone(), error)
             }
+            HookEvent::InstructionsLoaded => (
+                str_at(&v, "file_path"),
+                InstructionFile::detail(&str_at(&v, "load_reason"), &str_at(&v, "memory_type")),
+            ),
             HookEvent::PreToolUse => (with_subject(&tool), String::new()),
         };
         let mut raw = stdin.to_string();
@@ -149,6 +157,21 @@ impl WireRequest {
             raw_sha256: hex(&sha256(stdin.as_bytes())),
             raw_len: stdin.len(),
         })
+    }
+
+    /// The request that carries a status line payload, whole, in `raw`.
+    pub fn statusline(payload: &str, job_id: Option<i64>) -> WireRequest {
+        WireRequest {
+            job_id,
+            event: Some(STATUSLINE_EVENT.to_string()),
+            raw: payload.to_string(),
+            ..WireRequest::default()
+        }
+    }
+
+    /// The request carries a status line payload.
+    pub fn is_statusline(&self) -> bool {
+        self.event.as_deref() == Some(STATUSLINE_EVENT)
     }
 
     /// The event this request is for: absent means PreToolUse, a name this

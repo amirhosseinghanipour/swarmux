@@ -56,6 +56,9 @@ fn input(event: HookEvent) -> String {
         HookEvent::Notification => serde_json::json!({
             "message": "Claude needs you", "notification_type": "agent_needs_input"}),
         HookEvent::StopFailure => serde_json::json!({"error": "rate_limit"}),
+        HookEvent::InstructionsLoaded => serde_json::json!({
+            "file_path": "/w/CLAUDE.md", "memory_type": "Project",
+            "load_reason": "session_start"}),
     };
     v.as_object_mut()
         .unwrap()
@@ -121,6 +124,11 @@ fn every_lifecycle_event_round_trips() {
     assert_eq!(by(HookEvent::PreCompact).detail, "auto");
     assert_eq!(by(HookEvent::Notification).detail, "agent_needs_input");
     assert_eq!(by(HookEvent::Stop).summary, "All done.");
+    assert_eq!(by(HookEvent::InstructionsLoaded).summary, "/w/CLAUDE.md");
+    assert_eq!(
+        by(HookEvent::InstructionsLoaded).detail,
+        "session_start;Project"
+    );
     assert!(
         by(HookEvent::PostToolUseFailure)
             .summary
@@ -265,4 +273,51 @@ fn responders_answer_the_events_claude_code_waits_for() {
         None,
     );
     assert_eq!(out, None);
+}
+
+#[test]
+fn a_status_line_payload_reaches_the_app_and_the_line_is_printed() {
+    use swarmux_application::StatuslineFeed;
+    use swarmux_infrastructure::hook::run_statusline;
+
+    let rt = runtime();
+    let srv = HookServer::start(rt.handle(), &name(), policy()).unwrap();
+    let payload = serde_json::json!({
+        "session_id": "sess-9",
+        "model": {"display_name": "Haiku"},
+        "context_window": {"used_percentage": 20},
+        "rate_limits": {
+            "five_hour": {"used_percentage": 41, "resets_at": 1793620000},
+            "seven_day": {"used_percentage": 90, "resets_at": 1794200000}
+        },
+        "prompt_cache": {"warm": true, "ttl": "5m", "hit_ratio": 0.9, "expires_at": 4102444800u64},
+        "pr": {"number": 3, "review_state": "approved", "kind": "pr"},
+    })
+    .to_string();
+    let line = run_statusline(
+        &payload,
+        Some(srv.name()),
+        Some("7"),
+        None,
+        1_793_613_600_000,
+    );
+    assert!(
+        line.starts_with("Haiku · ctx 20% · 5h 41% · 7d 90% · cache 90%"),
+        "{line}"
+    );
+    assert!(line.ends_with("PR #3 approved"), "{line}");
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut got = Vec::new();
+    while got.is_empty() {
+        got.extend(srv.poll_statuslines());
+        assert!(Instant::now() < deadline, "the payload never arrived");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(got.len(), 1);
+    assert_eq!(got[0].session_id, "sess-9");
+    assert_eq!(got[0].job, Some(JobId(7)));
+    assert_eq!(got[0].five_hour.map(|w| w.used), Some(0.41));
+    assert!(srv.poll_notices().is_empty(), "not a lifecycle event");
+    assert!(srv.poll().is_empty());
 }

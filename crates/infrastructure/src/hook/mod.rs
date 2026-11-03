@@ -8,6 +8,7 @@
 mod client;
 mod protocol;
 mod server;
+mod statusline;
 mod transport;
 
 use std::path::Path;
@@ -17,6 +18,14 @@ use swarmux_domain::HookEvent;
 pub use client::{hook_main, pre_tool, pre_tool_main, run_hook};
 pub use protocol::{WireReply, WireRequest, subject_of};
 pub use server::{HookServer, Responders};
+pub use statusline::{SpoolFeed, run_statusline, spool_dir, statusline_main};
+
+/// The `statusLine` setting that runs `exe statusline`, as JSON to merge
+/// into a Claude Code settings file.
+pub fn statusline_settings(exe: &Path) -> String {
+    serde_json::json!({ "statusLine": { "type": "command", "command": statusline_command(exe) } })
+        .to_string()
+}
 pub use transport::{ENV_JOB, ENV_PIPE, connect, endpoint_for};
 
 /// Claude Code kills a lifecycle hook after this long. They answer at once.
@@ -27,9 +36,9 @@ const LIFECYCLE_TIMEOUT_SECS: u64 = 30;
 pub const STOP_TIMEOUT_SECS: u64 = 1800;
 
 /// The `--settings` JSON that makes `claude` run `exe hook <event>` for
-/// every lifecycle event swarmux listens to. PreToolUse is killed after
-/// `timeout_secs` (it may wait for the user); the events nobody waits for
-/// are registered asynchronous.
+/// every lifecycle event swarmux listens to, and `exe statusline` as the
+/// status line. PreToolUse is killed after `timeout_secs` (it may wait for
+/// the user); the events nobody waits for are registered asynchronous.
 pub fn hook_settings(exe: &Path, timeout_secs: u64) -> String {
     let mut hooks = serde_json::Map::new();
     for event in HookEvent::ALL {
@@ -48,7 +57,20 @@ pub fn hook_settings(exe: &Path, timeout_secs: u64) -> String {
         }
         hooks.insert(event.as_str().to_string(), serde_json::json!([group]));
     }
-    serde_json::json!({ "hooks": hooks }).to_string()
+    serde_json::json!({
+        "hooks": hooks,
+        "statusLine": { "type": "command", "command": statusline_command(exe) },
+    })
+    .to_string()
+}
+
+/// The status line command: the executable quoted, with forward slashes so
+/// a shell reads the path as written.
+fn statusline_command(exe: &Path) -> String {
+    format!(
+        "\"{}\" statusline",
+        exe.to_string_lossy().replace('\\', "/")
+    )
 }
 
 /// How long Claude Code lets the hook for `event` run.
@@ -111,6 +133,16 @@ mod tests {
                 assert_eq!(hook["async"], true, "{event:?}");
             }
         }
+    }
+
+    #[test]
+    fn the_status_line_runs_the_sidecar() {
+        let v = settings();
+        assert_eq!(v["statusLine"]["type"], "command");
+        assert_eq!(
+            v["statusLine"]["command"],
+            r#""C:/bin/swarmux.exe" statusline"#
+        );
     }
 
     #[test]

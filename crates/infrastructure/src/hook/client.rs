@@ -63,6 +63,19 @@ pub fn pre_tool(stdin: &str, pipe: Option<&str>, job: Option<&str>) -> Option<St
     exchange(&request, pipe, true)?.hook_output()
 }
 
+/// Sends `request` without waiting for an answer. `false` when the app
+/// couldn't be reached.
+pub(super) fn send(request: &WireRequest, pipe: &str) -> bool {
+    let Ok(mut line) = serde_json::to_string(request) else {
+        return false;
+    };
+    line.push('\n');
+    let Ok(mut conn) = connect(pipe) else {
+        return false;
+    };
+    conn.write_all(line.as_bytes()).is_ok() && conn.flush().is_ok()
+}
+
 /// Sends `request`; with `wait`, also reads the app's reply.
 fn exchange(request: &WireRequest, pipe: &str, wait: bool) -> Option<WireReply> {
     let mut line = serde_json::to_string(request).ok()?;

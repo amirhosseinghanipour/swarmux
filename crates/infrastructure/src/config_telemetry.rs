@@ -16,10 +16,12 @@ pub(crate) struct RawTelemetry {
     system: Option<bool>,
     git: Option<bool>,
     github: Option<bool>,
+    agents: Option<bool>,
     usage_secs: Option<i64>,
     system_secs: Option<i64>,
     git_secs: Option<i64>,
     github_secs: Option<i64>,
+    agents_secs: Option<i64>,
     transcripts_path: Option<String>,
 }
 
@@ -50,6 +52,7 @@ pub(crate) fn parse_telemetry(
     t.system = on(raw.system, t.system);
     t.git = on(raw.git, t.git);
     t.github = on(raw.github, t.github);
+    t.agents = on(raw.agents, t.agents);
     let secs = |key: &str, v: Option<i64>, default: u64| -> Result<u64, ConfigError> {
         match v {
             None => Ok(default),
@@ -65,6 +68,7 @@ pub(crate) fn parse_telemetry(
     t.system_secs = secs("system_secs", raw.system_secs, t.system_secs)?;
     t.git_secs = secs("git_secs", raw.git_secs, t.git_secs)?;
     t.github_secs = secs("github_secs", raw.github_secs, t.github_secs)?;
+    t.agents_secs = secs("agents_secs", raw.agents_secs, t.agents_secs)?;
     if let Some(p) = raw.transcripts_path {
         let p = p.trim();
         if p.is_empty() {

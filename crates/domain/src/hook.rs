@@ -13,10 +13,11 @@ pub enum HookEvent {
     Notification,
     PermissionDenied,
     StopFailure,
+    InstructionsLoaded,
 }
 
 impl HookEvent {
-    pub const ALL: [HookEvent; 10] = [
+    pub const ALL: [HookEvent; 11] = [
         HookEvent::PreToolUse,
         HookEvent::PostToolUse,
         HookEvent::PostToolUseFailure,
@@ -27,6 +28,7 @@ impl HookEvent {
         HookEvent::Notification,
         HookEvent::PermissionDenied,
         HookEvent::StopFailure,
+        HookEvent::InstructionsLoaded,
     ];
 
     /// Claude Code's name, as it appears in settings and hook input.
@@ -42,6 +44,7 @@ impl HookEvent {
             HookEvent::Notification => "Notification",
             HookEvent::PermissionDenied => "PermissionDenied",
             HookEvent::StopFailure => "StopFailure",
+            HookEvent::InstructionsLoaded => "InstructionsLoaded",
         }
     }
 

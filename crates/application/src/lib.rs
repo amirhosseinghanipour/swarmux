@@ -50,9 +50,10 @@ pub use settings::{
     TelemetrySettings, UiSettings, WorktreeSettings,
 };
 pub use telemetry::{
-    ActivityView, Battery, CiRun, Collected, Commit, DiffStat, DiskUsage, ENVIRONMENTS,
-    EnvironmentView, GitStatus, GithubStatus, LimitView, ProcessStat, PullRequest, SystemStats,
-    TICKER_LEN, TOP_FILES, TelemetryService, TelemetrySnapshot,
+    ActivityView, AgentsPoll, Battery, CacheView, CiRun, Collected, CombinedStatusline, Commit,
+    DiffStat, DiskUsage, ENVIRONMENTS, EnvironmentView, GitStatus, GithubStatus, InstructionsView,
+    LimitView, ProcessStat, PullRequest, StatuslineFeed, StatuslineView, SystemStats, TICKER_LEN,
+    TOP_FILES, TelemetryService, TelemetrySnapshot, TruthBoard,
 };
 pub use worktree::{
     AddWorktree, Added, GcReport, Prepared, Removed, WorktreeService, WorktreeStore, WorktreeView,

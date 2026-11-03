@@ -4,11 +4,13 @@
 //! shared snapshot; [`TelemetryCollector::snapshot`] only clones it. A source
 //! that fails keeps its last data and reports the error; nothing panics.
 
+pub mod agents;
 pub mod battery;
 pub mod cli;
 pub mod github;
 pub mod localtime;
 pub mod repo;
+pub mod statusline;
 pub mod system;
 pub mod transcripts;
 
@@ -18,6 +20,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use swarmux_application::AgentsPoll;
 use swarmux_application::ports::{Clock, TelemetryFeed};
 use swarmux_application::{Collected, Settings, TelemetrySettings, TelemetrySnapshot};
 use swarmux_domain::telemetry::PriceTable;
@@ -39,6 +42,8 @@ pub struct CollectorConfig {
     pub home: PathBuf,
     pub git: PathBuf,
     pub gh: PathBuf,
+    /// The `claude` executable `claude agents --json` runs.
+    pub claude: PathBuf,
 }
 
 impl CollectorConfig {
@@ -55,6 +60,8 @@ impl CollectorConfig {
             home: paths.home.clone(),
             git: "git".into(),
             gh: "gh".into(),
+            claude: std::env::var_os("SWARMUX_CLAUDE_BIN")
+                .map_or_else(|| "claude".into(), Into::into),
         }
     }
 }
@@ -144,6 +151,7 @@ impl TelemetryCollector {
             system: pending(s.system),
             git: pending(s.git),
             github: pending(s.github),
+            external: pending(s.agents),
             ..TelemetrySnapshot::default()
         };
         let shared = Arc::new(Shared {
@@ -189,6 +197,15 @@ impl TelemetryCollector {
                 secs(s.github_secs),
                 true,
                 github_worker(&config),
+            ));
+        }
+        if s.agents {
+            threads.extend(spawn(
+                &shared,
+                "agents",
+                secs(s.agents_secs),
+                false,
+                agents_worker(Box::new(agents::ClaudeAgents::new(config.claude.clone()))),
             ));
         }
         TelemetryCollector { shared, threads }
@@ -402,6 +419,30 @@ fn github_worker(config: &CollectorConfig) -> Worker {
                     h.data = None;
                     h.error = Some(format!("gh: {}", e.message));
                     h.hint = e.hint;
+                }
+            }
+        });
+    })
+}
+
+fn agents_worker(poll: Box<dyn AgentsPoll>) -> Worker {
+    Box::new(move |shared: &Shared| {
+        let started = Instant::now();
+        let result = poll.list();
+        let at = now();
+        shared.update(|snap| {
+            let a = &mut snap.external;
+            a.took_ms = elapsed_ms(started);
+            match result {
+                Ok(sessions) => {
+                    a.data = Some(sessions);
+                    a.updated_at = Some(at);
+                    a.error = None;
+                    a.hint = None;
+                }
+                Err(e) => {
+                    a.error = Some(e);
+                    a.hint = Some("needs Claude Code 2.1.2xx or newer".into());
                 }
             }
         });

@@ -1,13 +1,17 @@
 use std::path::Path;
 
 use swarmux_domain::telemetry::{
-    Environment, HOUR, MINUTE, McpServer, RateLimit, SessionUsage, Spend, UsageReport,
+    Environment, ExternalKind, ExternalSession, ExternalState, HOUR, InstructionFile, LimitSource,
+    MINUTE, McpServer, PromptCache, PullRef, RateLimit, SessionUsage, Spend, Statusline,
+    UsageReport, WindowReading,
 };
 use swarmux_domain::{Actor, AgentEvent, Session, SessionId};
 
 use super::*;
 use crate::ports::{RunnerMsg, TelemetryStore};
-use crate::testing::{FakeRunner, FakeTelemetry, FakeTelemetryStore, FixedClock, InMemoryStore};
+use crate::testing::{
+    FakeRunner, FakeStatuslineFeed, FakeTelemetry, FakeTelemetryStore, FixedClock, InMemoryStore,
+};
 
 const NOW: i64 = 1_793_613_600_000;
 
@@ -19,6 +23,7 @@ struct Fixture {
     store: Rc<FakeTelemetryStore>,
     clock: Rc<FixedClock>,
     session: Session,
+    sessions: Rc<InMemoryStore>,
 }
 
 fn fixture() -> Fixture {
@@ -36,7 +41,7 @@ fn fixture() -> Fixture {
     )
     .with_telemetry_store(store.clone());
     let feed = Rc::new(FakeTelemetry::default());
-    let telemetry = TelemetryService::new(feed.clone(), sessions, clock.clone());
+    let telemetry = TelemetryService::new(feed.clone(), sessions.clone(), clock.clone());
     Fixture {
         telemetry,
         feed,
@@ -45,6 +50,7 @@ fn fixture() -> Fixture {
         store,
         clock,
         session,
+        sessions,
     }
 }
 
@@ -261,4 +267,173 @@ fn todos_and_agent_tree_per_job() {
     );
     assert_eq!(tree.current_tool.as_deref(), Some("Task explorer: map"));
     assert!(f.jobs.agent_tree(swarmux_domain::JobId(999)).is_none());
+}
+
+fn status(session: &str, at: i64, five: f64, resets: i64) -> Statusline {
+    Statusline {
+        session_id: session.into(),
+        at,
+        five_hour: Some(WindowReading {
+            used: five,
+            resets_at: Some(resets),
+        }),
+        ..Statusline::default()
+    }
+}
+
+fn with_statusline(f: Fixture) -> (Fixture, Rc<FakeStatuslineFeed>, Rc<TruthBoard>) {
+    let lines = Rc::new(FakeStatuslineFeed::default());
+    let board = Rc::new(TruthBoard::new(f.clock.clone()));
+    let telemetry = TelemetryService::new(f.feed.clone(), f.jobs_sessions(), f.clock.clone())
+        .with_truth(board.clone(), lines.clone());
+    (Fixture { telemetry, ..f }, lines, board)
+}
+
+impl Fixture {
+    fn jobs_sessions(&self) -> Rc<dyn SessionRepository> {
+        self.sessions.clone()
+    }
+}
+
+#[test]
+fn the_freshest_source_wins_each_window_and_is_marked() {
+    let f = fixture();
+    let reset = NOW + 2 * HOUR;
+    let (mut f, lines, _) = with_statusline(f);
+    f.jobs.dispatch(f.session.id, "go").unwrap();
+    f.emit(AgentEvent::RateLimit(limit("five_hour", 0.5, reset)));
+    f.emit(AgentEvent::RateLimit(limit(
+        "seven_day",
+        0.8,
+        NOW + 3 * HOUR,
+    )));
+    let out = f.telemetry.snapshot(&f.jobs);
+    assert!(
+        out.limits
+            .iter()
+            .all(|l| l.source == LimitSource::RateLimitEvent)
+    );
+
+    // A status line reading taken after the stream's takes over its window only.
+    lines.push(status("s1", NOW + 1000, 0.62, reset));
+    let out = f.telemetry.snapshot(&f.jobs);
+    let five = out.limits.iter().find(|l| l.window == "five_hour").unwrap();
+    assert_eq!(five.source, LimitSource::Statusline);
+    assert_eq!(five.utilization, Some(0.62));
+    let seven = out.limits.iter().find(|l| l.window == "seven_day").unwrap();
+    assert_eq!(seven.source, LimitSource::RateLimitEvent);
+    assert_eq!(out.limits[0].window, "five_hour", "shortest window first");
+
+    // An older status line reading never replaces a newer stream reading.
+    lines.push(status("s2", NOW - 5000, 0.1, reset));
+    let out = f.telemetry.snapshot(&f.jobs);
+    let five = out.limits.iter().find(|l| l.window == "five_hour").unwrap();
+    assert_eq!(five.utilization, Some(0.62));
+}
+
+#[test]
+fn a_window_only_the_status_line_knows_is_listed() {
+    let (f, lines, _) = with_statusline(fixture());
+    lines.push(Statusline {
+        seven_day: Some(WindowReading {
+            used: 0.9,
+            resets_at: Some(NOW + 3 * HOUR),
+        }),
+        ..status("s1", NOW, 0.1, NOW + HOUR)
+    });
+    let out = f.telemetry.snapshot(&f.jobs);
+    let windows: Vec<_> = out.limits.iter().map(|l| l.window.as_str()).collect();
+    assert_eq!(windows, ["five_hour", "seven_day"]);
+    assert!(
+        out.limits
+            .iter()
+            .all(|l| l.source == LimitSource::Statusline)
+    );
+    assert_eq!(out.limits[1].utilization, Some(0.9));
+}
+
+#[test]
+fn cache_and_pull_request_come_from_the_status_line() {
+    let (f, lines, _) = with_statusline(fixture());
+    lines.push(Statusline {
+        cache: Some(PromptCache {
+            warm: Some(true),
+            ttl: Some("5m".into()),
+            expires_at: Some(NOW + 4 * MINUTE),
+            hit_ratio: Some(0.93),
+            ..PromptCache::default()
+        }),
+        pr: Some(PullRef {
+            number: Some(7),
+            review_state: Some("approved".into()),
+            ..PullRef::default()
+        }),
+        ..status("s1", NOW - 1000, 0.1, NOW + HOUR)
+    });
+    lines.push(status("s2", NOW - 9000, 0.1, NOW + HOUR));
+    let out = f.telemetry.snapshot(&f.jobs);
+    assert_eq!(out.statuslines.len(), 2);
+    let first = &out.statuslines[0];
+    assert_eq!(first.session_id, "s1", "newest first");
+    let cache = first.cache.as_ref().unwrap();
+    assert!(cache.warm);
+    assert_eq!(cache.expires_in, Some(4 * MINUTE));
+    assert_eq!(cache.hit_ratio, Some(0.93));
+    assert_eq!(
+        first.pr.as_ref().unwrap().review_state.as_deref(),
+        Some("approved")
+    );
+
+    // Five minutes later the cache has gone cold.
+    f.clock.advance(5 * MINUTE);
+    let cache = f.telemetry.snapshot(&f.jobs).statuslines[0]
+        .cache
+        .clone()
+        .unwrap();
+    assert!(!cache.warm);
+    assert_eq!(cache.expires_in, Some(0));
+}
+
+#[test]
+fn external_sessions_exclude_swarmux_jobs_and_keep_waiting_state() {
+    let f = fixture();
+    let ext = |id: &str, state, waiting: Option<&str>| ExternalSession {
+        session_id: id.into(),
+        name: id.into(),
+        cwd: "/x".into(),
+        kind: ExternalKind::Interactive,
+        pid: Some(1),
+        state,
+        waiting_for: waiting.map(String::from),
+        started_at: None,
+    };
+    let snap = TelemetrySnapshot {
+        external: Collected {
+            data: Some(vec![
+                ext(&f.session.id.to_string(), ExternalState::Working, None),
+                ext("outside", ExternalState::Blocked, Some("permission prompt")),
+            ]),
+            ..Collected::pending()
+        },
+        ..TelemetrySnapshot::default()
+    };
+    f.feed.set(snap);
+    let out = f.telemetry.snapshot(&f.jobs);
+    let listed = out.external.data.unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].session_id, "outside");
+    assert!(listed[0].is_waiting());
+}
+
+#[test]
+fn instruction_inventory_is_in_the_snapshot() {
+    let (f, _, board) = with_statusline(fixture());
+    board.record_instruction(
+        "s1",
+        None,
+        InstructionFile::from_notice("/w/CLAUDE.md", "session_start;Project", NOW),
+    );
+    let out = f.telemetry.snapshot(&f.jobs);
+    assert_eq!(out.instructions.len(), 1);
+    assert_eq!(out.instructions[0].files[0].memory_type, "Project");
 }

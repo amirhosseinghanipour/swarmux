@@ -62,10 +62,13 @@ pub struct TelemetrySettings {
     pub git: bool,
     /// Pull requests and CI through the `gh` CLI.
     pub github: bool,
+    /// Other Claude Code sessions, from `claude agents --json`.
+    pub agents: bool,
     pub usage_secs: u64,
     pub system_secs: u64,
     pub git_secs: u64,
     pub github_secs: u64,
+    pub agents_secs: u64,
     /// Where transcripts are read from; `None` means `~/.claude/projects`
     /// (or `$CLAUDE_CONFIG_DIR/projects`).
     pub transcripts_path: Option<PathBuf>,
@@ -78,10 +81,12 @@ impl Default for TelemetrySettings {
             system: true,
             git: true,
             github: true,
+            agents: true,
             usage_secs: 15,
             system_secs: 1,
             git_secs: 5,
             github_secs: 60,
+            agents_secs: 15,
             transcripts_path: None,
         }
     }

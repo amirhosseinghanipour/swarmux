@@ -1143,3 +1143,21 @@ impl Default for WorktreeRig {
         WorktreeRig::new()
     }
 }
+
+/// Status lines pushed by the test.
+#[derive(Default)]
+pub struct FakeStatuslineFeed {
+    queue: RefCell<Vec<swarmux_domain::telemetry::Statusline>>,
+}
+
+impl FakeStatuslineFeed {
+    pub fn push(&self, line: swarmux_domain::telemetry::Statusline) {
+        self.queue.borrow_mut().push(line);
+    }
+}
+
+impl crate::telemetry::StatuslineFeed for FakeStatuslineFeed {
+    fn poll_statuslines(&self) -> Vec<swarmux_domain::telemetry::Statusline> {
+        std::mem::take(&mut *self.queue.borrow_mut())
+    }
+}

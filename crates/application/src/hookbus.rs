@@ -7,12 +7,14 @@
 use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
 
+use swarmux_domain::telemetry::InstructionFile;
 use swarmux_domain::{CheckpointReason, HookEvent, JobId, Millis, SessionId};
 
 use crate::attention::{Change, ChangeKind};
 use crate::checkpoint::{CheckpointService, Notes};
 use crate::ledger::LedgerService;
 use crate::ports::{Clock, JobRepository};
+use crate::telemetry::TruthBoard;
 use crate::{AppError, AppResult};
 
 /// Changes the bus keeps for the change log.
@@ -132,6 +134,7 @@ pub struct HookBus {
     signals: HashMap<JobId, SessionSignals>,
     changes: VecDeque<Change>,
     checkpoints: Option<Rc<CheckpointService>>,
+    truth: Option<Rc<TruthBoard>>,
 }
 
 impl HookBus {
@@ -149,7 +152,14 @@ impl HookBus {
             signals: HashMap::new(),
             changes: VecDeque::new(),
             checkpoints: None,
+            truth: None,
         }
+    }
+
+    /// Keeps the instruction files sessions load on `board`.
+    pub fn with_truth(mut self, board: Rc<TruthBoard>) -> HookBus {
+        self.truth = Some(board);
+        self
     }
 
     /// Takes a checkpoint of the job's worktree before each compaction.
@@ -210,6 +220,10 @@ impl HookBus {
     }
 
     fn observe(&mut self, n: &HookNotice, now: Millis) {
+        if let (HookEvent::InstructionsLoaded, Some(board)) = (n.event, &self.truth) {
+            let file = InstructionFile::from_notice(&n.summary, &n.detail, now);
+            board.record_instruction(&n.session, n.job, file);
+        }
         if let Some(job) = n.job {
             let s = self.signals.entry(job).or_default();
             s.last_event_at = Some(now);

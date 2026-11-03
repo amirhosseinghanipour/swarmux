@@ -13,15 +13,19 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use swarmux_application::ports::{HookInbox, InboxItem};
 use swarmux_application::{
     AllowStop, HookFeed, HookNotice, NoSessionContext, SessionStartContext, SessionStartInfo,
-    SharedPolicy, StopAnswer, StopContext, StopPolicy,
+    SharedPolicy, StatuslineFeed, StopAnswer, StopContext, StopPolicy,
 };
-use swarmux_domain::{Decision, HookEvent, Verdict};
+use swarmux_domain::telemetry::Statusline;
+use swarmux_domain::{Decision, HookEvent, JobId, Verdict};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::runtime::Handle;
 use tokio::sync::oneshot;
 use tokio::task::AbortHandle;
 
 use super::protocol::{WireReply, WireRequest};
+use crate::SystemClock;
+use crate::telemetry::statusline::parse_statusline;
+use swarmux_application::ports::Clock;
 
 /// Largest request accepted, in bytes.
 const REQUEST_MAX: u64 = 1 << 20;
@@ -49,6 +53,7 @@ struct Shared {
     policy: SharedPolicy,
     items: Mutex<Sender<InboxItem>>,
     notices: Mutex<Sender<HookNotice>>,
+    statuslines: Mutex<Sender<Statusline>>,
     responders: Responders,
     waiting: Waiting,
     next_id: AtomicU64,
@@ -64,6 +69,7 @@ pub struct HookServer {
     shared: Arc<Shared>,
     items: Mutex<Receiver<InboxItem>>,
     notices: Mutex<Receiver<HookNotice>>,
+    statuslines: Mutex<Receiver<Statusline>>,
     task: AbortHandle,
 }
 
@@ -83,10 +89,12 @@ impl HookServer {
     ) -> io::Result<HookServer> {
         let (tx, rx) = channel();
         let (ntx, nrx) = channel();
+        let (stx, srx) = channel();
         let shared = Arc::new(Shared {
             policy,
             items: Mutex::new(tx),
             notices: Mutex::new(ntx),
+            statuslines: Mutex::new(stx),
             responders,
             waiting: Mutex::default(),
             next_id: AtomicU64::new(1),
@@ -98,6 +106,7 @@ impl HookServer {
             shared,
             items: Mutex::new(rx),
             notices: Mutex::new(nrx),
+            statuslines: Mutex::new(srx),
             task,
         })
     }
@@ -119,6 +128,12 @@ impl Drop for HookServer {
 impl HookFeed for HookServer {
     fn poll_notices(&self) -> Vec<HookNotice> {
         lock(&self.notices).try_iter().collect()
+    }
+}
+
+impl StatuslineFeed for HookServer {
+    fn poll_statuslines(&self) -> Vec<Statusline> {
+        lock(&self.statuslines).try_iter().collect()
     }
 }
 
@@ -199,6 +214,13 @@ async fn serve<S: AsyncRead + AsyncWrite>(conn: S, shared: Arc<Shared>) {
     let mut line = String::new();
     let reply = match reader.read_line(&mut line).await {
         Ok(_) => match serde_json::from_str::<WireRequest>(&line) {
+            Ok(wire) if wire.is_statusline() => {
+                let job = wire.job_id.map(JobId);
+                if let Some(line) = parse_statusline(&wire.raw, job, SystemClock.now()) {
+                    let _ = lock(&shared.statuslines).send(line);
+                }
+                WireReply::pass()
+            }
             Ok(wire) => match wire.hook_event() {
                 Some(HookEvent::PreToolUse) => {
                     WireReply::from_decision(&decide(wire, &shared).await)
