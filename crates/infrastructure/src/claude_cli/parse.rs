@@ -5,7 +5,7 @@
 
 use serde_json::Value;
 use swarmux_domain::telemetry::{Environment, McpServer, RateLimit, parse_todos};
-use swarmux_domain::{Actor, AgentEvent};
+use swarmux_domain::{Actor, AgentEvent, SessionState};
 
 const SUMMARY_MAX: usize = 120;
 const PREVIEW_MAX: usize = 200;
@@ -38,6 +38,14 @@ pub fn parse_line(line: &str) -> Vec<AgentEvent> {
 
 fn parse_system(v: &Value) -> Vec<AgentEvent> {
     let subtype = str_at(v, "subtype");
+    if subtype == "session_state_changed" {
+        return match SessionState::parse(&str_at(v, "state")) {
+            Some(state) => vec![AgentEvent::SessionState(state)],
+            None => vec![AgentEvent::Ignored {
+                kind: format!("system/{subtype}"),
+            }],
+        };
+    }
     if subtype == "init" {
         vec![
             AgentEvent::Init {
@@ -466,6 +474,32 @@ mod tests {
 
     /// Shaped like Claude Code 2.1's `system/init` (names made up, lists shortened).
     const INIT: &str = r#"{"type":"system","subtype":"init","cwd":"/work/demo","session_id":"00000000-0000-4000-8000-000000000009","tools":["Task","Bash","Read"],"mcp_servers":[{"name":"docs","status":"connected","source":"claudeai"},{"name":"mail","status":"needs-auth","source":"claudeai"},{"name":"local","status":"pending","source":"user"}],"model":"claude-haiku-5-5","permissionMode":"default","slash_commands":["review"],"apiKeySource":"none","claude_code_version":"2.1.316","output_style":"default","agents":["claude","explorer"],"skills":["pdf","docx"],"plugins":[{"name":"scholar","path":"/p/scholar","source":"scholar@scholar","version":"1.0.0"}],"capabilities":["x"],"uuid":"u"}"#;
+
+    /// As Claude Code 2.1 prints it with `CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS=1`.
+    #[test]
+    fn session_state_changes_become_events() {
+        let line = |s: &str| {
+            format!(
+                r#"{{"type":"system","subtype":"session_state_changed","state":"{s}","uuid":"u","session_id":"s"}}"#
+            )
+        };
+        assert_eq!(
+            parse_line(&line("running")),
+            [AgentEvent::SessionState(SessionState::Running)]
+        );
+        assert_eq!(
+            parse_line(&line("requires_action")),
+            [AgentEvent::SessionState(SessionState::RequiresAction)]
+        );
+        assert_eq!(
+            parse_line(&line("idle")),
+            [AgentEvent::SessionState(SessionState::Idle)]
+        );
+        assert!(matches!(
+            parse_line(&line("teleporting")).as_slice(),
+            [AgentEvent::Ignored { .. }]
+        ));
+    }
 
     #[test]
     fn init_also_reports_the_environment() {

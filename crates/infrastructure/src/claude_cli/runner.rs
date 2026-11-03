@@ -16,6 +16,9 @@ use super::command::{build_args, display, user_message};
 use super::parse::parse_line;
 use crate::hook::{ENV_JOB, ENV_PIPE, hook_settings};
 
+/// Makes `claude` report `system/session_state_changed` on stdout.
+const ENV_SESSION_STATE: &str = "CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS";
+
 /// How much of the end of stderr is kept for error messages.
 const STDERR_TAIL: usize = 2048;
 
@@ -91,6 +94,8 @@ impl AgentRunner for ClaudeCli {
         let mut env = self.env.clone();
         let job = request.job_id;
         let mut extra_args = Vec::new();
+        // Exact idle / running / requires_action instead of guessing.
+        env.push((ENV_SESSION_STATE.into(), "1".into()));
         if let Some(guard) = &self.guard {
             extra_args.extend(guard.args());
             env.push((ENV_PIPE.into(), guard.pipe.clone()));
