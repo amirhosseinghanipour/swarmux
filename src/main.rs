@@ -2,24 +2,27 @@
 
 mod audit;
 mod doctor;
+mod gate;
 mod jev;
 mod telemetry;
 
+use std::path::PathBuf;
 use std::process::ExitCode;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use anyhow::Context;
 use clap::{Parser, Subcommand};
 use swarmux_application::ledger::{LedgerService, LedgeredDecisions, LedgeredJobs};
 use swarmux_application::ports::Clock;
 use swarmux_application::{
-    GuardService, HistoryService, HookBus, Jev, JobService, PromptService, RoutingService,
-    SessionService, SharedPolicy,
+    GateKeeper, GateService, GuardService, HistoryService, HookBus, Jev, JobService, PromptService,
+    RoutingService, SessionService, SharedPolicy,
 };
-use swarmux_infrastructure::hook::{self, HookServer};
+use swarmux_infrastructure::hook::{self, HookServer, Responders};
 use swarmux_infrastructure::{
-    ClaudeCli, ConfigRuleWriter, FsAgentCatalog, GitCli, GuardHook, HaikuRouter, Paths,
-    SqliteLedger, SqliteStore, SysinfoMonitor, SystemClock, load_settings,
+    ClaudeCli, ConfigRuleWriter, FsAgentCatalog, FsGateSource, GitCli, GuardHook, HaikuRouter,
+    Paths, ProcessChecker, SqliteLedger, SqliteStore, SysinfoMonitor, SystemClock, load_settings,
 };
 use swarmux_tui::{App, Launch};
 
@@ -51,6 +54,11 @@ enum Command {
         #[command(subcommand)]
         action: AuditAction,
     },
+    /// The done-gate: the checks an agent must pass before it may stop.
+    Gate {
+        #[command(subcommand)]
+        action: GateAction,
+    },
     /// Hooks Claude Code runs inside swarmux jobs (not for direct use).
     #[command(hide = true)]
     Hook {
@@ -70,6 +78,22 @@ enum JevAction {
     Test {
         /// typesafe or openrouter (default: the one in config.toml)
         provider: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum GateAction {
+    /// Run the repository's checks now; exits with 1 if one fails.
+    Run {
+        /// A folder inside the repository (default: the current one).
+        #[arg(long)]
+        dir: Option<PathBuf>,
+    },
+    /// Show the gate that applies: checks, protected paths, limits.
+    Show {
+        /// A folder inside the repository (default: the current one).
+        #[arg(long)]
+        dir: Option<PathBuf>,
     },
 }
 
@@ -100,6 +124,18 @@ fn main() -> anyhow::Result<ExitCode> {
         Some(Command::Audit {
             action: AuditAction::Tail { n },
         }) => audit::tail_cmd(n),
+        Some(Command::Gate {
+            action: GateAction::Run { dir },
+        }) => {
+            return Ok(if gate::run(dir)? {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            });
+        }
+        Some(Command::Gate {
+            action: GateAction::Show { dir },
+        }) => gate::show(dir),
         None => run_tui(cli.no_splash),
         Some(Command::Doctor) => doctor::run(),
         Some(Command::Jev {
@@ -137,11 +173,21 @@ fn run_tui(no_splash: bool) -> anyhow::Result<()> {
         .enable_all()
         .build()?;
 
+    // The done-gate judges every stop and fences protected paths.
+    let (keeper, gate_records) = GateKeeper::new(
+        Arc::new(FsGateSource::new()),
+        Arc::new(ProcessChecker::new()),
+    );
+    let keeper = Arc::new(keeper);
     let guard_settings = &settings.guard;
-    let policy = SharedPolicy::new(guard_settings.policy());
+    let policy = SharedPolicy::new(guard_settings.policy()).with_fence(keeper.clone());
     let pipe = hook::endpoint_for(std::process::id());
+    let responders = Responders {
+        stop: keeper.clone(),
+        ..Responders::default()
+    };
     let server = Rc::new(
-        HookServer::start(rt.handle(), &pipe, policy.clone())
+        HookServer::start_with(rt.handle(), &pipe, policy.clone(), responders)
             .with_context(|| format!("cannot listen on {pipe}"))?,
     );
     let guard_hook = GuardHook {
@@ -151,6 +197,7 @@ fn run_tui(no_splash: bool) -> anyhow::Result<()> {
     };
     let runner =
         Rc::new(ClaudeCli::new(doctor::claude_bin(), rt.handle().clone()).with_guard(guard_hook));
+    let gate = GateService::new(gate_records, ledger.clone(), store.clone(), clock.clone());
     let hook_bus = HookBus::new(server.clone(), ledger, store.clone(), clock.clone());
     let mut guard = GuardService::new(policy, server, decisions.clone(), clock.clone())
         .with_timeout_secs(guard_settings.approval_timeout_secs)
@@ -188,7 +235,8 @@ fn run_tui(no_splash: bool) -> anyhow::Result<()> {
         .with_loop_repeats(guard_settings.loop_repeats)
         .with_monitor(Rc::new(SysinfoMonitor::new()))
         .with_review(workspace, &settings.review)
-        .with_agent_catalog(Rc::new(FsAgentCatalog::new(Some(paths.home.clone()))));
+        .with_agent_catalog(Rc::new(FsAgentCatalog::new(Some(paths.home.clone()))))
+        .with_execution_log(Rc::new(keeper));
     jobs.recover()?;
     let app = App::new(
         sessions,
@@ -201,6 +249,7 @@ fn run_tui(no_splash: bool) -> anyhow::Result<()> {
     )
     .with_clock(Rc::new(SystemClock))
     .with_hook_bus(hook_bus)
+    .with_gate(gate)
     .with_telemetry_feed(telemetry, &settings.telemetry)
     .with_look(
         &settings.ui,
