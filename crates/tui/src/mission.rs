@@ -21,6 +21,10 @@ pub const CHANGES_KEPT: usize = 40;
 const SNAPSHOT_EVERY_MS: Millis = 1_000;
 /// A feed is stale once its data is older than this many cadences.
 const STALE_AFTER: Millis = 2;
+/// How often a running session is expected to report its status line.
+/// Claude Code refreshes it as the conversation moves; a long tool call
+/// can hold it back, so this is generous.
+const STATUSLINE_EVERY_MS: Millis = 60_000;
 
 /// How often each telemetry feed refreshes, in milliseconds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -29,6 +33,10 @@ pub struct Cadence {
     pub system: Millis,
     pub git: Millis,
     pub github: Millis,
+    /// `claude agents --json`.
+    pub agents: Millis,
+    /// Status lines of running sessions.
+    pub statusline: Millis,
 }
 
 impl Cadence {
@@ -39,6 +47,8 @@ impl Cadence {
             system: ms(t.system_secs),
             git: ms(t.git_secs),
             github: ms(t.github_secs),
+            agents: ms(t.agents_secs),
+            statusline: STATUSLINE_EVERY_MS,
         }
     }
 }
@@ -247,7 +257,42 @@ impl MissionState {
             c.github,
             false,
         );
+        feed(
+            "agents",
+            s.external.enabled,
+            s.external.updated_at,
+            c.agents,
+            s.external.error.is_some(),
+        );
+        if let Some(tell) = self.statusline_tell(now) {
+            out.push(tell);
+        }
         out
+    }
+
+    /// Status lines are expected only while a job runs. They are late once
+    /// the newest one (or, before any arrived, the longest-running job's
+    /// start) is older than two cadences.
+    fn statusline_tell(&self, now: Millis) -> Option<Tell> {
+        let running: Vec<Millis> = self
+            .facts
+            .iter()
+            .filter(|f| f.status == JobStatus::Running)
+            .filter_map(|f| f.started_at)
+            .collect();
+        let earliest = running.iter().min()?;
+        let newest = self
+            .snapshot
+            .statuslines
+            .iter()
+            .map(|v| v.observed_at)
+            .max()
+            .map_or(*earliest, |seen| seen.max(*earliest));
+        let age = now - newest;
+        (age > self.cadence.statusline * STALE_AFTER).then_some(Tell {
+            feed: "statusline",
+            kind: TellKind::Old(age),
+        })
     }
 
     /// The usage report, when the transcripts feed has one.
@@ -629,6 +674,60 @@ mod tests {
         m.snapshot.usage.updated_at = None;
         m.snapshot.usage.error = Some("no transcripts".into());
         assert_eq!(m.tells(now)[0].kind, TellKind::Failed);
+    }
+
+    #[test]
+    fn the_agents_feed_tells_like_the_others() {
+        let mut m = MissionState::default();
+        m.snapshot.external.enabled = true;
+        m.snapshot.external.updated_at = Some(0);
+        // agents: every 15 s, 31 s old.
+        assert_eq!(
+            m.tells(31_000),
+            [Tell {
+                feed: "agents",
+                kind: TellKind::Old(31_000)
+            }]
+        );
+        m.snapshot.external.updated_at = None;
+        m.snapshot.external.error = Some("claude agents failed".into());
+        assert_eq!(m.tells(31_000)[0].kind, TellKind::Failed);
+        m.snapshot.external.enabled = false;
+        assert!(m.tells(31_000).is_empty(), "turned off: no tell");
+    }
+
+    #[test]
+    fn status_lines_are_expected_only_while_a_job_runs() {
+        let s = session("a", 1);
+        let mut m = MissionState::default();
+        let line = |at| swarmux_application::StatuslineView {
+            session_id: "c1".into(),
+            job: Some(JobId(1)),
+            model: None,
+            cwd: None,
+            cost_usd: None,
+            context_used: None,
+            cache: None,
+            pr: None,
+            observed_at: at,
+        };
+        // Nothing runs: silence is fine.
+        m.facts = vec![fact(1, &s, JobStatus::Done)];
+        assert!(m.tells(1_000_000).is_empty());
+        // A job started at 100 and nothing reported for two minutes.
+        m.facts = vec![fact(1, &s, JobStatus::Running)];
+        assert!(m.tells(100 + 120_000).is_empty(), "within two cadences");
+        assert_eq!(
+            m.tells(100 + 120_001),
+            [Tell {
+                feed: "statusline",
+                kind: TellKind::Old(120_001)
+            }]
+        );
+        // A fresh line clears it.
+        m.snapshot.statuslines = vec![line(100_000)];
+        assert!(m.tells(130_000).is_empty());
+        assert_eq!(m.tells(230_001)[0].kind, TellKind::Old(130_001));
     }
 
     #[test]

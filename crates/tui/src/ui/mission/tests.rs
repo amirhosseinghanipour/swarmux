@@ -295,6 +295,18 @@ fn set_feed(t: &TestApp, now: i64) {
         updated_at: Some(now),
         ..Collected::default()
     };
+    // The running sessions report their status lines.
+    snap.statuslines = vec![swarmux_application::StatuslineView {
+        session_id: "claude-0".into(),
+        job: Some(t.runner.request(0).job_id),
+        model: None,
+        cwd: None,
+        cost_usd: None,
+        context_used: None,
+        cache: None,
+        pr: None,
+        observed_at: now,
+    }];
     t.feed.set(snap);
 }
 
