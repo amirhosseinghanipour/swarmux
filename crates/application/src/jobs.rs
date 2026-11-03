@@ -4,7 +4,9 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
-use swarmux_domain::telemetry::{AgentNode, JobActivity, SwarmActivity, agent_tree};
+use swarmux_domain::telemetry::{
+    AgentNode, JobActivity, SwarmActivity, TodoStatus, agent_tree, context_window,
+};
 use swarmux_domain::{
     AgentEvent, DomainError, Job, JobId, JobProgress, JobResult, JobStatus, Limits, LoopBreaker,
     LoopTrip, Millis, PromptId, ReviewState, Session, SessionId, describe, plan, run_order,
@@ -31,6 +33,17 @@ struct Tracked {
     /// The session folder, once started.
     cwd: Option<PathBuf>,
     activity: JobActivity,
+    /// The latest runner message, for stall detection.
+    last_event_at: Option<Millis>,
+    finished_at: Option<Millis>,
+    /// How the job ended, once it has.
+    outcome: Option<JobOutcome>,
+}
+
+/// What a finished job reported, as the inbox needs it.
+struct JobOutcome {
+    error: Option<String>,
+    text: String,
 }
 
 /// One row of the queue screen.
@@ -43,6 +56,45 @@ pub struct QueueEntry {
     pub status: JobStatus,
     pub priority: i32,
     pub cost_usd: f64,
+}
+
+/// Minutes of token flow a [`JobFact`] carries.
+const FACT_FLOW_MINUTES: usize = 30;
+
+/// One job of this run, with the timestamps and outcome the inbox, the wall
+/// and the change log are built from.
+#[derive(Clone, Debug, PartialEq)]
+pub struct JobFact {
+    pub job_id: JobId,
+    pub session_id: SessionId,
+    pub session_name: String,
+    pub prompt: String,
+    pub model: String,
+    pub status: JobStatus,
+    pub created_at: Millis,
+    pub started_at: Option<Millis>,
+    /// The latest message from the running `claude`.
+    pub last_event_at: Option<Millis>,
+    pub finished_at: Option<Millis>,
+    /// Why it failed, once finished.
+    pub error: Option<String>,
+    /// The final answer, once finished.
+    pub result: Option<String>,
+    pub review: Option<ReviewState>,
+    /// Set on a review job: the job it audits.
+    pub review_of: Option<JobId>,
+    pub cost_usd: f64,
+    /// Lead context used, `0.0..` of the window, when known.
+    pub context: Option<f64>,
+    /// Tokens per minute over the last half hour, oldest first.
+    pub flow: Vec<u64>,
+    /// Items of the lead's todo list: done, and all.
+    pub todos_done: u32,
+    pub todos_total: u32,
+    /// Times the loop breaker stopped an agent of this job.
+    pub loop_stops: u32,
+    /// Subagents running now.
+    pub agents_running: u32,
 }
 
 /// Counts for the status bar.
@@ -424,6 +476,53 @@ impl JobService {
         running.chain(queued).chain(finished).map(entry).collect()
     }
 
+    /// What the inbox and the wall need to know about every job of this
+    /// run, oldest first.
+    pub fn facts(&self) -> Vec<JobFact> {
+        let now = self.clock.now();
+        self.tracked
+            .iter()
+            .map(|t| {
+                let p = &t.progress;
+                let flow = t.activity.flow.series(now);
+                let last = flow.len().saturating_sub(FACT_FLOW_MINUTES);
+                JobFact {
+                    job_id: t.job.id,
+                    session_id: t.job.session_id,
+                    session_name: p.session_name.clone(),
+                    prompt: t.job.prompt.clone(),
+                    model: t.job.model.clone(),
+                    status: p.status,
+                    created_at: t.job.created_at,
+                    started_at: t.started_at,
+                    last_event_at: t.last_event_at,
+                    finished_at: t.finished_at,
+                    error: t.outcome.as_ref().and_then(|o| o.error.clone()),
+                    result: t.outcome.as_ref().map(|o| o.text.clone()),
+                    review: p.review.clone(),
+                    review_of: t.job.review_of,
+                    cost_usd: p.cost_usd,
+                    context: p
+                        .context_window
+                        .or_else(|| context_window(&p.model, p.context_used))
+                        .filter(|w| *w > 0)
+                        .map(|w| p.context_used as f64 / w as f64)
+                        .filter(|_| p.context_used > 0),
+                    flow: flow[last..].iter().map(|b| b.total()).collect(),
+                    todos_done: t
+                        .activity
+                        .todos
+                        .iter()
+                        .filter(|d| d.status == TodoStatus::Completed)
+                        .count() as u32,
+                    todos_total: t.activity.todos.len() as u32,
+                    loop_stops: p.loop_stops.len() as u32,
+                    agents_running: p.subagents_running() as u32,
+                }
+            })
+            .collect()
+    }
+
     pub fn stats(&self) -> QueueStats {
         let count = |s: JobStatus| {
             self.tracked
@@ -479,6 +578,9 @@ impl JobService {
             breaker: LoopBreaker::new(self.loop_repeats),
             cwd: None,
             activity: JobActivity::default(),
+            last_event_at: None,
+            finished_at: None,
+            outcome: None,
         });
     }
 
@@ -604,6 +706,7 @@ impl JobService {
             .map_or(0, |at| ((now - at).max(0) / 100) as u32);
         let t = &mut self.tracked[i];
         t.started_at = Some(now);
+        t.last_event_at = Some(now);
         t.job.status = JobStatus::Running;
         t.progress.status = JobStatus::Running;
         t.cwd = Some(session.cwd.clone());
@@ -663,6 +766,7 @@ impl JobService {
         }
         let tick = self.tick_of(i);
         let was_finished = self.tracked[i].progress.status.is_finished();
+        self.tracked[i].last_event_at = Some(now);
 
         let finished = match msg {
             RunnerMsg::Event(ev) => {
@@ -724,6 +828,11 @@ impl JobService {
             }
             let status = self.tracked[i].progress.status;
             self.tracked[i].job.status = status;
+            self.tracked[i].finished_at = Some(now);
+            self.tracked[i].outcome = Some(JobOutcome {
+                error: result.error.clone(),
+                text: result.text.clone(),
+            });
             self.jobs.save_result(job_id, &result)?;
             self.jobs.set_status(job_id, status, now)?;
             self.after_finish(i, &result)?;
