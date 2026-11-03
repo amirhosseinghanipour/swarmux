@@ -31,6 +31,10 @@ impl SystemMonitor for SysinfoMonitor {
         // 0 means the platform didn't report it.
         Some(system.available_memory()).filter(|&free| free > 0)
     }
+
+    fn on_battery(&self) -> Option<bool> {
+        crate::telemetry::battery::read().map(|b| !b.plugged_in)
+    }
 }
 
 #[cfg(test)]
