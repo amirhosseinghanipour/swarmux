@@ -178,7 +178,7 @@ the Guard), so your terminal's colour scheme never shows through.
 ```toml
 theme = "tokyo-night"   # any name above
 layout = "btop"         # command, btop, minimal or one of [[layouts]]
-icons = "nerd"          # "ascii" (default) or "nerd" for Nerd Font glyphs
+icons = "nerd"          # "ascii" (default), "unicode" or "nerd" for Nerd Font glyphs
 gaps = 1                # blank cells between panels, 0-4
 fps = 10                # frames per second, 1-30
 low_power = false       # true: 4 fps, no easing or pulses

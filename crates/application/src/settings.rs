@@ -64,7 +64,7 @@ impl Default for TelemetrySettings {
 pub struct UiSettings {
     pub theme: String,
     pub layout: String,
-    /// `"ascii"` or `"nerd"` (Nerd Font glyphs).
+    /// `"ascii"`, `"unicode"` or `"nerd"` (Nerd Font glyphs).
     pub icons: String,
     /// Blank cells between panels (0-4).
     pub gaps: u16,

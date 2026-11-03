@@ -217,8 +217,11 @@ fn parse_ui(raw: RawUi, text: &str, path: &Path) -> Result<UiSettings, ConfigErr
     }
     if let Some(icons) = raw.icons {
         let icons = icons.trim().to_ascii_lowercase();
-        if icons != "ascii" && icons != "nerd" {
-            return Err(error("icons", "icons must be \"ascii\" or \"nerd\"".into()));
+        if !matches!(icons.as_str(), "ascii" | "unicode" | "nerd") {
+            return Err(error(
+                "icons",
+                "icons must be \"ascii\", \"unicode\" or \"nerd\"".into(),
+            ));
         }
         ui.icons = icons;
     }
@@ -666,6 +669,7 @@ api_key = \"sk-SECRET-123\"",
         let e = parse("theme = \"x\"\nfps = 60").unwrap_err();
         assert_eq!(e.line, Some(2));
         assert!(e.message.contains("between 1 and 30"), "{e}");
+        assert_eq!(parse("icons = \"Unicode\"").unwrap().ui.icons, "unicode");
         assert!(parse("icons = \"emoji\"").is_err());
         assert!(parse("gaps = 9").is_err());
         assert!(parse("theme = \" \"").is_err());
