@@ -13,6 +13,7 @@ mod hook;
 mod job;
 mod json;
 pub mod ledger;
+pub mod mission;
 mod model;
 mod phase;
 mod progress;

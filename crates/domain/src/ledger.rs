@@ -66,10 +66,12 @@ pub enum LedgerKind {
     Checkpoint,
     /// A job worktree was created or reclaimed.
     Worktree,
+    /// A mission changed state.
+    Mission,
 }
 
 impl LedgerKind {
-    pub const ALL: [LedgerKind; 12] = [
+    pub const ALL: [LedgerKind; 13] = [
         LedgerKind::Genesis,
         LedgerKind::JobQueued,
         LedgerKind::JobStarted,
@@ -82,6 +84,7 @@ impl LedgerKind {
         LedgerKind::GateVerdict,
         LedgerKind::Checkpoint,
         LedgerKind::Worktree,
+        LedgerKind::Mission,
     ];
 
     /// The stable name stored and hashed.
@@ -99,6 +102,7 @@ impl LedgerKind {
             LedgerKind::GateVerdict => "gate_verdict",
             LedgerKind::Checkpoint => "checkpoint",
             LedgerKind::Worktree => "worktree",
+            LedgerKind::Mission => "mission",
         }
     }
 
@@ -469,6 +473,7 @@ mod tests {
                 "gate_verdict",
                 "checkpoint",
                 "worktree",
+                "mission",
             ]
         );
     }

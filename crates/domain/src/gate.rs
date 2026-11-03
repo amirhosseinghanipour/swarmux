@@ -474,7 +474,7 @@ pub fn protected_write(
 }
 
 /// Words of one simple command with their quotes removed.
-fn words_of(command: &str) -> Vec<String> {
+pub(crate) fn words_of(command: &str) -> Vec<String> {
     let mut words = Vec::new();
     let mut cur = String::new();
     let mut quote: Option<char> = None;
