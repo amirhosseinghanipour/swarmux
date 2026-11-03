@@ -18,6 +18,7 @@ pub(crate) struct RawGovernor {
     battery_concurrency: Option<i64>,
     max_job_usd: Option<f64>,
     budget_line: Option<bool>,
+    load_hold_at: Option<f64>,
 }
 
 pub(crate) fn parse_governor(
@@ -90,6 +91,9 @@ pub(crate) fn parse_governor(
     }
     if let Some(on) = raw.budget_line {
         g.budget_line = on;
+    }
+    if let Some(v) = raw.load_hold_at {
+        g.load_hold_at = share("load_hold_at", v)?;
     }
     Ok(g)
 }

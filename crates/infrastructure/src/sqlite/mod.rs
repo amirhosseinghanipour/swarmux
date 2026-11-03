@@ -1,5 +1,6 @@
 //! SQLite adapter for the storage ports.
 
+mod alarms;
 mod consents;
 mod decisions;
 mod evidence;
@@ -235,6 +236,35 @@ CREATE TABLE IF NOT EXISTS pending_resumes (
 );
 ";
 
+/// The inbox's memory: the alarm log, shelved items and how each kind of
+/// ask has been answered per repository.
+const SCHEMA_ALARMS: &str = "
+CREATE TABLE IF NOT EXISTS alarm_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    at INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    key TEXT NOT NULL,
+    priority TEXT,
+    detail TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS alarm_log_at ON alarm_log(at);
+CREATE TABLE IF NOT EXISTS alarm_shelved (
+    item TEXT PRIMARY KEY,
+    job_id INTEGER,
+    shelved_at INTEGER NOT NULL,
+    until_at INTEGER,
+    until_job_ends INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS alarm_tally (
+    scope TEXT NOT NULL,
+    signature TEXT NOT NULL,
+    approved INTEGER NOT NULL DEFAULT 0,
+    rejected INTEGER NOT NULL DEFAULT 0,
+    suggested INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (scope, signature)
+);
+";
+
 /// Migrations in order; index + 1 is the resulting `user_version`.
 const MIGRATIONS: &[&str] = &[
     SCHEMA_V1,
@@ -249,6 +279,7 @@ const MIGRATIONS: &[&str] = &[
     SCHEMA_V10,
     SCHEMA_V11,
     SCHEMA_GOVERNOR,
+    SCHEMA_ALARMS,
 ];
 
 /// Maps adapter errors into the application's error type.

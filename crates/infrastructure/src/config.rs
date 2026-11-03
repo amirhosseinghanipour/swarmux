@@ -677,6 +677,26 @@ hold_at = 0.97
             .hold_at,
             0.97
         );
+        assert_eq!(parse("").unwrap().governor.load_hold_at, 0.70);
+        assert_eq!(
+            parse(
+                "[governor]
+load_hold_at = 0.8
+"
+            )
+            .unwrap()
+            .governor
+            .load_hold_at,
+            0.8
+        );
+        assert!(
+            parse(
+                "[governor]
+load_hold_at = 0
+"
+            )
+            .is_err()
+        );
         for bad in [
             "[governor]
 hold_at = 97
