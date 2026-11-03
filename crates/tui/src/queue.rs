@@ -63,6 +63,7 @@ mod tests {
                 status: JobStatus::Queued,
                 priority: 0,
                 cost_usd: 0.0,
+                note: None,
             })
             .collect()
     }

@@ -11,10 +11,11 @@ use std::path::Path;
 use std::rc::Rc;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
+use swarmux_domain::budget::Reservation;
 use swarmux_domain::gate::GateOutcome;
 use swarmux_domain::mission::{
-    BadTransition, Clarification, Contract, Finding, LintReport, Mission, MissionState, Question,
-    Severity, Signal, apply_fixes, compile, lint_report,
+    BadTransition, Clarification, Contract, Finding, LintReport, Mission, MissionPhase,
+    MissionState, Question, Severity, Signal, apply_fixes, compile, lint_report,
 };
 use swarmux_domain::{JobId, JobStatus, Millis, SessionId, slug};
 
@@ -332,7 +333,16 @@ impl MissionService {
         let session = m
             .session
             .ok_or_else(|| AppError::Mission(format!("{slug} has no session to run in")))?;
-        let job = jobs.dispatch(session, &compiled.prompt)?;
+        // The job may spend planning's leftovers and its own share; the
+        // verify and review shares stay reserved.
+        let cap = m
+            .contract
+            .budget
+            .usd
+            .map(|usd| Reservation::new(usd).headroom(MissionPhase::Implement, &m.spend))
+            // Nothing left still caps the job rather than freeing it.
+            .map(|left| left.max(0.01));
+        let job = jobs.dispatch_capped(session, &compiled.prompt, cap)?;
         if let Some(gates) = &self.gates {
             gates.assign(job, compiled.gate);
         }

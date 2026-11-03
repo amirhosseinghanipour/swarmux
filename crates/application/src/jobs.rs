@@ -5,8 +5,10 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
+use swarmux_domain::budget::{Admission, JobClass, is_limit_error};
 use swarmux_domain::telemetry::{
-    AgentNode, JobActivity, SwarmActivity, TodoStatus, agent_tree, context_window,
+    AgentNode, JobActivity, LimitState, RateLimit, SwarmActivity, TodoStatus, agent_tree,
+    context_window,
 };
 use swarmux_domain::{
     AgentEvent, DomainError, Job, JobId, JobProgress, JobResult, JobStatus, Limits, LoopBreaker,
@@ -15,6 +17,7 @@ use swarmux_domain::{
 };
 
 use crate::gate::ExecutionLog;
+use crate::governor::Governor;
 use crate::ports::{
     AgentCatalog, AgentRunner, Clock, JobRepository, NewJob, RunRequest, RunSink, RunnerMsg,
     SessionRepository, SystemMonitor, TelemetryStore, Workspace,
@@ -28,6 +31,8 @@ const KEEP_FINISHED: usize = 50;
 const RECENT_FINISHED: usize = 10;
 /// How often free memory is read.
 const RAM_EVERY_MS: Millis = 1_000;
+/// How often the power source is read.
+const POWER_EVERY_MS: Millis = 30_000;
 
 struct Tracked {
     job: Job,
@@ -46,6 +51,10 @@ struct Tracked {
     session_state: Option<SessionState>,
     /// Shell commands waiting for their result, by tool_use id.
     shell: HashMap<String, String>,
+    /// The governor's latest word on the job, while queued and once started.
+    admission: Option<Admission>,
+    /// A window that refused the job's requests, if one did.
+    refused: Option<RateLimit>,
 }
 
 /// What a finished job reported, as the inbox needs it.
@@ -64,6 +73,9 @@ pub struct QueueEntry {
     pub status: JobStatus,
     pub priority: i32,
     pub cost_usd: f64,
+    /// Why the governor holds or downgraded the job:
+    /// "deferred: 5h at 94%, resumes 15:58".
+    pub note: Option<String>,
 }
 
 /// Minutes of token flow a [`JobFact`] carries.
@@ -117,6 +129,12 @@ pub struct QueueStats {
     pub free_ram: Option<u64>,
     /// Free memory is below the configured minimum, so nothing starts.
     pub ram_low: bool,
+    /// Queued jobs the governor holds until a usage window resets.
+    pub deferred: usize,
+    /// Stopped by a usage limit; resumed by themselves after the reset.
+    pub awaiting_reset: usize,
+    /// On battery, so fewer jobs run at once.
+    pub on_battery: bool,
 }
 
 /// What one [`JobService::pump`] did.
@@ -168,6 +186,23 @@ pub struct JobService {
     worktrees: Option<Rc<WorktreeService>>,
     /// When worktrees were last reclaimed.
     last_gc: Option<Millis>,
+    /// Admission by usage window, budgets and auto-resume after a reset.
+    governor: Option<Governor>,
+    /// Dollar caps of single jobs (a mission's share of its reservation).
+    caps: HashMap<JobId, f64>,
+    /// Last power reading and when it was taken: on battery or not.
+    power: Option<(Millis, bool)>,
+}
+
+/// Where a queued job comes from, and what it may spend.
+#[derive(Clone, Copy, Default)]
+struct Lineage {
+    wants_review: bool,
+    review_of: Option<JobId>,
+    /// The interrupted job whose worktree it continues.
+    inherits: Option<JobId>,
+    /// `--max-budget-usd` of the job.
+    cap: Option<f64>,
 }
 
 /// How often stale worktrees are looked for.
@@ -206,7 +241,22 @@ impl JobService {
             executions: None,
             worktrees: None,
             last_gc: None,
+            governor: None,
+            caps: HashMap::new(),
+            power: None,
         }
+    }
+
+    /// Admits queued jobs by usage window (holding, deferring or
+    /// downgrading them), caps their spend, runs fewer on battery and
+    /// resumes jobs a usage limit stopped once the window resets.
+    pub fn with_governor(mut self, governor: Governor) -> JobService {
+        self.governor = Some(governor);
+        self
+    }
+
+    pub fn governor(&self) -> Option<&Governor> {
+        self.governor.as_ref()
     }
 
     /// Runs each job in its own git worktree (when its session wants one),
@@ -313,6 +363,9 @@ impl JobService {
                 self.activity.record_environment(env, at);
             }
         }
+        if let Some(g) = &mut self.governor {
+            g.restore()?;
+        }
         let interrupted = self.jobs.interrupt_running(self.clock.now())?;
         let mut queued = self.jobs.queued()?;
         queued.sort_by_key(|j| (j.created_at, j.id));
@@ -330,8 +383,23 @@ impl JobService {
 
     /// Queues `prompt` for the session; it starts as soon as it is allowed to.
     pub fn dispatch(&mut self, session_id: SessionId, prompt: &str) -> AppResult<JobId> {
-        let review = self.review_next();
-        self.enqueue(session_id, prompt, None, None, false, (review, None, None))
+        self.dispatch_capped(session_id, prompt, None)
+    }
+
+    /// Like [`JobService::dispatch`], spending at most `cap` dollars
+    /// (`--max-budget-usd`).
+    pub fn dispatch_capped(
+        &mut self,
+        session_id: SessionId,
+        prompt: &str,
+        cap: Option<f64>,
+    ) -> AppResult<JobId> {
+        let lineage = Lineage {
+            wants_review: self.review_next(),
+            cap,
+            ..Lineage::default()
+        };
+        self.enqueue(session_id, prompt, None, None, false, lineage)
     }
 
     /// Like [`JobService::dispatch`], and records which template the job came from.
@@ -340,14 +408,17 @@ impl JobService {
         session_id: SessionId,
         rendered: &RenderedPrompt,
     ) -> AppResult<JobId> {
-        let review = self.review_next();
+        let lineage = Lineage {
+            wants_review: self.review_next(),
+            ..Lineage::default()
+        };
         self.enqueue(
             session_id,
             rendered.text(),
             Some(rendered.prompt_id()),
             None,
             false,
-            (review, None, None),
+            lineage,
         )
     }
 
@@ -365,13 +436,22 @@ impl JobService {
         if !matches!(job.status, JobStatus::Interrupted | JobStatus::Failed) {
             return Err(AppError::NotResumable(id));
         }
+        if let Some(g) = &mut self.governor {
+            g.forget(id)?;
+        }
+        let lineage = Lineage {
+            wants_review: job.wants_review,
+            review_of: job.review_of,
+            inherits: Some(id),
+            cap: self.caps.get(&id).copied(),
+        };
         self.enqueue(
             job.session_id,
             RESUME_PROMPT,
             None,
             Some(job.model),
             false,
-            (job.wants_review, job.review_of, Some(id)),
+            lineage,
         )
     }
 
@@ -433,6 +513,7 @@ impl JobService {
             }
         }
         self.reclaim_worktrees(&mut report);
+        self.resume_after_reset(&mut report);
         // Read even with nothing queued, so the status bar always shows it.
         self.free_ram();
         match self.schedule() {
@@ -441,6 +522,31 @@ impl JobService {
         }
         self.prune();
         report
+    }
+
+    /// Resumes the jobs a usage limit stopped whose window has reset.
+    fn resume_after_reset(&mut self, report: &mut PumpReport) {
+        let now = self.clock.now();
+        let due = match self.governor.as_mut().map(|g| g.due(now)) {
+            Some(Ok(due)) => due,
+            Some(Err(e)) => {
+                report.errors.push(e);
+                return;
+            }
+            None => return,
+        };
+        for p in due {
+            match self.resume(p.job) {
+                Ok(new) => {
+                    report.changed = true;
+                    let text = format!("resumed #{} after the {} reset", p.job, p.window);
+                    self.note(new, "governor", &text);
+                }
+                // Resumed or retried by hand meanwhile.
+                Err(AppError::NotResumable(_) | AppError::JobNotFound) => {}
+                Err(e) => report.errors.push(e),
+            }
+        }
     }
 
     /// Reclaims stale worktrees: at the first pump, then every hour.
@@ -539,6 +645,10 @@ impl JobService {
             status: t.progress.status,
             priority: t.job.priority,
             cost_usd: t.progress.cost_usd,
+            note: match (&self.governor, &t.admission) {
+                (Some(g), Some(a)) if !t.progress.status.is_finished() => g.reason(a),
+                _ => None,
+            },
         };
         let running = self
             .tracked
@@ -612,12 +722,21 @@ impl JobService {
                 .count()
         };
         let free_ram = self.ram.and_then(|(_, free)| free);
+        let on_battery = self.power.is_some_and(|(_, b)| b);
         QueueStats {
             running: count(JobStatus::Running),
             queued: count(JobStatus::Queued),
-            max_concurrent: self.limits.max_concurrent,
+            max_concurrent: self.effective_limits(on_battery).max_concurrent,
             free_ram,
             ram_low: free_ram.is_some_and(|f| f < self.limits.min_free_ram),
+            deferred: self
+                .tracked
+                .iter()
+                .filter(|t| t.progress.status == JobStatus::Queued)
+                .filter(|t| t.admission.as_ref().is_some_and(Admission::is_deferred))
+                .count(),
+            awaiting_reset: self.governor.as_ref().map_or(0, |g| g.pending().len()),
+            on_battery,
         }
     }
 
@@ -664,6 +783,8 @@ impl JobService {
             outcome: None,
             session_state: None,
             shell: HashMap::new(),
+            admission: None,
+            refused: None,
         });
     }
 
@@ -672,14 +793,22 @@ impl JobService {
         if !job.status.is_finished() {
             return Err(AppError::JobNotFinished(id));
         }
-        let inherits = (job.status == JobStatus::Interrupted && !fork).then_some(id);
+        if let Some(g) = &mut self.governor {
+            g.forget(id)?;
+        }
+        let lineage = Lineage {
+            wants_review: job.wants_review,
+            review_of: job.review_of,
+            inherits: (job.status == JobStatus::Interrupted && !fork).then_some(id),
+            cap: self.caps.get(&id).copied(),
+        };
         self.enqueue(
             job.session_id,
             &job.prompt,
             job.prompt_id,
             Some(job.model),
             fork,
-            (job.wants_review, job.review_of, inherits),
+            lineage,
         )
     }
 
@@ -690,8 +819,14 @@ impl JobService {
         prompt_id: Option<PromptId>,
         model: Option<String>,
         fork: bool,
-        (wants_review, review_of, inherits): (bool, Option<JobId>, Option<JobId>),
+        lineage: Lineage,
     ) -> AppResult<JobId> {
+        let Lineage {
+            wants_review,
+            review_of,
+            inherits,
+            cap,
+        } = lineage;
         let prompt = prompt.trim();
         if prompt.is_empty() {
             return Err(DomainError::EmptyPrompt.into());
@@ -712,6 +847,9 @@ impl JobService {
             review_of,
         };
         let id = self.jobs.insert(&new, now)?;
+        if let Some(cap) = cap.filter(|c| c.is_finite() && *c > 0.0) {
+            self.caps.insert(id, cap);
+        }
         self.track(
             Job {
                 id,
@@ -760,17 +898,77 @@ impl JobService {
             return Ok(false);
         }
         let free_ram = self.free_ram();
+        let on_battery = self.on_battery();
+        let limits = self.effective_limits(on_battery);
+        self.admit_queued();
         let running: Vec<SessionId> = self
             .tracked
             .iter()
             .filter(|t| t.progress.status == JobStatus::Running)
             .map(|t| t.job.session_id)
             .collect();
-        let picks = plan(self.queued_jobs(), &running, free_ram, self.limits);
+        let admitted = self
+            .tracked
+            .iter()
+            .filter(|t| t.progress.status == JobStatus::Queued)
+            .filter(|t| !t.admission.as_ref().is_some_and(Admission::is_deferred))
+            .map(|t| &t.job);
+        let picks = plan(admitted, &running, free_ram, limits);
         for &id in &picks {
             self.start(id)?;
         }
         Ok(!picks.is_empty())
+    }
+
+    /// The run limits now: the governor runs fewer at once on battery.
+    fn effective_limits(&self, on_battery: bool) -> Limits {
+        self.governor
+            .as_ref()
+            .map_or(self.limits, |g| g.limits(self.limits, on_battery))
+    }
+
+    /// The freshest reading of every usage window.
+    fn windows(&self) -> Vec<LimitState> {
+        self.governor
+            .as_ref()
+            .map(|g| g.windows(&self.activity.limits()))
+            .unwrap_or_default()
+    }
+
+    /// Asks the governor about every queued job.
+    fn admit_queued(&mut self) {
+        let Some(g) = &self.governor else {
+            return;
+        };
+        let now = self.clock.now();
+        let windows = g.windows(&self.activity.limits());
+        for t in &mut self.tracked {
+            if t.progress.status != JobStatus::Queued {
+                continue;
+            }
+            let class = if t.job.review_of.is_some() {
+                JobClass::Verify
+            } else {
+                JobClass::Work
+            };
+            t.admission = Some(g.admit(&windows, &t.job.model, class, now));
+        }
+    }
+
+    /// Whether the machine runs on battery, read at most every 30 s.
+    fn on_battery(&mut self) -> bool {
+        let Some(monitor) = &self.monitor else {
+            return false;
+        };
+        let now = self.clock.now();
+        match self.power {
+            Some((at, on)) if now - at < POWER_EVERY_MS => on,
+            _ => {
+                let on = monitor.on_battery().unwrap_or(false);
+                self.power = Some((now, on));
+                on
+            }
+        }
     }
 
     fn free_ram(&mut self) -> Option<u64> {
@@ -821,7 +1019,26 @@ impl JobService {
             .and_then(|of| self.find(of))
             .and_then(|j| self.tracked[j].started_at)
             .map_or(0, |at| ((now - at).max(0) / 100) as u32);
+        let cap = self
+            .caps
+            .get(&id)
+            .copied()
+            .or_else(|| self.governor.as_ref().and_then(Governor::default_cap));
+        let line = match (&self.governor, self.tracked[i].job.review_of) {
+            (Some(g), None) => g.line(&self.windows(), cap, now),
+            _ => None,
+        };
+        let downgrade = match (&self.governor, &self.tracked[i].admission) {
+            (Some(g), Some(a @ Admission::Downgrade { to, .. })) => Some((to.clone(), g.reason(a))),
+            _ => None,
+        };
         let t = &mut self.tracked[i];
+        if let Some((to, why)) = downgrade {
+            t.job.model = to.clone();
+            t.progress.model = to;
+            t.progress
+                .note("governor", why.as_deref().unwrap_or("downgraded"));
+        }
         t.started_at = Some(now);
         t.last_event_at = Some(now);
         t.job.status = JobStatus::Running;
@@ -838,10 +1055,14 @@ impl JobService {
             fork: t.job.fork,
             model: t.job.model.clone(),
             permission_mode: session.permission_mode,
-            prompt: t.job.prompt.clone(),
+            prompt: match &line {
+                Some(line) => format!("{}\n\n{line}", t.job.prompt),
+                None => t.job.prompt.clone(),
+            },
             lean: session.lean,
             review: t.job.review_of.is_some(),
             env,
+            max_budget_usd: cap,
         };
         t.progress.command = self.runner.command_line(&request);
         let tx = self.tx.clone();
@@ -905,6 +1126,11 @@ impl JobService {
                 if let AgentEvent::SessionState(state) = &ev {
                     self.tracked[i].session_state = Some(*state);
                 }
+                if let AgentEvent::RateLimit(limit) = &ev
+                    && limit.status == "rejected"
+                {
+                    self.tracked[i].refused = Some(limit.clone());
+                }
                 self.observe_shell(i, job_id, &ev);
                 self.observe_telemetry(i, job_id, &ev, now)?;
                 let finished = self.tracked[i].progress.apply(&ev, tick);
@@ -957,9 +1183,36 @@ impl JobService {
             });
             self.jobs.save_result(job_id, &result)?;
             self.jobs.set_status(job_id, status, now)?;
+            self.after_limit(i, status, &result)?;
             self.after_finish(i, &result)?;
         }
         Ok(applied)
+    }
+
+    /// A job a usage limit stopped is resumed by itself once the window resets.
+    fn after_limit(&mut self, i: usize, status: JobStatus, result: &JobResult) -> AppResult<()> {
+        if status != JobStatus::Failed || self.governor.is_none() {
+            return Ok(());
+        }
+        let t = &self.tracked[i];
+        let said =
+            result.error.as_deref().is_some_and(is_limit_error) || is_limit_error(&result.text);
+        if t.refused.is_none() && !said {
+            return Ok(());
+        }
+        let (job, refused) = (t.job.id, t.refused.clone());
+        let now = self.clock.now();
+        let windows = self.windows();
+        let Some(g) = self.governor.as_mut() else {
+            return Ok(());
+        };
+        let Some((at, window)) = g.reset_for(refused.as_ref(), &windows, now) else {
+            return Ok(());
+        };
+        g.resume_at(job, at, &window)?;
+        let text = format!("usage limit: resumes after the {window} reset");
+        self.tracked[i].progress.note("governor", &text);
+        Ok(())
     }
 
     /// Pairs shell commands with their results and reports them.

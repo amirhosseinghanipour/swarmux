@@ -117,6 +117,8 @@ pub struct RunRequest {
     pub review: bool,
     /// Extra environment for the child (a worktree's port block, …).
     pub env: Vec<(String, String)>,
+    /// Stop once the run has spent this many dollars (`--max-budget-usd`).
+    pub max_budget_usd: Option<f64>,
 }
 
 /// What a running job reports back.
@@ -165,6 +167,10 @@ pub trait AgentCatalog {
 pub trait SystemMonitor {
     /// Memory available to new processes; `None` when it can't be read.
     fn free_memory_bytes(&self) -> Option<u64>;
+    /// Running on battery rather than mains power; `None` when unknown.
+    fn on_battery(&self) -> Option<bool> {
+        None
+    }
 }
 
 pub trait Clock {

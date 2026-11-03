@@ -34,6 +34,7 @@ fn real_claude_job_reports_init_and_result() {
             lean: false,
             review: false,
             env: Vec::new(),
+            max_budget_usd: None,
         },
         Box::new(move |m| {
             let _ = tx.send(m);
