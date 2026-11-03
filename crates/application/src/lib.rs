@@ -72,8 +72,9 @@ pub use prompts::{BUILTIN_VARIABLES, PromptService, RenderedPrompt};
 pub use routing::{ROUTE_PROMPT_MAX, RouteReport, Routed, RoutingService};
 pub use sessions::SessionService;
 pub use settings::{
-    GovernorSettings, GuardSettings, JevProvider, JevSettings, LayoutSettings, ReviewSettings,
-    ReviewWhen, RowSettings, Settings, TelemetrySettings, UiSettings, WorktreeSettings,
+    GovernorSettings, GuardSettings, JevProvider, JevSettings, LayoutSettings, MotionSetting,
+    ReviewSettings, ReviewWhen, RowSettings, Settings, TelemetrySettings, UiSettings,
+    WorktreeSettings,
 };
 pub use telemetry::{
     ActivityView, AgentsPoll, Battery, CacheView, CiRun, Collected, CombinedStatusline, Commit,

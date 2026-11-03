@@ -171,8 +171,10 @@ pub struct UiSettings {
     pub gaps: u16,
     /// Frames per second (1-30).
     pub fps: u16,
-    /// 4 fps, no tweens or pulses.
+    /// 4 fps, no tweens or pulses (the same as `motion = "reduced"`).
     pub low_power: bool,
+    /// How much the interface moves.
+    pub motion: MotionSetting,
     /// The start-up screen.
     pub splash: bool,
     /// User-defined layouts.
@@ -191,8 +193,46 @@ impl Default for UiSettings {
             gaps: 1,
             fps: 10,
             low_power: false,
+            motion: MotionSetting::Auto,
             splash: true,
             layouts: Vec::new(),
+        }
+    }
+}
+
+/// The `motion` key: how much the interface moves.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MotionSetting {
+    /// Full motion, dropping to reduced on battery, over SSH or when frames
+    /// are slow.
+    #[default]
+    Auto,
+    /// Always full motion.
+    Full,
+    /// Data updates, spinners and nothing ambient.
+    Reduced,
+    /// Data updates only.
+    Off,
+}
+
+impl MotionSetting {
+    /// The setting a config value names (case does not matter).
+    pub fn parse(value: &str) -> Option<MotionSetting> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "auto" => Some(MotionSetting::Auto),
+            "full" => Some(MotionSetting::Full),
+            "reduced" => Some(MotionSetting::Reduced),
+            "off" => Some(MotionSetting::Off),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            MotionSetting::Auto => "auto",
+            MotionSetting::Full => "full",
+            MotionSetting::Reduced => "reduced",
+            MotionSetting::Off => "off",
         }
     }
 }

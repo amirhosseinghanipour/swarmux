@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 use serde::de::IgnoredAny;
 use swarmux_application::{
-    GuardSettings, JevProvider, JevSettings, LayoutSettings, ReviewSettings, ReviewWhen,
-    RowSettings, Settings, ThemeDef, UiSettings,
+    GuardSettings, JevProvider, JevSettings, LayoutSettings, MotionSetting, ReviewSettings,
+    ReviewWhen, RowSettings, Settings, ThemeDef, UiSettings,
 };
 use swarmux_domain::{Pattern, Unmatched};
 
@@ -55,6 +55,7 @@ struct RawConfig {
     gaps: Option<i64>,
     fps: Option<i64>,
     low_power: Option<bool>,
+    motion: Option<String>,
     splash: Option<bool>,
     layouts: Option<Vec<RawLayout>>,
 }
@@ -188,6 +189,7 @@ pub fn parse_settings(text: &str, path: &Path) -> Result<Settings, ConfigError> 
         gaps: raw.gaps,
         fps: raw.fps,
         low_power: raw.low_power,
+        motion: raw.motion,
         splash: raw.splash,
         layouts: raw.layouts,
     };
@@ -206,6 +208,7 @@ struct RawUi {
     gaps: Option<i64>,
     fps: Option<i64>,
     low_power: Option<bool>,
+    motion: Option<String>,
     splash: Option<bool>,
     layouts: Option<Vec<RawLayout>>,
 }
@@ -272,6 +275,14 @@ fn parse_ui(raw: RawUi, text: &str, path: &Path) -> Result<UiSettings, ConfigErr
         ui.fps = in_range("fps", fps, 1, 30)?;
     }
     ui.low_power = raw.low_power.unwrap_or(ui.low_power);
+    if let Some(motion) = raw.motion {
+        ui.motion = MotionSetting::parse(&motion).ok_or_else(|| {
+            error(
+                "motion",
+                "motion must be \"auto\", \"full\", \"reduced\" or \"off\"".into(),
+            )
+        })?;
+    }
     ui.splash = raw.splash.unwrap_or(ui.splash);
     for layout in raw.layouts.unwrap_or_default() {
         let name = name("name", layout.name)?;
@@ -870,10 +881,19 @@ ntfy = \"https://ntfy.sh/my-topic\"
     }
 
     #[test]
+    fn motion_defaults_to_auto_and_rejects_unknown_tiers() {
+        assert_eq!(parse("").unwrap().ui.motion, MotionSetting::Auto);
+        let off = parse("motion = \"off\"\n").unwrap();
+        assert_eq!(off.ui.motion, MotionSetting::Off);
+        let e = parse("motion = \"wild\"\n").unwrap_err();
+        assert_eq!(e.line, Some(1));
+    }
+
+    #[test]
     fn look_and_feel_keys_are_read() {
         let s = parse(
             "theme = \"tokyo-night\"\nlayout = \"btop\"\nicons = \"Nerd\"\ngaps = 0\nfps = 24\n\
-             low_power = true\nsplash = false\n\n[[layouts]]\nname = \"focus\"\n\
+             low_power = true\nmotion = \"Reduced\"\nsplash = false\n\n[[layouts]]\nname = \"focus\"\n\
              rows = [{ panels = [\"lead:2\", \"guard\"], height = 6 }, { panels = [\"log\"] }]\n",
         )
         .unwrap();
@@ -884,6 +904,7 @@ ntfy = \"https://ntfy.sh/my-topic\"
         );
         assert_eq!((ui.icons.as_str(), ui.gaps, ui.fps), ("nerd", 0, 24));
         assert!(ui.low_power && !ui.splash);
+        assert_eq!(ui.motion, MotionSetting::Reduced);
         assert_eq!(
             ui.layouts,
             [LayoutSettings {
