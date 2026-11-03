@@ -4,6 +4,7 @@
 //! frameworks; time is always passed in by the caller.
 
 mod attention;
+pub mod budget;
 mod date;
 mod error;
 mod event;
