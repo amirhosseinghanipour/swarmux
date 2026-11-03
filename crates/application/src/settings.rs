@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use crate::palette::ThemeDef;
 use swarmux_domain::budget::GovernorPolicy;
 use swarmux_domain::telemetry::{MINUTE, PriceTable};
 use swarmux_domain::{DEFAULT_MODEL, GuardPolicy, Limits, Pattern, PortPlan, Unmatched};
@@ -157,8 +158,15 @@ impl Default for TelemetrySettings {
 pub struct UiSettings {
     pub theme: String,
     pub layout: String,
-    /// `"ascii"`, `"unicode"` or `"nerd"` (Nerd Font glyphs).
+    /// `"unicode"` (the default), `"ascii"`, `"nerd"` (Nerd Font glyphs) or
+    /// `"auto"` (Nerd when the environment or `font` says so).
     pub icons: String,
+    /// The terminal font, as a hint for `icons = "auto"`.
+    pub font: String,
+    /// `bg = "none"`: leave the background to the terminal.
+    pub transparent: bool,
+    /// Themes defined in `[themes.<name>]`.
+    pub themes: Vec<ThemeDef>,
     /// Blank cells between panels (0-4).
     pub gaps: u16,
     /// Frames per second (1-30).
@@ -176,7 +184,10 @@ impl Default for UiSettings {
         UiSettings {
             theme: "reference".into(),
             layout: "command".into(),
-            icons: "ascii".into(),
+            icons: "unicode".into(),
+            font: String::new(),
+            transparent: false,
+            themes: Vec::new(),
             gaps: 1,
             fps: 10,
             low_power: false,
@@ -402,7 +413,10 @@ mod tests {
             (s.ui.theme.as_str(), s.ui.layout.as_str()),
             ("reference", "command")
         );
-        assert_eq!((s.ui.icons.as_str(), s.ui.gaps, s.ui.fps), ("ascii", 1, 10));
+        assert_eq!(
+            (s.ui.icons.as_str(), s.ui.gaps, s.ui.fps),
+            ("unicode", 1, 10)
+        );
         assert!(s.ui.splash && !s.ui.low_power && s.ui.layouts.is_empty());
         let g = &s.governor;
         assert!(g.enabled && g.budget_line);

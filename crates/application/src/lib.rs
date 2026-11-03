@@ -18,6 +18,7 @@ mod jobs;
 pub mod ledger;
 pub mod missions;
 mod notify;
+mod palette;
 pub mod ports;
 mod prompts;
 mod routing;
@@ -62,6 +63,9 @@ pub use missions::{
 pub use notify::{
     FocusTracker, IDLE_UNFOCUSED_MS, Moment, NoNotifier, Notification, Notifier, NotifyService,
     NotifySettings, QuietHours, TerminalMode, may_notify,
+};
+pub use palette::{
+    Base16, CHART_ROLE, PaletteSource, THEME_ROLES, ThemeDef, hex, parse_hex, role_arity,
 };
 pub use prompts::{BUILTIN_VARIABLES, PromptService, RenderedPrompt};
 pub use routing::{ROUTE_PROMPT_MAX, RouteReport, Routed, RoutingService};
