@@ -1,6 +1,7 @@
 //! Composition root: the only place that wires concrete adapters to use cases.
 
 mod audit;
+mod dist;
 mod doctor;
 mod evidence;
 mod gate;
@@ -110,6 +111,41 @@ enum Command {
         /// Print the `statusLine` setting that runs this command, and exit.
         #[arg(long)]
         print_settings: bool,
+    },
+    /// Put swarmux on this machine: copy it to a per-user folder, add the
+    /// folder to your PATH and create ~/.swarmux. Does not touch Claude
+    /// Code's settings.
+    Install {
+        /// Where to put the executable (default: a per-user folder).
+        #[arg(long)]
+        dir: Option<PathBuf>,
+        /// Do not change your PATH.
+        #[arg(long)]
+        no_path: bool,
+        /// Also print the `statusLine` setting for Claude Code's settings.json.
+        #[arg(long)]
+        statusline: bool,
+    },
+    /// Remove what `install` set up and say what was removed. Your data in
+    /// ~/.swarmux stays unless you ask for --purge.
+    Uninstall {
+        /// Also delete ~/.swarmux (config, database, ledger).
+        #[arg(long)]
+        purge: bool,
+        /// Leave your PATH alone.
+        #[arg(long)]
+        no_path: bool,
+    },
+    /// Update swarmux to the newest release, after checking its minisign
+    /// signature against the key built into this binary.
+    SelfUpdate {
+        /// Only look for a newer release.
+        #[arg(long)]
+        check: bool,
+        /// Take the release from a folder laid out like a release
+        /// (latest.txt plus the archives and their .minisig files).
+        #[arg(long, value_name = "DIR")]
+        from: Option<PathBuf>,
     },
     /// Hooks Claude Code runs inside swarmux jobs (not for direct use).
     #[command(hide = true)]
@@ -320,6 +356,13 @@ fn main() -> anyhow::Result<ExitCode> {
             action: JevAction::Test { provider },
         }) => jev::test(provider.as_deref()),
         Some(Command::Statusline { print_settings }) => statusline(print_settings),
+        Some(Command::Install {
+            dir,
+            no_path,
+            statusline,
+        }) => dist::install(dir, no_path, statusline),
+        Some(Command::Uninstall { purge, no_path }) => dist::uninstall(purge, no_path),
+        Some(Command::SelfUpdate { check, from }) => dist::self_update(check, from),
         Some(Command::Hook { event }) => {
             hook::hook_main(&event);
             Ok(())

@@ -1,0 +1,8 @@
+# winget version manifest. Fill in the placeholders for a release (see
+# RELEASING.md), then submit the three files to microsoft/winget-pkgs:
+#   manifests/a/AmirhosseinGhanipour/Swarmux/<VERSION>/
+PackageIdentifier: AmirhosseinGhanipour.Swarmux
+PackageVersion: <VERSION>
+DefaultLocale: en-US
+ManifestType: version
+ManifestVersion: 1.9.0

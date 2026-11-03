@@ -1,0 +1,127 @@
+name: release
+
+# Runs when a version tag is pushed. Builds the archives, signs each one with
+# the minisign key held in the repository secrets, checks the signatures
+# against the public key committed in the repository, and publishes a GitHub
+# release. RELEASING.md describes the one-time setup.
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+
+permissions:
+  contents: read
+
+env:
+  PUBLIC_KEY: crates/infrastructure/src/dist/minisign.pub
+
+jobs:
+  build:
+    name: build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { os: windows-latest, target: x86_64-pc-windows-msvc, ext: zip, exe: swarmux.exe }
+          - { os: macos-latest, target: aarch64-apple-darwin, ext: tar.gz, exe: swarmux }
+          - { os: macos-latest, target: x86_64-apple-darwin, ext: tar.gz, exe: swarmux }
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu, ext: tar.gz, exe: swarmux }
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the tag matches the crate version
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
+          if [ "v$version" != "$TAG" ]; then
+            echo "tag $TAG does not match Cargo.toml version $version" >&2
+            exit 1
+          fi
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: Package
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          EXT: ${{ matrix.ext }}
+          EXE: ${{ matrix.exe }}
+        run: |
+          name="swarmux-$TARGET"
+          mkdir -p "dist/$name"
+          cp "target/$TARGET/release/$EXE" "dist/$name/$EXE"
+          cp LICENSE README.md "dist/$name/"
+          cd dist
+          if [ "$EXT" = zip ]; then
+            7z a -tzip "$name.zip" "$name" > /dev/null
+          else
+            tar -czf "$name.tar.gz" "$name"
+          fi
+          rm -rf "$name"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: archive-${{ matrix.target }}
+          path: dist/swarmux-*
+          if-no-files-found: error
+
+  publish:
+    name: sign and publish
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: archive-*
+          path: dist
+          merge-multiple: true
+      - name: Install minisign
+        run: sudo apt-get update && sudo apt-get install -y minisign
+      - name: Sign
+        shell: bash
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "$MINISIGN_SECRET_KEY" ]; then
+            echo "the MINISIGN_SECRET_KEY secret is not set" >&2
+            exit 1
+          fi
+          key="$RUNNER_TEMP/minisign.key"
+          umask 077
+          printf '%s\n' "$MINISIGN_SECRET_KEY" > "$key"
+          cd dist
+          for f in swarmux-*.zip swarmux-*.tar.gz; do
+            printf '%s\n' "$MINISIGN_PASSWORD" | minisign -S -s "$key" -m "$f" -x "$f.minisig" -t "swarmux ${GITHUB_REF_NAME}"
+          done
+          rm -f "$key"
+      - name: Check the signatures against the committed public key
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          for f in swarmux-*.zip swarmux-*.tar.gz; do
+            minisign -V -p "$GITHUB_WORKSPACE/$PUBLIC_KEY" -m "$f" -x "$f.minisig"
+          done
+      - name: Checksums
+        shell: bash
+        run: |
+          cd dist
+          sha256sum swarmux-*.zip swarmux-*.tar.gz > SHA256SUMS
+      - name: Publish the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          gh release create "$TAG" dist/* --title "$TAG" --generate-notes

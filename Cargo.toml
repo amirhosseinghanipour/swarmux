@@ -7,38 +7,50 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT"
 rust-version = "1.88"
+repository = "https://github.com/amirhosseinghanipour/swarmux"
+homepage = "https://github.com/amirhosseinghanipour/swarmux"
 
 [workspace.dependencies]
-swarmux-domain = { path = "crates/domain" }
-swarmux-application = { path = "crates/application" }
-swarmux-infrastructure = { path = "crates/infrastructure" }
-swarmux-tui = { path = "crates/tui" }
+swarmux-domain = { path = "crates/domain", version = "0.1.0" }
+swarmux-application = { path = "crates/application", version = "0.1.0" }
+swarmux-infrastructure = { path = "crates/infrastructure", version = "0.1.0" }
+swarmux-tui = { path = "crates/tui", version = "0.1.0" }
 
 anyhow = "1.0.104"
 clap = { version = "4.6.7", features = ["derive"] }
 crossterm = "0.29"
 keyring = { version = "3.6.3", features = ["apple-native", "windows-native", "linux-native"] }
 ratatui = "0.30"
-reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls"] }
+reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls", "blocking"] }
 rpassword = "7.5.4"
 rusqlite = { version = "0.41", features = ["bundled"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
+flate2 = "1.1.10"
+minisign = { version = "0.10.0", default-features = false }
+minisign-verify = "0.3.0"
 sha2 = "0.10.9"
 sysinfo = { version = "0.40.1", default-features = false, features = ["system"] }
+tar = { version = "0.4.46", default-features = false }
 tempfile = "3.27.0"
 thiserror = "2"
 toml = { version = "1.1.8", default-features = false, features = ["parse", "serde", "std"] }
 tokio = { version = "1", features = ["rt-multi-thread", "process", "io-util", "sync", "macros", "time", "net"] }
 uuid = { version = "1.29.0", features = ["v4"] }
+zip = { version = "9.3.0", default-features = false, features = ["deflate"] }
 
 # The `swarmux` binary: composition root only.
 [package]
 name = "swarmux"
-description = "A prompt-first command center for Claude Code."
+description = "A prompt-first command center for Claude Code: queue, watch and gate agents from one terminal."
+readme = "README.md"
+homepage.workspace = true
+keywords = ["claude", "tui", "agents", "terminal", "ai"]
+categories = ["command-line-utilities", "development-tools"]
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]

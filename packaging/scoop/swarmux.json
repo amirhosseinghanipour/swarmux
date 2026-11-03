@@ -1,0 +1,24 @@
+{
+    "version": "<VERSION>",
+    "description": "A prompt-first command center for Claude Code.",
+    "homepage": "https://github.com/amirhosseinghanipour/swarmux",
+    "license": "MIT",
+    "architecture": {
+        "64bit": {
+            "url": "https://github.com/amirhosseinghanipour/swarmux/releases/download/v<VERSION>/swarmux-x86_64-pc-windows-msvc.zip",
+            "hash": "<SHA256 OF THE ZIP>"
+        }
+    },
+    "extract_dir": "swarmux-x86_64-pc-windows-msvc",
+    "bin": "swarmux.exe",
+    "checkver": {
+        "github": "https://github.com/amirhosseinghanipour/swarmux"
+    },
+    "autoupdate": {
+        "architecture": {
+            "64bit": {
+                "url": "https://github.com/amirhosseinghanipour/swarmux/releases/download/v$version/swarmux-x86_64-pc-windows-msvc.zip"
+            }
+        }
+    }
+}

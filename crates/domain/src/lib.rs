@@ -7,6 +7,7 @@ pub mod alarm;
 mod attention;
 pub mod budget;
 mod date;
+pub mod dist;
 mod error;
 mod event;
 pub mod evidence;
