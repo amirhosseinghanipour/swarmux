@@ -27,6 +27,7 @@ mod telemetry;
 mod terminal;
 #[cfg(any(test, feature = "test-support"))]
 pub mod testing;
+pub mod verifier;
 pub mod worktree;
 
 pub use attention::{
@@ -67,7 +68,7 @@ pub use routing::{ROUTE_PROMPT_MAX, RouteReport, Routed, RoutingService};
 pub use sessions::SessionService;
 pub use settings::{
     GovernorSettings, GuardSettings, JevProvider, JevSettings, LayoutSettings, ReviewSettings,
-    RowSettings, Settings, TelemetrySettings, UiSettings, WorktreeSettings,
+    ReviewWhen, RowSettings, Settings, TelemetrySettings, UiSettings, WorktreeSettings,
 };
 pub use telemetry::{
     ActivityView, AgentsPoll, Battery, CacheView, CiRun, Collected, CombinedStatusline, Commit,
@@ -76,6 +77,7 @@ pub use telemetry::{
     TOP_FILES, TelemetryService, TelemetrySnapshot, TruthBoard,
 };
 pub use terminal::SessionTerminal;
+pub use verifier::{CleanCheckout, CleanCopy, HoldoutStore, Verification, Verifier, VerifyRequest};
 pub use worktree::{
     AddWorktree, Added, GcReport, Prepared, Removed, WorktreeService, WorktreeStore, WorktreeView,
     Worktrees,

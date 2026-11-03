@@ -210,6 +210,36 @@ pub struct ReviewSettings {
     pub enabled: bool,
     /// Model of the reviewer.
     pub model: String,
+    /// Which finished jobs the reviewer reads.
+    pub when: ReviewWhen,
+}
+
+/// Which finished jobs get a review, when reviews are on.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ReviewWhen {
+    /// Only changes whose risk is elevated or worse: big ones, deletions,
+    /// builds, dependencies, pipelines, secrets, changed tests.
+    #[default]
+    Risk,
+    /// Every one.
+    Always,
+}
+
+impl ReviewWhen {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ReviewWhen::Risk => "risk",
+            ReviewWhen::Always => "always",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<ReviewWhen> {
+        match s.trim() {
+            "risk" => Some(ReviewWhen::Risk),
+            "always" => Some(ReviewWhen::Always),
+            _ => None,
+        }
+    }
 }
 
 impl Default for ReviewSettings {
@@ -217,6 +247,7 @@ impl Default for ReviewSettings {
         ReviewSettings {
             enabled: false,
             model: "opus".to_string(),
+            when: ReviewWhen::Risk,
         }
     }
 }

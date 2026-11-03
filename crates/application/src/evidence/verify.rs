@@ -10,10 +10,12 @@ use swarmux_domain::evidence::{
 };
 use swarmux_domain::gate::GateCheck;
 use swarmux_domain::ledger::hex;
+use swarmux_domain::verifier::repo_key;
 
 use super::{Checkouts, EvidenceService, Stored};
 use crate::gate::{Checker, run_checks};
 use crate::ledger::verify_all;
+use crate::verifier::HoldoutStore;
 use crate::{AppError, AppResult};
 
 /// The first characters of a hash, to show.
@@ -26,11 +28,61 @@ pub fn short(hash: &str) -> &str {
 pub struct Rerunner {
     checker: Arc<dyn Checker>,
     checkouts: Arc<dyn Checkouts>,
+    holdout: Option<Arc<dyn HoldoutStore>>,
 }
 
 impl Rerunner {
     pub fn new(checker: Arc<dyn Checker>, checkouts: Arc<dyn Checkouts>) -> Rerunner {
-        Rerunner { checker, checkouts }
+        Rerunner {
+            checker,
+            checkouts,
+            holdout: None,
+        }
+    }
+
+    /// Runs the repository's hidden checks again too, for bundles whose
+    /// verdict ran some.
+    pub fn with_holdout(mut self, store: Arc<dyn HoldoutStore>) -> Rerunner {
+        self.holdout = Some(store);
+        self
+    }
+
+    /// The repository's hidden checks as they are now, run in `dir` after
+    /// the visible ones: they all pass, or how many did. Never which.
+    fn hidden_item(&self, bundle: &Bundle, dir: &Path) -> Option<VerifyItem> {
+        let sealed = bundle.hidden.filter(|h| h.ran > 0)?;
+        let subject = "hidden checks";
+        let expected = format!("all pass (sealed {})", sealed.text());
+        let Some(store) = &self.holdout else {
+            return Some(VerifyItem::bad(subject, &expected, "no hidden check store"));
+        };
+        let Some(repo) = repo_key(&bundle.repo) else {
+            return Some(VerifyItem::bad(subject, &expected, "no repository name"));
+        };
+        let checks = match store.list(&repo) {
+            Ok(c) if !c.is_empty() => c,
+            Ok(_) => return Some(VerifyItem::bad(subject, &expected, "none kept any more")),
+            Err(e) => return Some(VerifyItem::bad(subject, &expected, &e.to_string())),
+        };
+        let placed: Vec<bool> = checks
+            .iter()
+            .map(|c| store.place(&repo, c, dir).is_ok())
+            .collect();
+        let passed = checks
+            .iter()
+            .zip(placed)
+            .filter(|(c, ok)| {
+                *ok && run_checks(&*self.checker, std::slice::from_ref(&c.check), dir)
+                    .first()
+                    .is_some_and(|r| r.passed())
+            })
+            .count();
+        let found = format!("{passed}/{} pass", checks.len());
+        Some(if passed == checks.len() {
+            VerifyItem::ok(subject, &found)
+        } else {
+            VerifyItem::bad(subject, &expected, &found)
+        })
     }
 
     /// Blocks until every check has run. The clean copy is gone afterwards.
@@ -86,6 +138,7 @@ impl Rerunner {
             })
             .collect();
         items.extend(compare_checks(bundle, &reruns));
+        items.extend(self.hidden_item(bundle, checkout.path()));
         drop(checkout);
         items
     }

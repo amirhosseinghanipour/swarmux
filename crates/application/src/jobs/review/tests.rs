@@ -30,6 +30,7 @@ fn fixture(review: bool) -> Fixture {
     let settings = ReviewSettings {
         enabled: review,
         model: "haiku".into(),
+        when: crate::ReviewWhen::Always,
     };
     let svc = JobService::new(store.clone(), store.clone(), runner.clone(), clock.clone())
         .with_review(workspace.clone(), &settings)
@@ -272,4 +273,48 @@ fn a_second_result_does_not_start_a_second_review() {
     assert_eq!(f.store.result_of(job).unwrap().cost_usd, 0.35);
     let review_job = f.runner.request(1).job_id;
     assert_eq!(f.svc.review_progress(job).unwrap().job_id, review_job);
+}
+
+fn risk_fixture(diff: &str) -> Fixture {
+    let mut f = fixture(true);
+    let settings = ReviewSettings {
+        enabled: true,
+        model: "haiku".into(),
+        when: crate::ReviewWhen::Risk,
+    };
+    f.workspace = Rc::new(FakeWorkspace::with_diff(diff));
+    f.svc = JobService::new(
+        f.store.clone(),
+        f.store.clone(),
+        f.runner.clone(),
+        f.clock.clone(),
+    )
+    .with_review(f.workspace.clone(), &settings);
+    f
+}
+
+#[test]
+fn a_routine_change_is_not_worth_a_reviewer() {
+    let mut f = risk_fixture(
+        "diff --git a/src/a.rs b/src/a.rs\n--- a/src/a.rs\n+++ b/src/a.rs\n@@ -1 +1 @@\n-    41\n+    42\n",
+    );
+    let job = f.run_job();
+    assert_eq!(f.runner.started(), 1, "no reviewer ran");
+    let Some(ReviewState::Skipped { why }) = f.store.review(job).unwrap() else {
+        panic!("the review should be skipped");
+    };
+    assert!(why.starts_with("risk routine"), "{why}");
+}
+
+#[test]
+fn a_risky_change_gets_the_reviewer() {
+    let mut f = risk_fixture(
+        "diff --git a/Cargo.toml b/Cargo.toml\n--- a/Cargo.toml\n+++ b/Cargo.toml\n@@ -1 +1,2 @@\n [dependencies]\n+left-pad = \"9\"\n",
+    );
+    let job = f.run_job();
+    assert_eq!(f.runner.started(), 2, "the reviewer ran");
+    assert!(matches!(
+        f.store.review(job).unwrap(),
+        Some(ReviewState::Running { .. })
+    ));
 }

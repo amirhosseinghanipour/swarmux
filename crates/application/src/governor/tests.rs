@@ -219,6 +219,7 @@ fn verification_runs_while_new_work_is_held() {
         let review = crate::ReviewSettings {
             enabled: true,
             model: "haiku".into(),
+            when: crate::ReviewWhen::Always,
         };
         JobService::new(
             r.store.clone(),

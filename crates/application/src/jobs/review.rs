@@ -1,11 +1,14 @@
 //! The review step: queue a read-only reviewer after a job succeeds, and
-//! file its verdict on that job when it ends.
+//! file its verdict on that job when it ends. Unless every job is to be
+//! reviewed, a change whose risk is routine is not worth a reviewer's run
+//! and is marked skipped, with the reason.
 
+use swarmux_domain::verifier::review_risk;
 use swarmux_domain::{Job, JobId, JobResult, JobStatus, ReviewState, parse_review, review_prompt};
 
 use super::JobService;
-use crate::AppResult;
 use crate::ports::NewJob;
+use crate::{AppResult, ReviewWhen};
 
 impl JobService {
     /// Queues the review of the job at `i`, which just finished with `result`.
@@ -33,6 +36,13 @@ impl JobService {
             Ok(diff) => diff,
             Err(e) => return self.fail_review(i, e.to_string(), None, 0.0),
         };
+        if self.review.when == ReviewWhen::Risk {
+            let risk = review_risk(&diff);
+            if !risk.warrants_review() {
+                let why = format!("risk {}", risk.summary());
+                return self.set_review_state(job.id, ReviewState::Skipped { why });
+            }
+        }
         let new = NewJob {
             session_id: job.session_id,
             prompt_id: None,

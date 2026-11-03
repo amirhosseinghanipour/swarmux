@@ -143,6 +143,8 @@ fn gate(outcome: GateOutcome, at: Millis) -> GateState {
         checks: vec![("cargo test".into(), outcome == GateOutcome::Pass, false)],
         protected_changed: 0,
         evidence_gaps: 0,
+        hidden: None,
+        tampering: 0,
         digest: String::new(),
         problem: None,
         at,

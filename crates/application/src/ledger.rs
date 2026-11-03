@@ -424,8 +424,20 @@ impl LedgerService {
             .objects("checks", runs)
             .strs("protected_changed", &pins)
             .strs("evidence_gaps", &r.findings.gaps)
+            .strs("tampering", &r.findings.tampering)
             .text("digest", &r.digest)
             .opt_str("problem", r.problem.as_deref());
+        // Hidden checks are counted, never named.
+        let payload = match r.findings.hidden {
+            Some(h) => payload.json(
+                "hidden",
+                &Payload::new()
+                    .int("ran", i64::from(h.ran))
+                    .int("passed", i64::from(h.passed))
+                    .build(),
+            ),
+            None => payload,
+        };
         let actor = if r.event.is_some() { "gate" } else { "cli" };
         self.append(now, LedgerKind::GateVerdict, actor, r.job, session, payload)
     }

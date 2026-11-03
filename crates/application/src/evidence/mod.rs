@@ -237,7 +237,7 @@ impl EvidenceService {
             .map(|c| c.gate.checks)
             .unwrap_or_default();
         let checks = checks_of(&verdict.facts, &defined);
-        if checks.is_empty() {
+        if checks.is_empty() && verdict.facts.hidden.is_none_or(|h| h.ran == 0) {
             return Err(fail("the passing verdict ran no checks".into()));
         }
         let (dir, repo_hint) = self.workdir(job, mission);
@@ -284,6 +284,7 @@ impl EvidenceService {
             dirty: facts.dirty,
             diff,
             checks,
+            hidden: verdict.facts.hidden,
             gates: trail.gates(),
             review,
             checkpoints,

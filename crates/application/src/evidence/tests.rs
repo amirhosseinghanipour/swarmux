@@ -351,3 +351,136 @@ fn cards_join_jobs_missions_and_bundles() {
     assert_eq!(by(plain).outcome, RunOutcome::Done);
     assert!(by(plain).mission.is_none());
 }
+
+#[test]
+fn hidden_checks_are_sealed_as_a_count_and_never_named() {
+    use crate::gate::GateRecord;
+    use swarmux_domain::gate::{CheckRun, GateFindings, GateOrigin, GateOutcome};
+    use swarmux_domain::verifier::HiddenTally;
+
+    let rig = EvidenceRig::new();
+    let m = delivered(&rig, "parser-fix");
+    let record = GateRecord {
+        job: m.job,
+        session: "claude-session".into(),
+        event: Some(swarmux_domain::HookEvent::Stop),
+        root: "/repo".into(),
+        origin: GateOrigin::File,
+        outcome: GateOutcome::Pass,
+        blocks: 0,
+        max_blocks: 3,
+        findings: GateFindings {
+            runs: vec![CheckRun {
+                name: "cargo test -p parser".into(),
+                command: "cargo test -p parser".into(),
+                exit: Some(0),
+                timed_out: false,
+                spawn_error: None,
+                duration_ms: 10,
+                output: String::new(),
+                flaky: false,
+            }],
+            hidden: Some(HiddenTally { ran: 2, passed: 2 }),
+            ..GateFindings::default()
+        },
+        digest: "swarmux gate: 1 check passed, 2 hidden".into(),
+        problem: None,
+    };
+    rig.ledger_service
+        .record_gate(&record, Some(rig.session.id), rig.clock.now())
+        .unwrap();
+    let verdict = rig
+        .ledger
+        .entries()
+        .into_iter()
+        .rev()
+        .find(|e| e.draft.kind == LedgerKind::GateVerdict)
+        .unwrap();
+    assert!(
+        verdict
+            .draft
+            .payload_json
+            .contains(r#""hidden":{"ran":2,"passed":2}"#),
+        "{}",
+        verdict.draft.payload_json
+    );
+    let b = rig.service.seal(&m).unwrap();
+    assert_eq!(b.hidden, Some(HiddenTally { ran: 2, passed: 2 }));
+    assert_eq!(b.signature_ok(), Ok(true));
+}
+
+/// One hidden check of repository `repo`.
+struct OneHidden;
+
+impl crate::verifier::HoldoutStore for OneHidden {
+    fn list(&self, repo: &str) -> AppResult<Vec<swarmux_domain::verifier::HoldoutCheck>> {
+        Ok(if repo == "repo" {
+            vec![swarmux_domain::verifier::HoldoutCheck {
+                check: swarmux_domain::gate::GateCheck::new("secret_case", "cargo", &["test"]),
+                files: Vec::new(),
+            }]
+        } else {
+            Vec::new()
+        })
+    }
+
+    fn add(
+        &self,
+        _: &str,
+        _: &swarmux_domain::gate::GateCheck,
+        _: &[(String, Vec<u8>)],
+    ) -> AppResult<swarmux_domain::verifier::HoldoutCheck> {
+        Err(AppError::Workspace("read only".into()))
+    }
+
+    fn remove(&self, _: &str, _: &str) -> AppResult<bool> {
+        Ok(false)
+    }
+
+    fn place(
+        &self,
+        _: &str,
+        _: &swarmux_domain::verifier::HoldoutCheck,
+        _: &Path,
+    ) -> AppResult<()> {
+        Ok(())
+    }
+
+    fn root(&self) -> PathBuf {
+        PathBuf::from("/holdout")
+    }
+}
+
+#[test]
+fn verify_runs_the_hidden_checks_again_and_reports_only_a_count() {
+    use swarmux_domain::verifier::HiddenTally;
+    let rig = EvidenceRig::new();
+    let mut b = rig.service.seal(&delivered(&rig, "a")).unwrap();
+    b.hidden = Some(HiddenTally { ran: 1, passed: 1 });
+    let rerunner = Rerunner::new(rig.checker.clone(), rig.checkouts.clone())
+        .with_holdout(std::sync::Arc::new(OneHidden));
+    let items = rerunner.run(&b);
+    let hidden = items.iter().find(|i| i.subject == "hidden checks").unwrap();
+    assert!(hidden.ok, "{hidden:?}");
+    assert_eq!(hidden.found, "1/1 pass");
+
+    rig.checker.exit("secret_case", 1);
+    let items = rerunner.run(&b);
+    let hidden = items.iter().find(|i| i.subject == "hidden checks").unwrap();
+    assert!(!hidden.ok);
+    assert_eq!(hidden.found, "0/1 pass");
+    assert!(
+        items
+            .iter()
+            .all(|i| !format!("{i:?}").contains("secret_case"))
+    );
+
+    // A bundle without hidden checks doesn't mention them.
+    b.hidden = None;
+    assert!(
+        rerunner
+            .run(&b)
+            .iter()
+            .all(|i| i.subject != "hidden checks")
+    );
+}
