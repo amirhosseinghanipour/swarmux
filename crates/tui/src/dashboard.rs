@@ -1,8 +1,8 @@
-//! State of the dashboard: which job it follows.
+//! State of the Focus screen: which job it follows.
 
 use swarmux_domain::{JobId, JobProgress};
 
-/// Without a followed job the dashboard shows the most recent one.
+/// Without a followed job the screen shows the most recent one.
 #[derive(Default)]
 pub struct DashboardState {
     pub followed: Option<JobId>,
@@ -10,6 +10,11 @@ pub struct DashboardState {
     pub replay: Option<JobProgress>,
     /// The review run of the replayed job, if it had one.
     pub replay_review: Option<JobProgress>,
+    /// The replayed job's prompt and final answer, from history.
+    pub replay_prompt: Option<String>,
+    pub replay_answer: Option<String>,
+    /// Draw the panel grid of earlier versions instead of Focus.
+    pub classic: bool,
 }
 
 impl DashboardState {
@@ -18,6 +23,8 @@ impl DashboardState {
         let (replay, review) = replay.map_or((None, None), |(j, r)| (Some(j), r));
         self.replay = replay;
         self.replay_review = review;
+        self.replay_prompt = None;
+        self.replay_answer = None;
     }
 
     /// The review run of the replayed job.

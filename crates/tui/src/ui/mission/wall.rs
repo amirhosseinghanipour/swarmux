@@ -13,7 +13,7 @@ use swarmux_domain::display_name;
 use super::layout::WallMode;
 use super::{age, glyph, panel, sigil};
 use crate::app::App;
-use crate::mission::{Tile, TileState, Tone};
+use crate::mission::{Pane, Tile, TileState, Tone};
 use crate::theme::Theme;
 use crate::ui::dashboard::{dim, fit, label};
 use crate::ui::look::Icon;
@@ -142,7 +142,10 @@ fn render_cards(
                 break;
             }
             match tiles.get(slot) {
-                Some(tile) => render_card(frame, *cell, app, tile, scale, t),
+                Some(tile) => {
+                    let selected = picked(app, slot);
+                    render_card(frame, *cell, app, tile, (scale, selected), t);
+                }
                 None => render_free(frame, *cell, t, slot + 1),
             }
         }
@@ -157,7 +160,14 @@ fn render_free(frame: &mut Frame, area: Rect, t: &Theme, number: usize) {
     frame.render_widget(block, area);
 }
 
-fn render_card(frame: &mut Frame, area: Rect, app: &App, tile: &Tile, scale: f64, t: &Theme) {
+fn render_card(
+    frame: &mut Frame,
+    area: Rect,
+    app: &App,
+    tile: &Tile,
+    (scale, selected): (f64, bool),
+    t: &Theme,
+) {
     let (color, word) = state_style(t, tile.state);
     let title = Line::from(vec![
         Span::raw(" "),
@@ -174,7 +184,7 @@ fn render_card(frame: &mut Frame, area: Rect, app: &App, tile: &Tile, scale: f64
     ]);
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
-        .border_style(Style::new().fg(t.border))
+        .border_style(Style::new().fg(if selected { t.border_focus } else { t.border }))
         .style(Style::new().bg(t.panel_bg))
         .title(title)
         .title(meta.right_aligned());
@@ -286,6 +296,11 @@ fn render_card(frame: &mut Frame, area: Rect, app: &App, tile: &Tile, scale: f64
     );
 }
 
+/// Whether tile `slot` is the one the arrow keys are on.
+fn picked(app: &App, slot: usize) -> bool {
+    app.mission.pane == Pane::Wall && app.mission.wall_at == slot
+}
+
 /// One row per session: below the tile breakpoint or with many sessions.
 fn render_list(frame: &mut Frame, area: Rect, app: &App, tiles: &[Tile]) {
     let t = &app.look.theme;
@@ -299,7 +314,8 @@ fn render_list(frame: &mut Frame, area: Rect, app: &App, tiles: &[Tile]) {
     let mut lines: Vec<Line> = tiles
         .iter()
         .take(shown)
-        .map(|tile| list_row(app, tile, w))
+        .enumerate()
+        .map(|(slot, tile)| list_row(app, tile, w, picked(app, slot)))
         .collect();
     if shown < tiles.len() {
         lines.push(Line::from(dim(
@@ -310,7 +326,7 @@ fn render_list(frame: &mut Frame, area: Rect, app: &App, tiles: &[Tile]) {
     frame.render_widget(Paragraph::new(lines), area);
 }
 
-fn list_row(app: &App, tile: &Tile, width: usize) -> Line<'static> {
+fn list_row(app: &App, tile: &Tile, width: usize, selected: bool) -> Line<'static> {
     let t = &app.look.theme;
     let ctx = tile
         .context
@@ -323,6 +339,14 @@ fn list_row(app: &App, tile: &Tile, width: usize) -> Line<'static> {
     let name_w = 14.min(width / 4);
     let badge_w = if width >= 90 { 22 } else { 0 };
     let head = vec![
+        Span::styled(
+            if selected {
+                glyph(app, Icon::Here)
+            } else {
+                " "
+            },
+            Style::new().fg(t.border_focus),
+        ),
         sigil_span(t, tile),
         Span::raw(" "),
         state_glyph(app, tile),

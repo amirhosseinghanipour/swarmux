@@ -11,7 +11,7 @@ mod strip;
 mod wall;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 use ratatui::{
     Frame,
@@ -23,7 +23,6 @@ use ratatui::{
 
 use self::layout::Panel;
 use crate::app::App;
-use crate::mission::wall_tiles;
 use crate::theme::Theme;
 use crate::ui::dashboard::{dim, label};
 use crate::ui::look::Icon;
@@ -47,20 +46,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let screen = frame.area();
     let plan = layout::plan((screen.width, screen.height), area, app.look.gaps);
 
-    let held: Vec<_> = app
-        .guard
-        .approvals()
-        .iter()
-        .filter_map(|a| a.request.job_id)
-        .collect();
-    let tiles = wall_tiles(
-        &app.sessions,
-        &app.mission.facts,
-        &app.mission.gates,
-        &held,
-        app.mission.usage(),
-        now,
-    );
+    let tiles = app.wall();
     strip::render(frame, plan.strip, app, &tiles, now);
     for (which, rect) in &plan.panels {
         match which {

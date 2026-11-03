@@ -49,6 +49,14 @@ impl Default for Cadence {
     }
 }
 
+/// Which Mission control panel the arrow keys move in.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Pane {
+    #[default]
+    Inbox,
+    Wall,
+}
+
 /// What the home screen shows.
 pub struct MissionState {
     /// Ranked, most urgent first.
@@ -60,6 +68,10 @@ pub struct MissionState {
     pub gates: HashMap<JobId, GateState>,
     pub snapshot: TelemetrySnapshot,
     pub cadence: Cadence,
+    /// The panel Tab last chose.
+    pub pane: Pane,
+    /// The selected tile of the wall, by place.
+    pub wall_at: usize,
     selected: Option<AttentionId>,
     /// Where the selection was in the list, to stay near it when it goes.
     selected_at: usize,
@@ -81,6 +93,8 @@ impl Default for MissionState {
             gates: HashMap::new(),
             snapshot: TelemetrySnapshot::default(),
             cadence: Cadence::default(),
+            pane: Pane::default(),
+            wall_at: 0,
             selected: None,
             selected_at: 0,
             moved: false,
@@ -311,7 +325,7 @@ pub struct Chip {
 
 /// The done-gate's chips: its state first (cards cut the row), then one
 /// per check, then what else it found.
-fn gate_chips(g: &GateState) -> Vec<Chip> {
+pub(crate) fn gate_chips(g: &GateState) -> Vec<Chip> {
     let chip = |text: String, tone| Chip { text, tone };
     let mut out = Vec::new();
     match g.outcome {
@@ -348,24 +362,7 @@ fn chips_of(f: &JobFact, gate: Option<&GateState>, held: bool) -> Vec<Chip> {
         tone,
     };
     let mut out = gate.map(gate_chips).unwrap_or_default();
-    match &f.review {
-        Some(ReviewState::Requested | ReviewState::Running { .. }) => {
-            out.push(chip("review pending", Tone::Info));
-        }
-        Some(ReviewState::Done { review, .. }) if review.verdict == ReviewVerdict::Concerns => {
-            out.push(Chip {
-                text: format!(
-                    "review {} concern{}",
-                    review.concerns.len(),
-                    if review.concerns.len() == 1 { "" } else { "s" }
-                ),
-                tone: Tone::Warn,
-            });
-        }
-        Some(ReviewState::Done { .. }) => out.push(chip("review pass", Tone::Good)),
-        Some(ReviewState::Failed { .. }) => out.push(chip("review failed", Tone::Bad)),
-        None => {}
-    }
+    out.extend(f.review.as_ref().map(review_chip));
     if held {
         out.push(chip("held call", Tone::Warn));
     }
@@ -379,6 +376,26 @@ fn chips_of(f: &JobFact, gate: Option<&GateState>, held: bool) -> Vec<Chip> {
         });
     }
     out
+}
+
+/// The review as a chip: pending, passed, concerned or failed.
+pub(crate) fn review_chip(review: &ReviewState) -> Chip {
+    let chip = |text: String, tone| Chip { text, tone };
+    match review {
+        ReviewState::Requested | ReviewState::Running { .. } => {
+            chip("review pending".into(), Tone::Info)
+        }
+        ReviewState::Done { review, .. } if review.verdict == ReviewVerdict::Concerns => chip(
+            format!(
+                "review {} concern{}",
+                review.concerns.len(),
+                if review.concerns.len() == 1 { "" } else { "s" }
+            ),
+            Tone::Warn,
+        ),
+        ReviewState::Done { .. } => chip("review pass".into(), Tone::Good),
+        ReviewState::Failed { .. } => chip("review failed".into(), Tone::Bad),
+    }
 }
 
 /// The wall, in a stable order: by when the session was created, then by
