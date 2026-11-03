@@ -11,6 +11,7 @@ use swarmux_application::{AddWorktree, Added, AppError, AppResult, Removed, Work
 use swarmux_domain::Handoff;
 
 use crate::git::git_command;
+use crate::paths::long;
 
 /// Where swarmux keeps its files inside a worktree's own git directory.
 const META_DIR: &str = "swarmux";
@@ -34,7 +35,7 @@ impl GitWorktrees {
 
     fn output(&self, cwd: &Path, args: &[&str]) -> AppResult<Output> {
         git_command(&self.bin, cwd)
-            .args(["-c", "core.longpaths=true", "-c", "core.quotepath=off"])
+            .args(["-c", "core.quotepath=off"])
             .args(args)
             .output()
             .map_err(|e| AppError::Workspace(format!("git: {e}")))
@@ -145,7 +146,7 @@ impl Worktrees for GitWorktrees {
 
     fn add(&self, req: &AddWorktree) -> AppResult<Added> {
         if let Some(parent) = req.path.parent() {
-            fs::create_dir_all(parent)
+            fs::create_dir_all(long(parent))
                 .map_err(|e| AppError::Workspace(format!("{}: {e}", parent.display())))?;
         }
         // Registrations of folders that vanished would block their branches.
@@ -165,7 +166,7 @@ impl Worktrees for GitWorktrees {
             known.extend(copied.iter().cloned());
             known.sort();
             known.dedup();
-            fs::write(meta.join(COPIED_FILE), known.join("\n"))
+            fs::write(long(&meta.join(COPIED_FILE)), known.join("\n"))
                 .map_err(|e| AppError::Workspace(format!("{}: {e}", meta.display())))?;
         }
         Ok(Added {
@@ -236,7 +237,7 @@ impl Worktrees for GitWorktrees {
 
     fn write_handoff(&self, path: &Path, handoff: &Handoff) -> AppResult<PathBuf> {
         let file = self.meta_dir(path)?.join(HANDOFF_FILE);
-        fs::write(&file, handoff.to_json())
+        fs::write(long(&file), handoff.to_json())
             .map_err(|e| AppError::Workspace(format!("{}: {e}", file.display())))?;
         Ok(file)
     }
@@ -245,7 +246,7 @@ impl Worktrees for GitWorktrees {
 pub(crate) fn remove_dir_retrying(path: &Path) -> AppResult<()> {
     let mut last = None;
     for attempt in 0..TRIES {
-        match fs::remove_dir_all(path) {
+        match fs::remove_dir_all(long(path)) {
             Ok(()) => return Ok(()),
             Err(e) if e.kind() == ErrorKind::NotFound => return Ok(()),
             Err(e) => {
@@ -264,19 +265,19 @@ pub(crate) fn remove_dir_retrying(path: &Path) -> AppResult<()> {
 }
 
 fn clear_readonly(dir: &Path) {
-    let Ok(entries) = fs::read_dir(dir) else {
+    let Ok(entries) = fs::read_dir(long(dir)) else {
         return;
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        if let Ok(meta) = fs::symlink_metadata(&path) {
+        if let Ok(meta) = fs::symlink_metadata(long(&path)) {
             if meta.is_dir() {
                 clear_readonly(&path);
             } else if meta.permissions().readonly() {
                 let mut perms = meta.permissions();
                 #[allow(clippy::permissions_set_readonly_false)]
                 perms.set_readonly(false);
-                let _ = fs::set_permissions(&path, perms);
+                let _ = fs::set_permissions(long(&path), perms);
             }
         }
     }
@@ -321,7 +322,7 @@ fn copy_listed(from: &Path, to: &Path, listed: &[String]) -> Vec<String> {
         let parent = rel.parent().map(Path::to_path_buf).unwrap_or_default();
         match name {
             Some(name) if name.contains(['*', '?']) => {
-                let Ok(dir) = fs::read_dir(from.join(&parent)) else {
+                let Ok(dir) = fs::read_dir(long(&from.join(&parent))) else {
                     continue;
                 };
                 let mut names: Vec<String> = dir
@@ -342,23 +343,23 @@ fn copy_listed(from: &Path, to: &Path, listed: &[String]) -> Vec<String> {
 
 fn copy_one(from: &Path, to: &Path, rel: &Path, copied: &mut Vec<String>) {
     let src = from.join(rel);
-    let Ok(meta) = fs::symlink_metadata(&src) else {
+    let Ok(meta) = fs::symlink_metadata(long(&src)) else {
         return;
     };
     let dst = to.join(rel);
     let rel_text = rel.to_string_lossy().replace('\\', "/");
     if meta.is_file() {
-        if dst.exists() {
+        if long(&dst).exists() {
             return;
         }
         if let Some(dir) = dst.parent() {
-            let _ = fs::create_dir_all(dir);
+            let _ = fs::create_dir_all(long(dir));
         }
-        if fs::copy(&src, &dst).is_ok() {
+        if fs::copy(long(&src), long(&dst)).is_ok() {
             copied.push(rel_text);
         }
     } else if meta.is_dir() {
-        let Ok(entries) = fs::read_dir(&src) else {
+        let Ok(entries) = fs::read_dir(long(&src)) else {
             return;
         };
         for e in entries.flatten() {
