@@ -184,12 +184,13 @@ fn burn(frame: &mut Frame, area: Rect, app: &App, now: Millis) {
             &feed_note(&app.mission.snapshot.usage, "transcripts"),
         );
     };
-    let day: f64 = u
+    let day = u
         .blocks
         .iter()
         .filter(|b| b.end > now - 24 * 3_600_000)
         .map(|b| b.cost)
-        .sum();
+        .sum::<f64>()
+        .max(0.0);
     let rate = u
         .burn
         .map_or("—".to_string(), |b| format!("${:.2}/h", b.usd_per_hour));
