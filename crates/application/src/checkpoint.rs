@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use swarmux_domain::{Checkpoint, CheckpointReason, Handoff, JobId};
+use swarmux_domain::{Checkpoint, CheckpointReason, Handoff, JobId, WorktreeRecord};
 
 use crate::AppResult;
 use crate::hookbus::{SessionStartContext, SessionStartInfo};
@@ -191,6 +191,11 @@ impl CheckpointService {
     /// The checkpoints of `job`, oldest first.
     pub fn list(&self, job: JobId) -> AppResult<Vec<Checkpoint>> {
         self.worktrees.store().checkpoints(job)
+    }
+
+    /// The worktree `job` works in, while it has one.
+    pub fn worktree(&self, job: JobId) -> AppResult<Option<WorktreeRecord>> {
+        self.worktrees.record_for(job)
     }
 
     /// The newest checkpoint of `job`.

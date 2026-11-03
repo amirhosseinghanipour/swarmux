@@ -159,8 +159,11 @@ fn header(frame: &mut Frame, area: Rect, app: &App, f: &Focus) {
     if let Some(branch) = &f.checkpoints.branch {
         badge.push(format!("{} {branch}", glyph(app, Icon::Git)));
     }
-    if let Some(cwd) = &who.cwd {
-        badge.push(cwd.display().to_string());
+    // The worktree is where the job's files really are.
+    match (&f.checkpoints.worktree, &who.cwd) {
+        (Some(worktree), _) => badge.push(worktree.clone()),
+        (None, Some(cwd)) => badge.push(cwd.display().to_string()),
+        (None, None) => {}
     }
     let ctx = who.context.map(|c| format!("ctx {:.0}%", c * 100.0));
     let right = ctx.map_or_else(Line::default, |c| {

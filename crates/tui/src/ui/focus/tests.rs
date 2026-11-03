@@ -360,6 +360,40 @@ fn the_classic_grid_is_one_key_away() {
 }
 
 #[test]
+fn checkpoints_and_the_worktree_come_from_the_checkpoint_service() {
+    use swarmux_application::Notes;
+    use swarmux_application::testing::WorktreeRig;
+    use swarmux_domain::CheckpointReason;
+
+    let mut t = reviewed_job();
+    let job = t.app.current_job().unwrap().job_id;
+    let rig = WorktreeRig::new();
+    // The rig's store numbers jobs like the app's: its first job is this one.
+    assert_eq!(rig.job("same job"), job);
+    let added = rig.worktrees.prepare(job, &rig.session).unwrap().unwrap();
+    for reason in [CheckpointReason::GatePass, CheckpointReason::PreCompact] {
+        rig.checkpoints
+            .take(job, "claude-1", reason, &Notes::default())
+            .unwrap()
+            .unwrap();
+    }
+    t.app = t.app.with_checkpoints(rig.checkpoints.clone());
+    let mut t = on_focus(t);
+    t.app.look.icons = IconSet::Unicode;
+    let out = render_to_string(&t.app, 160, 48);
+    let branch = &added.record.branch;
+    assert!(out.contains(branch.as_str()), "{out}");
+    assert!(out.contains("checkpoints ◇ ◇"), "{out}");
+    assert!(!out.contains("none yet"), "{out}");
+    t.keys([KeyCode::Char(']')]);
+    assert_eq!(t.app.focus_state.checkpoint, Some(0));
+    t.keys([KeyCode::Char(']'), KeyCode::Char(']')]);
+    assert_eq!(t.app.focus_state.checkpoint, Some(1), "stops at the last");
+    let out = render_to_string(&t.app, 160, 48);
+    assert!(out.contains("before compact"), "{out}");
+}
+
+#[test]
 fn scrubbing_without_checkpoints_says_so() {
     let mut t = on_focus(reviewed_job());
     t.keys([KeyCode::Char(']')]);

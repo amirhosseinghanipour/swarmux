@@ -3,9 +3,11 @@
 
 use std::path::PathBuf;
 
+use swarmux_application::{AppResult, CheckpointService};
 use swarmux_domain::telemetry::Todo;
 use swarmux_domain::{
-    JobId, JobProgress, JobStatus, Millis, ReviewState, ReviewVerdict, SessionState,
+    CheckpointReason, JobId, JobProgress, JobStatus, Millis, ReviewState, ReviewVerdict,
+    SessionState,
 };
 
 use super::sat::{self, Sat, Signals};
@@ -48,11 +50,51 @@ pub struct Checkpoints {
 }
 
 impl Checkpoints {
-    /// The checkpoints of `job`. Nothing records them yet, so this is empty
-    /// until a source is wired in here.
-    pub fn of(_job: JobId) -> Checkpoints {
-        Checkpoints::default()
+    /// Reads where `job` works and its checkpoints, oldest first. The
+    /// worktree's branch and folder come from the newest checkpoint once
+    /// the worktree itself is gone.
+    pub fn load(service: &CheckpointService, job: JobId) -> AppResult<Checkpoints> {
+        let list = service.list(job)?;
+        let (branch, worktree) = match service.worktree(job)? {
+            Some(w) => (Some(w.branch), Some(w.path.display().to_string())),
+            None => match list.last() {
+                Some(c) => (
+                    Some(c.branch.clone()),
+                    Some(c.worktree.display().to_string()),
+                ),
+                None => (None, None),
+            },
+        };
+        let dots = list
+            .iter()
+            .map(|c| CheckpointDot {
+                label: format!("{} {}", reason_label(c.reason), short_sha(&c.commit)),
+                at: c.at,
+            })
+            .collect();
+        Ok(Checkpoints {
+            branch,
+            worktree,
+            dots,
+        })
     }
+
+    /// What the app last read for `job`; empty when it has read nothing.
+    pub fn of(app: &App, job: JobId) -> Checkpoints {
+        app.checkpoints_of(job).cloned().unwrap_or_default()
+    }
+}
+
+fn reason_label(reason: CheckpointReason) -> &'static str {
+    match reason {
+        CheckpointReason::GatePass => "gate pass",
+        CheckpointReason::PreCompact => "before compact",
+        CheckpointReason::Manual => "manual",
+    }
+}
+
+fn short_sha(sha: &str) -> &str {
+    sha.get(..7).unwrap_or(sha)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -216,7 +258,7 @@ impl Focus {
             who,
             sat,
             chips,
-            checkpoints: Checkpoints::of(job.job_id),
+            checkpoints: Checkpoints::of(app, job.job_id),
             recovery: job.loop_stops.clone(),
             timeline,
             rows,

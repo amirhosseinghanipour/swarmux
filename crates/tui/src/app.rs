@@ -10,9 +10,9 @@ use std::rc::Rc;
 
 use swarmux_application::ports::Clock;
 use swarmux_application::{
-    AppError, AppResult, GateService, GuardService, HistoryService, HookBus, JobService,
-    PendingApproval, PromptService, QueueEntry, QueueStats, RoutingService, SessionService,
-    SessionTerminal, TelemetryService, TelemetrySettings, UiSettings,
+    AppError, AppResult, CheckpointService, GateService, GuardService, HistoryService, HookBus,
+    JobService, PendingApproval, PromptService, QueueEntry, QueueStats, RoutingService,
+    SessionService, SessionTerminal, TelemetryService, TelemetrySettings, UiSettings,
 };
 use swarmux_domain::{AttentionKind, JobId, JobProgress, Millis, PromptId, Session, SessionId};
 
@@ -138,6 +138,10 @@ pub struct App {
     gate: Option<GateService>,
     /// Opens a session in a terminal tab of its own.
     terminal: Option<Rc<dyn SessionTerminal>>,
+    /// Where Focus reads a job's worktree and checkpoints.
+    checkpoints: Option<Rc<CheckpointService>>,
+    /// What was last read for the job Focus shows, and when.
+    focus_checkpoints: Option<(JobId, Millis, Checkpoints)>,
 }
 
 /// What the composition root knows at start-up.
@@ -157,6 +161,8 @@ const SPLASH_MS: u64 = 1500;
 const DIFF_LINES: usize = 2000;
 /// How long a toast stays up, in milliseconds.
 const TOAST_MS: u64 = 2500;
+/// How often Focus re-reads the job's checkpoints.
+const CHECKPOINTS_EVERY_MS: Millis = 1_000;
 
 impl App {
     pub fn new(
@@ -199,6 +205,8 @@ impl App {
             hooks: None,
             gate: None,
             terminal: None,
+            checkpoints: None,
+            focus_checkpoints: None,
             focus: None,
             toast: None,
             splash: SplashInfo::default(),
@@ -251,6 +259,47 @@ impl App {
     pub fn with_terminal(mut self, terminal: Rc<dyn SessionTerminal>) -> App {
         self.terminal = Some(terminal);
         self
+    }
+
+    /// Lets Focus show the job's branch, worktree and checkpoints.
+    pub fn with_checkpoints(mut self, checkpoints: Rc<CheckpointService>) -> App {
+        self.checkpoints = Some(checkpoints);
+        self
+    }
+
+    /// The worktree and checkpoints last read for `job`.
+    pub(crate) fn checkpoints_of(&self, job: JobId) -> Option<&Checkpoints> {
+        self.focus_checkpoints
+            .as_ref()
+            .filter(|(j, _, _)| *j == job)
+            .map(|(_, _, c)| c)
+    }
+
+    /// Re-reads the checkpoints of the job Focus shows: when it changes,
+    /// and then once a second.
+    fn refresh_checkpoints(&mut self) {
+        let Some(service) = self.checkpoints.clone() else {
+            return;
+        };
+        let Some(job) = self
+            .on_focus()
+            .then(|| self.current_job().map(|j| j.job_id))
+            .flatten()
+        else {
+            return;
+        };
+        let now = self.now();
+        let fresh = self
+            .focus_checkpoints
+            .as_ref()
+            .is_some_and(|(j, at, _)| *j == job && now - at < CHECKPOINTS_EVERY_MS);
+        if fresh {
+            return;
+        }
+        match Checkpoints::load(&service, job) {
+            Ok(c) => self.focus_checkpoints = Some((job, now, c)),
+            Err(e) => self.error = Some(e.to_string()),
+        }
     }
 
     /// Time for ages and countdowns; without it the screens show no ages.
@@ -371,6 +420,7 @@ impl App {
             self.refresh_history();
         }
         self.refresh_mission();
+        self.refresh_checkpoints();
         let on_focus = (self.screen == Screen::Dashboard && !self.dashboard.classic)
             .then(|| self.current_job().map(|j| (j.job_id, j.log.len())))
             .flatten();
@@ -772,7 +822,7 @@ impl App {
         let Some(job) = self.current_job().map(|j| j.job_id) else {
             return;
         };
-        let count = Checkpoints::of(job).dots.len();
+        let count = Checkpoints::of(self, job).dots.len();
         if count == 0 {
             self.notice = Some("no checkpoints on this job yet".into());
             return;

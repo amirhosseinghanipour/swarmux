@@ -284,7 +284,7 @@ fn run_tui(no_splash: bool) -> anyhow::Result<()> {
         Rc::new(hook::SpoolFeed::new(hook::spool_dir(&paths.data_dir))),
     ]));
     let hook_bus = HookBus::new(server.clone(), ledger, store.clone(), clock.clone())
-        .with_checkpoints(checkpoints)
+        .with_checkpoints(checkpoints.clone())
         .with_truth(truth.clone());
     let mut guard = GuardService::new(policy, server, decisions.clone(), clock.clone())
         .with_timeout_secs(guard_settings.approval_timeout_secs)
@@ -339,6 +339,7 @@ fn run_tui(no_splash: bool) -> anyhow::Result<()> {
     .with_clock(Rc::new(SystemClock))
     .with_hook_bus(hook_bus)
     .with_gate(gate)
+    .with_checkpoints(checkpoints)
     .with_terminal(Rc::new(WindowsTerminal::new(doctor::claude_bin())))
     .with_telemetry_feed(telemetry, &settings.telemetry)
     .with_look(
