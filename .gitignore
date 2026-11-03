@@ -3,5 +3,6 @@
 # Private working notes, never committed
 docs/
 
-# Local agent worktrees
-.claude/worktrees/
+
+# Local Claude Code files (logs, worktrees, settings)
+.claude/
