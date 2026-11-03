@@ -1,6 +1,6 @@
 //! swarmux domain layer: entities and pure business rules.
 //!
-//! Depends on nothing but `uuid` and `thiserror`. No I/O, no clocks, no
+//! Depends on nothing but `uuid`, `thiserror` and `sha2`. No I/O, no clocks, no
 //! frameworks; time is always passed in by the caller.
 
 mod date;
@@ -9,6 +9,7 @@ mod event;
 mod guard;
 mod job;
 mod json;
+pub mod ledger;
 mod model;
 mod phase;
 mod progress;
