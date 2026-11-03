@@ -45,6 +45,7 @@ struct RawConfig {
     pricing: Option<crate::config_telemetry::RawPricing>,
     worktree: Option<crate::config_worktree::RawWorktree>,
     governor: Option<crate::config_governor::RawGovernor>,
+    notify: Option<crate::config_notify::RawNotify>,
     theme: Option<String>,
     layout: Option<String>,
     icons: Option<String>,
@@ -169,6 +170,9 @@ pub fn parse_settings(text: &str, path: &Path) -> Result<Settings, ConfigError> 
     }
     if let Some(governor) = raw.governor {
         settings.governor = crate::config_governor::parse_governor(governor, text, path)?;
+    }
+    if let Some(notify) = raw.notify {
+        settings.notify = crate::config_notify::parse_notify(notify, text, path)?;
     }
     let ui = RawUi {
         theme: raw.theme,
@@ -705,6 +709,34 @@ unknown = 1
         ] {
             let e = parse(bad).unwrap_err();
             assert!(bad.contains("unknown") || e.line == Some(2), "{bad}: {e}");
+        }
+    }
+
+    #[test]
+    fn notify_section_is_read_and_checked() {
+        let s = parse(
+            "[notify]
+enabled = false
+toast = false
+terminal = \"osc9\"
+quiet = \"22:00-08:00\"
+ntfy = \"https://ntfy.sh/my-topic\"
+",
+        )
+        .unwrap();
+        let n = &s.notify;
+        assert!(!n.enabled && !n.toast);
+        assert_eq!(n.terminal, swarmux_application::TerminalMode::Osc9);
+        assert!(n.quiet.is_some());
+        assert_eq!(n.ntfy.as_deref(), Some("https://ntfy.sh/my-topic"));
+        assert_eq!(parse("").unwrap().notify.ntfy, None);
+        for bad in [
+            "[notify]\nquiet = \"late\"\n",
+            "[notify]\nterminal = \"loud\"\n",
+            "[notify]\nntfy = \"ntfy.sh/topic\"\n",
+            "[notify]\nntfy = \"https://ntfy.sh/a b\"\n",
+        ] {
+            assert_eq!(parse(bad).unwrap_err().line, Some(2), "{bad}");
         }
     }
 
