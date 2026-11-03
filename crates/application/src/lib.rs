@@ -6,6 +6,7 @@
 pub mod attention;
 pub mod checkpoint;
 mod decision;
+pub mod dist;
 mod error;
 pub mod evidence;
 pub mod gate;
