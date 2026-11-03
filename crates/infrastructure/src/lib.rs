@@ -22,6 +22,7 @@ mod monitor;
 pub mod notify;
 mod outcomes;
 pub mod paths;
+pub mod process;
 pub mod sqlite;
 pub mod telemetry;
 pub mod terminal;

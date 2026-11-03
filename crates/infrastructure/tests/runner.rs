@@ -327,3 +327,226 @@ fn command_line_shows_the_real_flags_without_the_hook_json() {
     );
     assert!(line.ends_with("--settings …"), "{line}");
 }
+
+/// The process ids a fake `claude` and its grandchildren wrote down.
+fn recorded_pids(file: &Path) -> Vec<u32> {
+    std::fs::read_to_string(file)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| l.trim().parse().ok())
+        .collect()
+}
+
+fn is_running(pid: u32) -> bool {
+    use sysinfo::{Pid, ProcessesToUpdate, System};
+    let mut sys = System::new().unwrap();
+    let pid = Pid::from_u32(pid);
+    sys.refresh_processes(ProcessesToUpdate::Some(&[pid]), true);
+    sys.process(pid).is_some()
+}
+
+/// Starts a job whose `claude` has two grandchildren, cancels it, and
+/// expects no process of the tree to remain.
+fn cancel_leaves_no_process(bin: &Path) {
+    let rt = runtime();
+    let dir = tempfile::tempdir().unwrap();
+    let pids = dir.path().join("pids");
+    let env = vec![
+        ("FAKE_CLAUDE_SLEEP_MS".to_string(), "120000".to_string()),
+        ("FAKE_CLAUDE_GRANDCHILDREN".to_string(), "2".to_string()),
+        (
+            "FAKE_CLAUDE_PIDS_FILE".to_string(),
+            pids.to_string_lossy().into_owned(),
+        ),
+    ];
+    let cli = ClaudeCli::new(bin.into(), rt.handle().clone()).with_env(env);
+    let req = request(dir.path().into(), "hi");
+    let job = req.job_id;
+    cli.start(req, Box::new(|_| {}));
+    assert!(
+        eventually(30, || recorded_pids(&pids).len() >= 3),
+        "claude and its two grandchildren did not all start: {:?}",
+        recorded_pids(&pids)
+    );
+    let tree = recorded_pids(&pids);
+    assert!(tree.iter().all(|p| is_running(*p)));
+
+    cli.cancel(job);
+    assert!(
+        eventually(30, || tree.iter().all(|p| !is_running(*p))),
+        "still running after cancel: {:?}",
+        tree.iter().filter(|p| is_running(**p)).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn cancel_kills_every_descendant() {
+    cancel_leaves_no_process(Path::new(FAKE));
+}
+
+/// `claude` on Windows is usually an npm `.cmd` wrapper around `node`.
+#[cfg(windows)]
+#[test]
+fn cancel_kills_every_descendant_behind_a_cmd_wrapper() {
+    let dir = tempfile::tempdir().unwrap();
+    let wrapper = dir.path().join("claude.cmd");
+    std::fs::write(&wrapper, format!("@echo off\r\n\"{FAKE}\" %*\r\n")).unwrap();
+    cancel_leaves_no_process(&wrapper);
+}
+
+#[test]
+fn eight_concurrent_starts_are_spaced_apart() {
+    use swarmux_infrastructure::process::Stagger;
+    const GAP: Duration = Duration::from_millis(600);
+    let rt = runtime();
+    let dir = tempfile::tempdir().unwrap();
+    let starts = dir.path().join("starts");
+    let env = vec![(
+        "FAKE_CLAUDE_START_FILE".to_string(),
+        starts.to_string_lossy().into_owned(),
+    )];
+    let stagger = std::sync::Arc::new(Stagger::new(GAP, Duration::from_millis(50)));
+    let cli = ClaudeCli::new(FAKE.into(), rt.handle().clone())
+        .with_env(env)
+        .with_stagger(stagger);
+    let (tx, rx) = mpsc::channel();
+    for n in 1..=8 {
+        let mut req = request(dir.path().into(), "hi");
+        req.job_id = JobId(n);
+        let tx = tx.clone();
+        cli.start(
+            req,
+            Box::new(move |m| {
+                let _ = tx.send(m);
+            }),
+        );
+    }
+    let mut exited = 0;
+    while exited < 8 {
+        match rx.recv_timeout(Duration::from_secs(60)) {
+            Ok(RunnerMsg::Exited { .. }) => exited += 1,
+            Ok(_) => {}
+            Err(e) => panic!("only {exited} of 8 jobs finished: {e}"),
+        }
+    }
+    let mut at: Vec<u128> = std::fs::read_to_string(&starts)
+        .unwrap()
+        .lines()
+        .filter_map(|l| l.trim().parse().ok())
+        .collect();
+    assert_eq!(at.len(), 8, "{at:?}");
+    at.sort_unstable();
+    // Process start-up time varies, so only a third of the gap is required.
+    let least = (GAP / 3).as_nanos();
+    for pair in at.windows(2) {
+        let spacing = pair[1] - pair[0];
+        assert!(
+            spacing >= least,
+            "two claude processes started {} ms apart",
+            spacing / 1_000_000
+        );
+    }
+    let span = (at[7] - at[0]) as f64 / 1e9;
+    assert!(span >= 7.0 * GAP.as_secs_f64() * 0.6, "all within {span} s");
+}
+
+#[test]
+fn a_start_that_collides_on_the_config_file_is_retried() {
+    let rt = runtime();
+    let dir = tempfile::tempdir().unwrap();
+    let counter = dir.path().join("count");
+    let env = vec![
+        ("FAKE_CLAUDE_CONTENTION".to_string(), "2".to_string()),
+        (
+            "FAKE_CLAUDE_COUNTER_FILE".to_string(),
+            counter.to_string_lossy().into_owned(),
+        ),
+        (
+            "FAKE_CLAUDE_FIXTURE".to_string(),
+            fixture("stream_basic.jsonl"),
+        ),
+    ];
+    let msgs = run_with_cli(
+        ClaudeCli::new(FAKE.into(), rt.handle().clone()).with_env(env),
+        request(dir.path().into(), "hi"),
+    );
+    let tries = std::fs::read_to_string(&counter).unwrap().lines().count();
+    assert_eq!(tries, 3, "two collisions, then a run");
+    assert!(
+        matches!(msgs.last(), Some(RunnerMsg::Exited { code: Some(0), .. })),
+        "{msgs:?}"
+    );
+}
+
+#[test]
+fn a_start_that_keeps_colliding_reports_the_failure() {
+    let rt = runtime();
+    let dir = tempfile::tempdir().unwrap();
+    let counter = dir.path().join("count");
+    let env = vec![
+        ("FAKE_CLAUDE_CONTENTION".to_string(), "99".to_string()),
+        (
+            "FAKE_CLAUDE_COUNTER_FILE".to_string(),
+            counter.to_string_lossy().into_owned(),
+        ),
+    ];
+    let msgs = run_with_cli(
+        ClaudeCli::new(FAKE.into(), rt.handle().clone()).with_env(env),
+        request(dir.path().into(), "hi"),
+    );
+    let tries = std::fs::read_to_string(&counter).unwrap().lines().count();
+    assert_eq!(tries, 4, "one start and three retries");
+    match msgs.last() {
+        Some(RunnerMsg::Exited { code, stderr_tail }) => {
+            assert_eq!(*code, Some(1));
+            assert!(stderr_tail.contains(".claude.json"), "{stderr_tail}");
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn an_ordinary_failure_is_not_retried() {
+    let rt = runtime();
+    let dir = tempfile::tempdir().unwrap();
+    let counter = dir.path().join("count");
+    let env = vec![
+        ("FAKE_CLAUDE_EXIT".to_string(), "1".to_string()),
+        (
+            "FAKE_CLAUDE_STDERR".to_string(),
+            "Invalid API key".to_string(),
+        ),
+        ("FAKE_CLAUDE_CONTENTION".to_string(), "0".to_string()),
+        (
+            "FAKE_CLAUDE_COUNTER_FILE".to_string(),
+            counter.to_string_lossy().into_owned(),
+        ),
+    ];
+    let msgs = run_with_cli(
+        ClaudeCli::new(FAKE.into(), rt.handle().clone()).with_env(env),
+        request(dir.path().into(), "hi"),
+    );
+    assert_eq!(
+        std::fs::read_to_string(&counter).unwrap().lines().count(),
+        1
+    );
+    assert!(matches!(
+        msgs.last(),
+        Some(RunnerMsg::Exited { code: Some(1), .. })
+    ));
+}
+
+/// Like `run_with` for a runner that is already built.
+fn run_with_cli(cli: ClaudeCli, req: RunRequest) -> Vec<RunnerMsg> {
+    let (tx, rx) = mpsc::channel();
+    cli.start(req, Box::new(move |m| tx.send(m).unwrap()));
+    let mut out = Vec::new();
+    while let Ok(m) = rx.recv_timeout(Duration::from_secs(60)) {
+        let done = matches!(m, RunnerMsg::Exited { .. } | RunnerMsg::SpawnFailed(_));
+        out.push(m);
+        if done {
+            break;
+        }
+    }
+    out
+}

@@ -6,6 +6,8 @@ use std::process::{Command, Stdio};
 
 use swarmux_application::{AppError, AppResult, SessionTerminal};
 
+use crate::process::hide_std;
+
 /// Opens sessions with `wt -w 0 nt -d <cwd> <claude> --resume <id>`.
 pub struct WindowsTerminal {
     wt: PathBuf,
@@ -39,11 +41,7 @@ impl SessionTerminal for WindowsTerminal {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-        }
+        hide_std(&mut cmd);
         cmd.spawn()
             .map(|_| ())
             .map_err(|e| AppError::Workspace(format!("wt: {e} (is Windows Terminal installed?)")))

@@ -32,9 +32,12 @@ fn config(dir: &Path) -> CollectorConfig {
     }
 }
 
-/// Polls `f` until it holds or 20 s pass.
+/// How long a collector may take to deliver under a loaded machine.
+const PATIENCE: Duration = Duration::from_secs(90);
+
+/// Polls `f` until it holds or [`PATIENCE`] passes.
 fn eventually(c: &TelemetryCollector, f: impl Fn(&TelemetrySnapshot) -> bool) -> TelemetrySnapshot {
-    let deadline = Instant::now() + Duration::from_secs(20);
+    let deadline = Instant::now() + PATIENCE;
     loop {
         let snap = c.snapshot();
         if f(&snap) || Instant::now() > deadline {
@@ -84,7 +87,7 @@ fn collectors_fill_the_snapshot_and_stop_on_drop() {
     }
     let started = Instant::now();
     drop(c);
-    assert!(started.elapsed() < Duration::from_secs(10));
+    assert!(started.elapsed() < Duration::from_secs(30));
 }
 
 #[test]

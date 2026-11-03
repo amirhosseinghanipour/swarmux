@@ -40,9 +40,105 @@ impl Paths {
     }
 }
 
+/// Paths at or past this many characters need the extended form on Windows,
+/// a little under the 260 of `MAX_PATH` so that names added later still fit.
+#[cfg(windows)]
+const LONG_FROM: usize = 240;
+
+/// `path` in a form file operations accept past 260 characters.
+///
+/// On Windows a long absolute path gets the `\\?\` prefix (`\\?\UNC\` for
+/// network shares). Short paths, relative paths, paths already prefixed and
+/// paths with `..` are returned as they are. Use it for file operations
+/// only: programs started with such a folder as their working directory
+/// often fail, so children get the plain path. Elsewhere it changes nothing.
+pub fn long(path: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        extended(path)
+    }
+    #[cfg(not(windows))]
+    {
+        path.to_path_buf()
+    }
+}
+
+#[cfg(windows)]
+fn extended(path: &Path) -> PathBuf {
+    use std::path::{Component, Prefix};
+
+    if path.to_string_lossy().chars().count() < LONG_FROM || !path.is_absolute() {
+        return path.to_path_buf();
+    }
+    let mut parts = path.components();
+    let head = match parts.next() {
+        Some(Component::Prefix(prefix)) => match prefix.kind() {
+            Prefix::Disk(letter) => format!(r"\\?\{}:", char::from(letter)),
+            Prefix::UNC(server, share) => format!(
+                r"\\?\UNC\{}\{}",
+                server.to_string_lossy(),
+                share.to_string_lossy()
+            ),
+            // Already extended, or a device path.
+            _ => return path.to_path_buf(),
+        },
+        _ => return path.to_path_buf(),
+    };
+    let mut out = PathBuf::from(head);
+    for part in parts {
+        match part {
+            Component::RootDir => out.push(r"\"),
+            Component::Normal(name) => out.push(name),
+            Component::CurDir => {}
+            // `..` is not understood after the prefix.
+            _ => return path.to_path_buf(),
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn short_and_relative_paths_are_left_alone() {
+        assert_eq!(long(Path::new("a/b")), Path::new("a/b"));
+        let short = std::env::temp_dir().join("x");
+        assert_eq!(long(&short), short);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn long_windows_paths_get_the_extended_prefix() {
+        let deep = format!(r"C:\work\{}\file.txt", "d".repeat(250));
+        let ext = long(Path::new(&deep));
+        assert_eq!(ext.to_string_lossy(), format!(r"\\?\{deep}"));
+        assert_eq!(long(&ext), ext, "already extended");
+        let unc = format!(r"\\srv\share\{}", "d".repeat(250));
+        assert!(
+            long(Path::new(&unc))
+                .to_string_lossy()
+                .starts_with(r"\\?\UNC\srv\share\d")
+        );
+        let dotdot = format!(r"C:\work\{}\..\x", "d".repeat(250));
+        assert_eq!(long(Path::new(&dotdot)), Path::new(&dotdot));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn folders_past_max_path_can_be_made_and_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let top = dir.path().join("a_long_folder_name_to_pass_max_path");
+        let mut deep = top.clone();
+        while deep.to_string_lossy().len() < 300 {
+            deep.push("a_long_folder_name_to_pass_max_path");
+        }
+        std::fs::create_dir_all(long(&deep)).unwrap();
+        std::fs::write(long(&deep.join("f.txt")), "x").unwrap();
+        crate::worktree::remove_dir_retrying(&top).unwrap();
+        assert!(!long(&top).exists());
+    }
 
     #[test]
     fn data_lives_under_dot_swarmux() {

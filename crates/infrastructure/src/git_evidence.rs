@@ -37,7 +37,7 @@ impl GitVcs {
 
     fn output(&self, cwd: &Path, args: &[&str]) -> AppResult<Output> {
         git_command(&self.bin, cwd)
-            .args(["-c", "core.longpaths=true", "-c", "core.quotepath=off"])
+            .args(["-c", "core.quotepath=off"])
             .args(args)
             .output()
             .map_err(|e| AppError::Workspace(format!("git: {e}")))
@@ -197,7 +197,6 @@ impl Checkouts for GitCheckouts {
             COUNTER.fetch_add(1, Ordering::Relaxed)
         ));
         let out = git_command(&self.bin, repo)
-            .args(["-c", "core.longpaths=true"])
             .args(["worktree", "add", "--detach", "--force"])
             .arg(&dir)
             .arg(sha)
