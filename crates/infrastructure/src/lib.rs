@@ -14,6 +14,7 @@ mod monitor;
 pub mod paths;
 pub mod sqlite;
 pub mod telemetry;
+pub mod terminal;
 
 pub use agents::FsAgentCatalog;
 pub use claude_cli::{ClaudeCli, GuardHook, HaikuRouter};
@@ -27,3 +28,4 @@ pub use jev::{Endpoint, JevHttp};
 pub use monitor::SysinfoMonitor;
 pub use paths::Paths;
 pub use sqlite::{SqliteLedger, SqliteStore};
+pub use terminal::WindowsTerminal;

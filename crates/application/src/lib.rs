@@ -19,6 +19,7 @@ mod routing;
 mod sessions;
 mod settings;
 mod telemetry;
+mod terminal;
 #[cfg(any(test, feature = "test-support"))]
 pub mod testing;
 
@@ -51,3 +52,4 @@ pub use telemetry::{
     EnvironmentView, GitStatus, GithubStatus, LimitView, ProcessStat, PullRequest, SystemStats,
     TICKER_LEN, TOP_FILES, TelemetryService, TelemetrySnapshot,
 };
+pub use terminal::SessionTerminal;
