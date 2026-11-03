@@ -82,6 +82,7 @@ fn a_delegating_job_is_reviewed_end_to_end() {
     let review = ReviewSettings {
         enabled: true,
         model: "haiku".into(),
+        when: swarmux_application::ReviewWhen::Always,
     };
     let mut jobs = JobService::new(store.clone(), store.clone(), runner, clock)
         .with_review(Rc::new(GitCli::default()), &review)

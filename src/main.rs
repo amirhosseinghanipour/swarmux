@@ -4,6 +4,7 @@ mod audit;
 mod doctor;
 mod evidence;
 mod gate;
+mod holdout;
 mod jev;
 mod stats;
 mod telemetry;
@@ -26,8 +27,8 @@ use swarmux_application::{
 use swarmux_infrastructure::hook::{self, HookServer, Responders};
 use swarmux_infrastructure::{
     ClaudeCli, ConfigRuleWriter, FsAgentCatalog, FsGateSource, GitCli, GuardHook, HaikuLinter,
-    HaikuRouter, MissionFiles, Paths, ProcessChecker, SqliteLedger, SqliteStore, SysinfoMonitor,
-    SystemClock, WindowsTerminal, build_notifier, load_settings, utc_offset_minutes,
+    HaikuRouter, MissionFiles, Paths, SqliteLedger, SqliteStore, SysinfoMonitor, SystemClock,
+    WindowsTerminal, build_notifier, load_settings, utc_offset_minutes,
 };
 use swarmux_tui::{App, Launch};
 
@@ -63,6 +64,12 @@ enum Command {
     Gate {
         #[command(subcommand)]
         action: GateAction,
+    },
+    /// Hidden checks: run by the verifier in clean copies after the visible
+    /// checks, never shown to agents (only how many failed).
+    Holdout {
+        #[command(subcommand)]
+        action: HoldoutAction,
     },
     /// Run the checks of a delivered mission's evidence bundle again, at its
     /// head commit in a clean checkout, and say whether they still hold.
@@ -133,11 +140,16 @@ enum StatsAction {
 
 #[derive(Subcommand)]
 enum GateAction {
-    /// Run the repository's checks now; exits with 1 if one fails.
+    /// Run the repository's checks now, in a clean copy with the hidden
+    /// checks after them (as when an agent stops); exits with 1 if one fails.
     Run {
         /// A folder inside the repository (default: the current one).
         #[arg(long)]
         dir: Option<PathBuf>,
+        /// Run the visible checks in the folder itself, without a clean copy
+        /// or the hidden checks.
+        #[arg(long)]
+        in_place: bool,
     },
     /// Show the gate that applies: checks, protected paths, limits.
     Show {
@@ -145,6 +157,37 @@ enum GateAction {
         #[arg(long)]
         dir: Option<PathBuf>,
     },
+}
+
+#[derive(Subcommand)]
+enum HoldoutAction {
+    /// Add a hidden check to a repository, or replace one of the same name.
+    /// Its files are copied into the store and pinned by hash.
+    Add {
+        /// The repository: a folder inside it (or a worktree of it), or its
+        /// name in the store.
+        repo: String,
+        /// The check's name.
+        check: String,
+        /// A file the check brings into the clean copy: `DEST=SOURCE`, where
+        /// DEST is relative to the repository root, or one relative path
+        /// for both. Repeat for more.
+        #[arg(long = "file", value_name = "DEST=SOURCE")]
+        files: Vec<String>,
+        /// Seconds the check may run.
+        #[arg(long)]
+        timeout: Option<u64>,
+        /// The command, after `--`; run directly, never through a shell.
+        #[arg(last = true, required = true)]
+        run: Vec<String>,
+    },
+    /// Show the hidden checks of one repository, or of all.
+    List {
+        /// A folder inside the repository, or its name in the store.
+        repo: Option<String>,
+    },
+    /// Remove a hidden check.
+    Rm { repo: String, check: String },
 }
 
 #[derive(Subcommand)]
@@ -214,9 +257,9 @@ fn main() -> anyhow::Result<ExitCode> {
             what: StatsAction::Alarms { days },
         }) => stats::alarms(days.max(1)),
         Some(Command::Gate {
-            action: GateAction::Run { dir },
+            action: GateAction::Run { dir, in_place },
         }) => {
-            return Ok(if gate::run(dir)? {
+            return Ok(if gate::run(dir, in_place)? {
                 ExitCode::SUCCESS
             } else {
                 ExitCode::FAILURE
@@ -225,6 +268,17 @@ fn main() -> anyhow::Result<ExitCode> {
         Some(Command::Gate {
             action: GateAction::Show { dir },
         }) => gate::show(dir),
+        Some(Command::Holdout { action }) => match action {
+            HoldoutAction::Add {
+                repo,
+                check,
+                files,
+                timeout,
+                run,
+            } => holdout::add(&repo, &check, &files, timeout, &run),
+            HoldoutAction::List { repo } => holdout::list(repo.as_deref()),
+            HoldoutAction::Rm { repo, check } => holdout::rm(&repo, &check),
+        },
         Some(Command::Worktree { action }) => match action {
             WorktreeAction::List => worktree::list(),
             WorktreeAction::Gc { dry_run } => worktree::gc(dry_run),
@@ -286,12 +340,11 @@ fn run_tui(no_splash: bool) -> anyhow::Result<()> {
         .enable_all()
         .build()?;
 
-    // The done-gate judges every stop and fences protected paths.
-    let (keeper, gate_records) = GateKeeper::new(
-        Arc::new(FsGateSource::new()),
-        Arc::new(ProcessChecker::new()),
-    );
-    let keeper = Arc::new(keeper);
+    // The done-gate judges every stop and fences protected paths. Its
+    // checks run in clean copies, followed by the hidden ones.
+    let checker = holdout::checker();
+    let (keeper, gate_records) = GateKeeper::new(Arc::new(FsGateSource::new()), checker.clone());
+    let keeper = Arc::new(keeper.with_verifier(holdout::verifier(&paths, checker)));
     let guard_settings = &settings.guard;
     let policy = SharedPolicy::new(guard_settings.policy()).with_fence(keeper.clone());
     let pipe = hook::endpoint_for(std::process::id());

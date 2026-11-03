@@ -16,14 +16,28 @@ use swarmux_domain::evidence::{Bundle, RunOutcome, brief};
 use swarmux_domain::iso_minute;
 use swarmux_infrastructure::evidence::read_bundle;
 use swarmux_infrastructure::{
-    EvidenceFiles, GhOutcomes, GitCheckouts, GitVcs, Paths, ProcessChecker, SqliteLedger,
-    SqliteStore, SystemClock,
+    EvidenceFiles, FsHoldoutStore, GhOutcomes, GitCheckouts, GitVcs, Paths, ProcessChecker,
+    SqliteLedger, SqliteStore, SystemClock,
 };
 
 /// How long `labels` waits for GitHub.
 const LABELS_WAIT: Duration = Duration::from_secs(90);
 /// Hours the brief covers unless told otherwise.
 pub const BRIEF_HOURS: i64 = 24;
+
+/// Runs a bundle's checks again in a clean checkout, and the
+/// repository's hidden checks after them.
+fn rerunner() -> Rerunner {
+    let rerunner = Rerunner::new(
+        Arc::new(ProcessChecker::new()),
+        Arc::new(GitCheckouts::default()),
+    );
+    match Paths::default_home() {
+        Ok(paths) => rerunner.with_holdout(Arc::new(FsHoldoutStore::new(paths.holdout))),
+        // No home folder: there are no hidden checks to run either.
+        Err(_) => rerunner,
+    }
+}
 
 /// Wires evidence to git, `gh`, the database and the ledger.
 pub fn service(
@@ -39,10 +53,7 @@ pub fn service(
         Rc::new(GitVcs::default()),
         clock,
     )
-    .with_rerunner(Rerunner::new(
-        Arc::new(ProcessChecker::new()),
-        Arc::new(GitCheckouts::default()),
-    ))
+    .with_rerunner(rerunner())
     .with_probe(Rc::new(GhOutcomes::default()));
     if let Some(c) = checkpoints {
         service = service.with_checkpoints(c);
