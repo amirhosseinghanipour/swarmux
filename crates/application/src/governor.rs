@@ -5,7 +5,8 @@
 use std::rc::Rc;
 
 use swarmux_domain::budget::{
-    Admission, GovernorPolicy, JobClass, admit, budget_line, power_limits, window_label,
+    Admission, GovernorPolicy, JobClass, admit, budget_line, hold_for_load, power_limits,
+    window_label,
 };
 use swarmux_domain::telemetry::{LimitState, RateLimit};
 use swarmux_domain::{JobId, Limits, Millis};
@@ -126,6 +127,23 @@ impl Governor {
             return Admission::Admit;
         }
         admit(&self.policy, windows, model, class, now)
+    }
+
+    /// [`Governor::admit`], and new work waits while the user's inbox load
+    /// (`load`, when it is known) is over the line. Verification never does.
+    pub fn admit_under_load(
+        &self,
+        windows: &[LimitState],
+        model: &str,
+        class: JobClass,
+        load: Option<f64>,
+        now: Millis,
+    ) -> Admission {
+        let admission = self.admit(windows, model, class, now);
+        if !self.settings.enabled {
+            return admission;
+        }
+        hold_for_load(&self.policy, admission, class, load)
     }
 
     /// The run limits, fewer at once on battery.

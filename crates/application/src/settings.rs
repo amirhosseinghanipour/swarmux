@@ -46,6 +46,9 @@ pub struct GovernorSettings {
     pub max_job_usd: Option<f64>,
     /// Tell each job its budget and the windows in a line after the prompt.
     pub budget_line: bool,
+    /// New jobs wait while the user's inbox load is above this share
+    /// (0 to 1); `1.0` turns the hold off.
+    pub load_hold_at: f64,
 }
 
 impl Default for GovernorSettings {
@@ -60,6 +63,7 @@ impl Default for GovernorSettings {
             battery_concurrency: 2,
             max_job_usd: None,
             budget_line: true,
+            load_hold_at: policy.load_hold_at,
         }
     }
 }
@@ -71,6 +75,7 @@ impl GovernorSettings {
             downgrade_at: self.downgrade_at,
             downgrade_to: self.downgrade_to.clone(),
             horizon: i64::from(self.horizon_minutes) * MINUTE,
+            load_hold_at: self.load_hold_at,
         }
     }
 }

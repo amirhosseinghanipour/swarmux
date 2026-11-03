@@ -135,6 +135,9 @@ pub struct QueueStats {
     pub awaiting_reset: usize,
     /// On battery, so fewer jobs run at once.
     pub on_battery: bool,
+    /// Queued jobs held back because the user is working the inbox as much
+    /// as they can take.
+    pub held: usize,
 }
 
 /// What one [`JobService::pump`] did.
@@ -188,6 +191,8 @@ pub struct JobService {
     last_gc: Option<Millis>,
     /// Admission by usage window, budgets and auto-resume after a reset.
     governor: Option<Governor>,
+    /// The share of their time the user spends in the inbox, when known.
+    load: Option<f64>,
     /// Dollar caps of single jobs (a mission's share of its reservation).
     caps: HashMap<JobId, f64>,
     /// Last power reading and when it was taken: on battery or not.
@@ -242,6 +247,7 @@ impl JobService {
             worktrees: None,
             last_gc: None,
             governor: None,
+            load: None,
             caps: HashMap::new(),
             power: None,
         }
@@ -253,6 +259,14 @@ impl JobService {
     pub fn with_governor(mut self, governor: Governor) -> JobService {
         self.governor = Some(governor);
         self
+    }
+
+    /// Tells the queue how much of their time the user spends in the inbox
+    /// (`0.0..=1.0`, `None` while that isn't known). Above the governor's
+    /// line new jobs wait and the queue says so; reviews still run. Held
+    /// jobs start at the pump after the load drops.
+    pub fn set_supervisor_load(&mut self, load: Option<f64>) {
+        self.load = load;
     }
 
     pub fn governor(&self) -> Option<&Governor> {
@@ -737,6 +751,12 @@ impl JobService {
                 .count(),
             awaiting_reset: self.governor.as_ref().map_or(0, |g| g.pending().len()),
             on_battery,
+            held: self
+                .tracked
+                .iter()
+                .filter(|t| t.progress.status == JobStatus::Queued)
+                .filter(|t| t.admission.as_ref().is_some_and(Admission::is_held))
+                .count(),
         }
     }
 
@@ -911,7 +931,11 @@ impl JobService {
             .tracked
             .iter()
             .filter(|t| t.progress.status == JobStatus::Queued)
-            .filter(|t| !t.admission.as_ref().is_some_and(Admission::is_deferred))
+            .filter(|t| {
+                !t.admission
+                    .as_ref()
+                    .is_some_and(|a| a.is_deferred() || a.is_held())
+            })
             .map(|t| &t.job);
         let picks = plan(admitted, &running, free_ram, limits);
         for &id in &picks {
@@ -941,6 +965,7 @@ impl JobService {
             return;
         };
         let now = self.clock.now();
+        let load = self.load;
         let windows = g.windows(&self.activity.limits());
         for t in &mut self.tracked {
             if t.progress.status != JobStatus::Queued {
@@ -951,7 +976,7 @@ impl JobService {
             } else {
                 JobClass::Work
             };
-            t.admission = Some(g.admit(&windows, &t.job.model, class, now));
+            t.admission = Some(g.admit_under_load(&windows, &t.job.model, class, load, now));
         }
     }
 

@@ -290,16 +290,29 @@ impl GuardService {
             .map(|h| h.request.clone())
             .ok_or(AppError::ApprovalNotFound)?;
         let rule = Pattern::exact_for(&request.tool_name, &request.subject, &request.cwd);
+        self.adopt(rule, Some(request_id))
+    }
+
+    /// Allows the calls `rule` covers from now on, as the user accepted it
+    /// (`Bash(cargo test:*)`), and approves the held calls it covers.
+    pub fn allow_rule(&mut self, rule: &str) -> AppResult<AlwaysAllowed> {
+        let pattern = Pattern::parse(rule)?;
+        self.adopt(pattern, None)
+    }
+
+    fn adopt(&mut self, rule: Pattern, answering: Option<u64>) -> AppResult<AlwaysAllowed> {
         let text = rule.to_string();
         self.policy.add_allow(rule);
         let not_saved = match &self.rules {
             Some(writer) => writer.add_allow_rule(&text).err().map(|e| e.to_string()),
             None => Some("no settings file to save to".into()),
         };
-        self.resolve(
-            request_id,
-            Resolution::by_guard(Verdict::Allow, text.clone()),
-        )?;
+        if let Some(request_id) = answering {
+            self.resolve(
+                request_id,
+                Resolution::by_guard(Verdict::Allow, text.clone()),
+            )?;
+        }
 
         let now_allowed: Vec<(u64, Option<String>)> = self
             .held

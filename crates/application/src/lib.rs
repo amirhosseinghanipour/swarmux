@@ -3,7 +3,7 @@
 //! Depends only on the domain. Adapters (SQLite, the `claude` CLI, the TUI)
 //! live in other crates and plug in through the traits in [`ports`].
 
-mod attention;
+pub mod attention;
 pub mod checkpoint;
 mod decision;
 mod error;
@@ -28,7 +28,10 @@ mod terminal;
 pub mod testing;
 pub mod worktree;
 
-pub use attention::{AttentionService, Change, ChangeKind};
+pub use attention::{
+    AlarmEvent, AlarmKind, AlarmStore, AttentionService, Change, ChangeKind, HeldBack, ShelveFor,
+    ShelvedItem, Suggestion, TallyRow, alarm_report,
+};
 pub use checkpoint::{CheckpointService, HandoffBoard, Notes};
 pub use decision::{DecisionRecord, Outcome, Source};
 pub use error::{AppError, AppResult};

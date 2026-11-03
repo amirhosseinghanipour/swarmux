@@ -156,6 +156,22 @@ fn always_allow_adds_and_saves_an_exact_rule() {
 }
 
 #[test]
+fn an_accepted_rule_covers_the_held_calls_it_matches() {
+    let mut f = fixture(&[], &[], Unmatched::Ask);
+    let one = f.inbox.push(None, "Bash", "cargo test a");
+    let two = f.inbox.push(None, "Bash", "cargo test b");
+    let other = f.inbox.push(None, "Bash", "cargo publish");
+    f.svc.pump();
+    let done = f.svc.allow_rule("Bash(cargo test:*)").unwrap();
+    assert_eq!(done.rule, "Bash(cargo test:*)");
+    assert_eq!(f.rules.rules(), ["Bash(cargo test:*)"]);
+    assert_eq!(verdict_of(&f, one), Some(Verdict::Allow));
+    assert_eq!(verdict_of(&f, two), Some(Verdict::Allow));
+    assert_eq!(verdict_of(&f, other), None);
+    assert!(f.svc.allow_rule("Bash(").is_err(), "not a rule");
+}
+
+#[test]
 fn always_allow_still_works_when_saving_fails() {
     let mut f = fixture(&[], &[], Unmatched::Ask);
     f.rules.refuse(true);

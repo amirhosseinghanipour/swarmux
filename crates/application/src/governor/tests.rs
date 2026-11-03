@@ -247,6 +247,62 @@ fn verification_runs_while_new_work_is_held() {
     assert_eq!(r.svc.stats().deferred, 1);
 }
 
+#[test]
+fn new_work_waits_while_the_user_is_over_the_load_line_and_starts_after() {
+    let mut r = rig();
+    r.svc.set_supervisor_load(Some(0.78));
+    let id = r.svc.dispatch(r.session.id, "build it").unwrap();
+    assert_eq!(r.runner.started(), 0, "held");
+    let row = r.svc.queue().into_iter().find(|e| e.job_id == id).unwrap();
+    assert_eq!(row.note.as_deref(), Some("held: you're at 78% load"));
+    assert_eq!(r.svc.stats().held, 1);
+    assert_eq!(r.svc.stats().deferred, 0, "not a usage hold");
+
+    // At the line is not over it.
+    r.svc.set_supervisor_load(Some(0.70));
+    r.svc.pump();
+    assert_eq!(r.runner.started(), 1);
+    assert_eq!(r.store.status_of(id), JobStatus::Running);
+    assert_eq!(r.svc.stats().held, 0);
+}
+
+#[test]
+fn the_load_hold_spares_reviews_and_obeys_the_settings() {
+    let g = Governor::new(&GovernorSettings::default());
+    assert!(g.admit_under_load(&[], "opus", JobClass::Verify, Some(0.95), T0) == Admission::Admit);
+    assert!(matches!(
+        g.admit_under_load(&[], "opus", JobClass::Work, Some(0.95), T0),
+        Admission::Hold { .. }
+    ));
+    assert_eq!(
+        g.admit_under_load(&[], "opus", JobClass::Work, None, T0),
+        Admission::Admit,
+        "unknown load holds nothing"
+    );
+    let off = Governor::new(&GovernorSettings {
+        load_hold_at: 1.0,
+        ..GovernorSettings::default()
+    });
+    assert_eq!(
+        off.admit_under_load(&[], "opus", JobClass::Work, Some(1.0), T0),
+        Admission::Admit
+    );
+    // A window that already defers the job gets to say so first.
+    let w = [window("five_hour", 0.99, T0 + HOUR, T0)];
+    assert!(
+        g.admit_under_load(&w, "opus", JobClass::Work, Some(0.95), T0)
+            .is_deferred()
+    );
+    let disabled = Governor::new(&GovernorSettings {
+        enabled: false,
+        ..GovernorSettings::default()
+    });
+    assert_eq!(
+        disabled.admit_under_load(&[], "opus", JobClass::Work, Some(0.99), T0),
+        Admission::Admit
+    );
+}
+
 fn init(session_id: &str) -> AgentEvent {
     AgentEvent::Init {
         session_id: session_id.into(),

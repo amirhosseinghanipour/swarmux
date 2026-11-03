@@ -3,13 +3,24 @@
 //! already know; nothing is stored, so acknowledgements last for the run.
 
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
+use swarmux_domain::alarm::{Flood, Raised, RiskTier, Tally, detect_flood, novelty, signature_of};
 use swarmux_domain::{
-    AttentionId, AttentionItem, HeldCall, JobId, JobStatus, Millis, ReviewState, ReviewVerdict,
-    STALL_AFTER_MS, SessionId, SessionState, rank,
+    AttentionId, AttentionItem, CallContext, HeldCall, JobId, JobStatus, Millis, Priority,
+    ReviewState, ReviewVerdict, STALL_AFTER_MS, SessionId, SessionState, rank,
 };
 
-use crate::{DecisionRecord, GuardService, JobFact, JobService, Outcome, PendingApproval};
+use crate::{DecisionRecord, GuardService, JobFact, JobService, Outcome, PendingApproval, Source};
+
+mod service;
+pub mod store;
+
+#[cfg(test)]
+mod planted;
+
+pub use service::{HeldBack, Suggestion, alarm_report};
+pub use store::{AlarmEvent, AlarmKind, AlarmStore, ShelveFor, ShelvedItem, TallyRow};
 
 /// What kind of change a log row reports.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -37,12 +48,36 @@ pub struct Change {
     pub text: String,
 }
 
-/// Collects, ranks and acknowledges attention items.
-#[derive(Debug, Default)]
+/// Collects, ranks and acknowledges attention items, and keeps the inbox's
+/// alarm discipline: shelving, focus mode, batching, floods, rule offers and
+/// the figures that show whether the inbox is under control.
+#[derive(Default)]
 pub struct AttentionService {
     acknowledged: HashSet<AttentionId>,
     /// When each item was first seen, for those whose age isn't known.
     first_seen: HashMap<AttentionId, Millis>,
+    store: Option<Rc<dyn AlarmStore>>,
+    shelved: Vec<ShelvedItem>,
+    /// Focus mode, since when.
+    focus: Option<Millis>,
+    /// Held-back items a breakpoint let through.
+    released: HashSet<AttentionId>,
+    /// Held back by focus mode at the last collection.
+    held: Vec<(AttentionId, Priority)>,
+    held_back: HeldBack,
+    raised: Vec<Raised>,
+    raised_seen: HashSet<AttentionId>,
+    attended: HashSet<AttentionId>,
+    ttds: Vec<Millis>,
+    tallies: HashMap<(String, String), Tally>,
+    /// The repository each open approval was asked in.
+    scopes: HashMap<AttentionId, String>,
+    /// Request ids that can be answered together, by the id of any member.
+    members: HashMap<AttentionId, Vec<u64>>,
+    flood: Option<Flood>,
+    /// Everything open at the last collection, shown or not.
+    open: Vec<AttentionItem>,
+    error: Option<String>,
 }
 
 impl AttentionService {
@@ -57,7 +92,7 @@ impl AttentionService {
         jobs: &JobService,
         now: Millis,
     ) -> Vec<AttentionItem> {
-        self.collect_from(&guard.approvals(), &jobs.facts(), now)
+        self.collect_with(guard, jobs, Vec::new(), now)
     }
 
     /// [`collect`](Self::collect), plus `extra` items from other sources
@@ -69,7 +104,8 @@ impl AttentionService {
         extra: Vec<AttentionItem>,
         now: Millis,
     ) -> Vec<AttentionItem> {
-        self.gather(&guard.approvals(), &jobs.facts(), extra, now)
+        let worries: Vec<Worry> = guard.recent().filter_map(worry).collect();
+        self.gather(&guard.approvals(), &jobs.facts(), extra, &worries, now)
     }
 
     /// [`collect`](Self::collect) from plain values.
@@ -79,7 +115,7 @@ impl AttentionService {
         facts: &[JobFact],
         now: Millis,
     ) -> Vec<AttentionItem> {
-        self.gather(approvals, facts, Vec::new(), now)
+        self.gather(approvals, facts, Vec::new(), &[], now)
     }
 
     fn gather(
@@ -87,9 +123,11 @@ impl AttentionService {
         approvals: &[PendingApproval],
         facts: &[JobFact],
         extra: Vec<AttentionItem>,
+        worries: &[Worry],
         now: Millis,
     ) -> Vec<AttentionItem> {
         let mut items = extra;
+        self.scopes.clear();
         for a in approvals {
             let r = &a.request;
             let session = r
@@ -105,18 +143,51 @@ impl AttentionService {
                 cwd: &r.cwd,
             };
             let key = AttentionId::new(format!("approval:{}", r.request_id));
-            let since = *self.first_seen.entry(key).or_insert(now);
+            let since = *self.first_seen.entry(key.clone()).or_insert(now);
             let deadline = now + Millis::try_from(a.secs_left).unwrap_or(0) * 1000;
-            items.push(AttentionItem::approval(&call, since, deadline));
+            let seen = signature_of(&r.tool_name, &r.subject, RiskTier::Routine).key();
+            let tally = self
+                .tallies
+                .get(&(r.cwd.clone(), seen))
+                .copied()
+                .unwrap_or_default();
+            let ctx = CallContext {
+                novelty: novelty(&tally),
+                track_record: session.map_or(0.5, |s| track_record(s, facts)),
+                taint: false,
+                jev: worries
+                    .iter()
+                    .find(|w| w.tool == r.tool_name && w.subject == r.subject)
+                    .map(|w| w.worry),
+            };
+            let mut item = AttentionItem::approval_scored(&call, &ctx, since, deadline);
+            if let Some(sig) = &item.signature
+                && tally.should_suggest(sig.tier)
+            {
+                item.suggest = Some(tally.approved);
+            }
+            self.scopes.insert(key, r.cwd.clone());
+            items.push(item);
         }
         for f in facts.iter().filter(|f| f.review_of.is_none()) {
             let held = approvals.iter().any(|a| a.request.job_id == Some(f.job_id));
             items.extend(job_item(f, facts, now, held));
         }
         items.retain(|i| !self.acknowledged.contains(&i.id));
+        self.note_raised(&items, now);
+        self.expire_shelf(&items, facts, now);
+        items.retain(|i| !self.is_shelved(&i.id));
+        self.open = items.clone();
+        let mut items = self.apply_focus(items, now);
+        self.group_batches(&mut items);
+        self.flood = detect_flood(&items, now);
+        if let Some(flood) = &self.flood {
+            items.retain(|i| !flood.is_suppressed(&i.id));
+        }
         // Forget what has gone, so a reused id starts fresh.
-        self.first_seen
-            .retain(|id, _| items.iter().any(|i| &i.id == id));
+        self.first_seen.retain(|id, _| {
+            items.iter().any(|i| &i.id == id) || self.open.iter().any(|i| &i.id == id)
+        });
         self.acknowledged
             .retain(|id| facts_have(id, approvals, facts));
         rank(items)
@@ -151,6 +222,45 @@ impl AttentionService {
         let decisions: Vec<&DecisionRecord> = guard.recent().collect();
         changes_from(&jobs.facts(), &decisions, extra, limit)
     }
+}
+
+/// What a decision model once said about a call it wasn't sure of.
+struct Worry {
+    tool: String,
+    subject: String,
+    worry: f64,
+}
+
+fn worry(d: &DecisionRecord) -> Option<Worry> {
+    if d.source != Source::Jev || !matches!(d.outcome, Outcome::Ask | Outcome::Deny) {
+        return None;
+    }
+    Some(Worry {
+        tool: d.tool.clone(),
+        subject: d.subject.clone(),
+        worry: d.confidence?,
+    })
+}
+
+/// How a session's earlier jobs went: the share that finished well, `0.5`
+/// until there are two to judge by.
+fn track_record(session: SessionId, facts: &[JobFact]) -> f64 {
+    let mut done = 0u32;
+    let mut bad = 0u32;
+    for f in facts
+        .iter()
+        .filter(|f| f.session_id == session && f.review_of.is_none())
+    {
+        match f.status {
+            JobStatus::Done => done += 1,
+            JobStatus::Failed | JobStatus::Interrupted => bad += 1,
+            _ => {}
+        }
+    }
+    if done + bad < 2 {
+        return 0.5;
+    }
+    f64::from(done) / f64::from(done + bad)
 }
 
 /// Whether an acknowledged id still refers to something that exists.
