@@ -7,6 +7,7 @@ mod attention;
 mod date;
 mod error;
 mod event;
+pub mod gate;
 mod guard;
 mod hook;
 mod job;

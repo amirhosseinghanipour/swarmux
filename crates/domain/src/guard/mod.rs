@@ -1,9 +1,9 @@
 //! The Guard: allow/deny rules for tool calls, and the loop breaker.
 
-mod glob;
+pub(crate) mod glob;
 mod loop_breaker;
 mod pattern;
-mod shell;
+pub(crate) mod shell;
 
 pub use loop_breaker::{LoopBreaker, LoopTrip, error_signature};
 pub use pattern::{Pattern, host_of};

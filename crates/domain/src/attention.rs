@@ -41,6 +41,8 @@ pub enum AttentionKind {
     ResultReady,
     /// A running job has been silent for too long.
     Stalled,
+    /// The done-gate kept failing after its last allowed block.
+    GateEscalated,
 }
 
 impl AttentionKind {
@@ -52,6 +54,7 @@ impl AttentionKind {
             AttentionKind::ReviewConcerns => "concerns",
             AttentionKind::ResultReady => "result",
             AttentionKind::Stalled => "stalled",
+            AttentionKind::GateEscalated => "gate",
         }
     }
 
@@ -244,6 +247,27 @@ impl AttentionItem {
         )
     }
 
+    /// A job whose done-gate still failed after its last allowed block (P2):
+    /// the agent was let go and the user decides.
+    pub fn gate_escalated(
+        job: JobId,
+        session: SessionId,
+        title: &str,
+        detail: &str,
+        since: Millis,
+    ) -> AttentionItem {
+        AttentionItem::of_job(
+            job,
+            session,
+            AttentionKind::GateEscalated,
+            Priority::P2,
+            Likelihood::Certain,
+            title,
+            detail,
+            since,
+        )
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn of_job(
         job: JobId,
@@ -260,6 +284,7 @@ impl AttentionItem {
             AttentionKind::ReviewConcerns => "review",
             AttentionKind::ResultReady => "result",
             AttentionKind::Stalled => "stalled",
+            AttentionKind::GateEscalated => "gate",
             AttentionKind::Approval => "approval",
             AttentionKind::Question => "question",
         };
@@ -455,6 +480,10 @@ mod tests {
         assert_eq!(stalled.priority, Priority::P3);
         assert_eq!(stalled.likelihood, Likelihood::Possible);
         assert_eq!(stalled.id.as_str(), "job:3:stalled");
+        let gate = AttentionItem::gate_escalated(JobId(3), s, "fix it", "cargo test failed", 5);
+        assert_eq!(gate.id.as_str(), "job:3:gate");
+        assert_eq!(gate.priority, Priority::P2);
+        assert_eq!(gate.kind.as_str(), "gate");
     }
 
     #[test]

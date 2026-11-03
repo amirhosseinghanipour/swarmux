@@ -60,10 +60,12 @@ pub enum LedgerKind {
     Acknowledged,
     /// A label attached later to an earlier entry.
     Label,
+    /// The done-gate judged a stop, or its checks were run by hand.
+    GateVerdict,
 }
 
 impl LedgerKind {
-    pub const ALL: [LedgerKind; 9] = [
+    pub const ALL: [LedgerKind; 10] = [
         LedgerKind::Genesis,
         LedgerKind::JobQueued,
         LedgerKind::JobStarted,
@@ -73,6 +75,7 @@ impl LedgerKind {
         LedgerKind::JobFinished,
         LedgerKind::Acknowledged,
         LedgerKind::Label,
+        LedgerKind::GateVerdict,
     ];
 
     /// The stable name stored and hashed.
@@ -87,6 +90,7 @@ impl LedgerKind {
             LedgerKind::JobFinished => "job_finished",
             LedgerKind::Acknowledged => "acknowledged",
             LedgerKind::Label => "label",
+            LedgerKind::GateVerdict => "gate_verdict",
         }
     }
 
@@ -371,6 +375,27 @@ impl Payload {
         self.raw(key, json.to_string())
     }
 
+    /// A JSON array of strings, each cut like [`Payload::text`] would.
+    pub fn strs(self, key: &str, values: &[String]) -> Payload {
+        let items: Vec<String> = values
+            .iter()
+            .map(|v| {
+                let mut end = v.len().min(PAYLOAD_TEXT_MAX);
+                while !v.is_char_boundary(end) {
+                    end -= 1;
+                }
+                quote(&v[..end])
+            })
+            .collect();
+        self.raw(key, format!("[{}]", items.join(",")))
+    }
+
+    /// A JSON array of objects.
+    pub fn objects(self, key: &str, items: Vec<Payload>) -> Payload {
+        let items: Vec<String> = items.into_iter().map(Payload::build).collect();
+        self.raw(key, format!("[{}]", items.join(",")))
+    }
+
     pub fn build(self) -> String {
         format!("{{{}}}", self.fields.join(","))
     }
@@ -405,6 +430,16 @@ mod tests {
     }
 
     #[test]
+    fn payload_arrays() {
+        let p = Payload::new()
+            .strs("gaps", &["a\"b".into(), String::new()])
+            .objects("runs", vec![Payload::new().int("exit", 1), Payload::new()])
+            .build();
+        assert_eq!(p, r#"{"gaps":["a\"b",""],"runs":[{"exit":1},{}]}"#);
+        assert!(Json::parse(&p).is_ok());
+    }
+
+    #[test]
     fn kinds_round_trip_and_names_are_stable() {
         for k in LedgerKind::ALL {
             assert_eq!(LedgerKind::parse(k.as_str()), Some(k));
@@ -422,7 +457,8 @@ mod tests {
                 "review_verdict",
                 "job_finished",
                 "acknowledged",
-                "label"
+                "label",
+                "gate_verdict",
             ]
         );
     }

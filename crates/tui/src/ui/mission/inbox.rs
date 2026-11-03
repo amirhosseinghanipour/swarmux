@@ -117,6 +117,7 @@ fn kind_icon(kind: AttentionKind) -> Icon {
         AttentionKind::ReviewConcerns => Icon::Concerns,
         AttentionKind::ResultReady => Icon::Result,
         AttentionKind::Stalled => Icon::Stalled,
+        AttentionKind::GateEscalated => Icon::Guard,
     }
 }
 
