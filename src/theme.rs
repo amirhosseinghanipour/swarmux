@@ -8,7 +8,7 @@ use swarmux_tui::theme_export::{ExportFormat, export};
 
 /// The theme called `name` (default: the one in the config), whether it is
 /// built in, defined in `[themes.<name>]`, or imported from a palette file.
-fn find(name: Option<&str>) -> anyhow::Result<Theme> {
+pub fn find(name: Option<&str>) -> anyhow::Result<Theme> {
     let paths = Paths::default_home()?;
     let settings = load_settings(&paths.config)?;
     let want = name.unwrap_or(&settings.ui.theme);

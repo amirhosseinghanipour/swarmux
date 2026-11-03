@@ -172,6 +172,18 @@ pub fn print_brief(hours: i64) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// How many runs ended delivered, all time.
+pub fn delivered_count() -> anyhow::Result<usize> {
+    let o = open()?;
+    let rows = HistoryService::new(o.store.clone()).list("")?;
+    let missions = o.store.list()?;
+    let stored = o.service.list()?;
+    Ok(build_cards(&rows, &missions, &stored)
+        .iter()
+        .filter(|c| c.outcome == RunOutcome::Delivered)
+        .count())
+}
+
 /// Asks GitHub what became of each delivered branch and prints the labels.
 pub fn labels() -> anyhow::Result<()> {
     let o = open()?;

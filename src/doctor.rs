@@ -252,7 +252,7 @@ fn run_hook_event(
     })
 }
 
-fn claude_version(bin: &Path) -> Option<String> {
+pub fn claude_version(bin: &Path) -> Option<String> {
     let mut cmd = Command::new(bin);
     cmd.arg("--version");
     hide_std(&mut cmd);

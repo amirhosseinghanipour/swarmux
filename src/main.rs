@@ -4,6 +4,7 @@ mod audit;
 mod dist;
 mod doctor;
 mod evidence;
+mod fetch;
 mod gate;
 mod holdout;
 mod jev;
@@ -56,6 +57,17 @@ enum Command {
     Jev {
         #[command(subcommand)]
         action: JevAction,
+    },
+    /// A neofetch-style card: the logo, your sessions, spend, limits and
+    /// ledger head, in the colours of your theme. Honours NO_COLOR.
+    Fetch {
+        /// A built-in theme, one from `[themes]`, `wal`, `base16:<file>` or
+        /// `matugen:<file>` (default: the one in your config).
+        #[arg(long)]
+        theme: Option<String>,
+        /// auto (colour on a terminal), always or never.
+        #[arg(long, default_value = "auto", value_parser = ["auto", "always", "never"])]
+        color: String,
     },
     /// Themes: list them, or export one for another tool.
     Theme {
@@ -345,6 +357,7 @@ fn main() -> anyhow::Result<ExitCode> {
         },
         None => run_tui(cli.no_splash),
         Some(Command::Doctor) => doctor::run(),
+        Some(Command::Fetch { theme, color }) => fetch::run(theme.as_deref(), &color),
         Some(Command::Theme { action }) => match action {
             ThemeAction::List => theme::list(),
             ThemeAction::Export { name, format } => theme::export_cmd(name.as_deref(), &format),
