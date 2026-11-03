@@ -5,6 +5,7 @@ mod doctor;
 mod evidence;
 mod gate;
 mod jev;
+mod stats;
 mod telemetry;
 mod worktree;
 
@@ -76,6 +77,11 @@ enum Command {
         #[arg(long, default_value_t = evidence::BRIEF_HOURS)]
         hours: i64,
     },
+    /// How swarmux has been doing, from what it logged.
+    Stats {
+        #[command(subcommand)]
+        what: StatsAction,
+    },
     /// Ask GitHub what became of each delivered branch (merged, reverted
     /// within seven days) and record it.
     Labels,
@@ -111,6 +117,17 @@ enum JevAction {
     Test {
         /// typesafe or openrouter (default: the one in config.toml)
         provider: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum StatsAction {
+    /// The inbox's alarm figures: rate, priority mix, flood peak and how
+    /// long items waited to be looked at.
+    Alarms {
+        /// How many days back to look.
+        #[arg(long, default_value_t = 1)]
+        days: i64,
     },
 }
 
@@ -193,6 +210,9 @@ fn main() -> anyhow::Result<ExitCode> {
         }
         Some(Command::Brief { hours }) => evidence::print_brief(hours),
         Some(Command::Labels) => evidence::labels(),
+        Some(Command::Stats {
+            what: StatsAction::Alarms { days },
+        }) => stats::alarms(days.max(1)),
         Some(Command::Gate {
             action: GateAction::Run { dir },
         }) => {
@@ -366,6 +386,7 @@ fn run_tui(no_splash: bool) -> anyhow::Result<()> {
     // Collectors run from the start so the stations have data once shown.
     let telemetry = telemetry::start(&settings, &paths, store.clone(), clock.clone())
         .with_truth(truth, statuslines);
+    let alarm_store = store.clone();
     let mut jobs = JobService::new(store.clone(), jobs_log, runner, clock)
         .with_telemetry_store(store)
         .with_limits(settings.limits())
@@ -392,6 +413,7 @@ fn run_tui(no_splash: bool) -> anyhow::Result<()> {
     .with_missions(missions)
     .with_evidence(evidence, away_since)
     .with_checkpoints(checkpoints)
+    .with_alarms(alarm_store)
     .with_terminal(Rc::new(WindowsTerminal::new(doctor::claude_bin())))
     .with_telemetry_feed(telemetry, &settings.telemetry)
     .with_look(
