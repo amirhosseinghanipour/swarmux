@@ -11,8 +11,11 @@ use ratatui::{
 use swarmux_domain::{Actor, JobStatus, Phase};
 
 use super::View;
-use super::widgets::{dim, fit, model_color, panel};
-use crate::ui::{DIM, GREEN, LABEL, MUTED, ORANGE};
+use super::parts::{dim, fit};
+use crate::theme::Theme;
+use crate::ui::grid::chrome::{self, fingerprint};
+use crate::ui::grid::{Panel, PanelId, ViewModel};
+use crate::ui::look::Icon;
 
 const LABEL_W: usize = 10;
 
@@ -22,7 +25,7 @@ struct Row {
     marks: Vec<u32>,
 }
 
-fn rows(view: &View) -> Vec<Row> {
+fn rows(view: &View, t: &Theme) -> Vec<Row> {
     let Some(job) = view.job else {
         return Vec::new();
     };
@@ -30,7 +33,7 @@ fn rows(view: &View) -> Vec<Row> {
     if let Some(r) = view.review {
         rows.push(Row {
             label: "reviewer".into(),
-            color: model_color(Some(&r.model)),
+            color: t.model(Some(&r.model)),
             marks: r
                 .lanes
                 .iter()
@@ -41,14 +44,14 @@ fn rows(view: &View) -> Vec<Row> {
     if let Some(lead) = job.lanes.iter().find(|l| l.actor == Actor::Lead) {
         rows.push(Row {
             label: "lead".into(),
-            color: model_color(Some(&job.model)),
+            color: t.model(Some(&job.model)),
             marks: lead.marks.clone(),
         });
     }
     if !job.decision_marks.is_empty() {
         rows.push(Row {
             label: "guard".into(),
-            color: GREEN,
+            color: t.guard,
             marks: job.decision_marks.clone(),
         });
     }
@@ -58,19 +61,74 @@ fn rows(view: &View) -> Vec<Row> {
         marks.extend(&s.marks);
         rows.push(Row {
             label: s.kind.clone(),
-            color: model_color(s.model.as_deref()),
+            color: t.model(s.model.as_deref()),
             marks,
         });
     }
     rows
 }
 
-pub fn render(frame: &mut Frame, area: Rect, view: &View) {
-    let block = panel(" session timeline ".into(), MUTED);
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+pub struct Timeline;
+
+impl Panel for Timeline {
+    fn id(&self) -> PanelId {
+        PanelId::Timeline
+    }
+    fn title(&self) -> &'static str {
+        "session timeline"
+    }
+    fn icon(&self) -> Icon {
+        Icon::Timeline
+    }
+    fn min_size(&self) -> (u16, u16) {
+        (26, 4)
+    }
+    fn priority(&self) -> u8 {
+        4
+    }
+    /// A lane per actor (lead, guard, reviewer, subagents), the axis and borders.
+    fn preferred_height(&self, vm: &ViewModel) -> Option<u16> {
+        let actors = vm.view.job.map_or(0, |j| {
+            2 + j.subagents.len() + usize::from(vm.view.review.is_some())
+        });
+        Some(actors as u16 + 4)
+    }
+    fn render(&self, frame: &mut Frame, area: Rect, vm: &ViewModel, t: &Theme, _tick: u64) {
+        let view = &vm.view;
+        let lanes = view.job.map_or(0, |j| j.subagents.len());
+        let block = chrome::block(
+            self,
+            vm,
+            t,
+            t.border,
+            vec![chrome::title(" session timeline ", t.muted)],
+            Some(fingerprint(lanes)),
+        );
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+        render_lanes(frame, inner, view, t);
+    }
+    fn summary(&self, vm: &ViewModel, t: &Theme, _tick: u64) -> Line<'static> {
+        match vm.view.job {
+            None => Line::from(dim(t, " timeline · no job yet")),
+            Some(job) => Line::from(vec![
+                Span::styled(" timeline ", Style::new().fg(t.label)),
+                Span::styled(
+                    format!(
+                        "{} lanes · step {}",
+                        rows(&vm.view, t).len(),
+                        job.phase().as_str()
+                    ),
+                    Style::new().fg(t.muted),
+                ),
+            ]),
+        }
+    }
+}
+
+fn render_lanes(frame: &mut Frame, inner: Rect, view: &View, t: &Theme) {
     let Some(job) = view.job else {
-        frame.render_widget(Paragraph::new(Line::from(dim("no job yet"))), inner);
+        frame.render_widget(Paragraph::new(Line::from(dim(t, "no job yet"))), inner);
         return;
     };
     let track = (inner.width as usize).saturating_sub(LABEL_W + 1);
@@ -82,16 +140,18 @@ pub fn render(frame: &mut Frame, area: Rect, view: &View) {
     let end = view.end.max(1);
     // Leave room right of "now" while things run.
     let span = if running { end + end / 8 + 2 } else { end };
-    let x = |t: u32| (u64::from(t.min(span)) * (track as u64 - 1) / u64::from(span)) as usize;
+    let x = |tick: u32| (u64::from(tick.min(span)) * (track as u64 - 1) / u64::from(span)) as usize;
     let now = x(end);
 
     let mut lines: Vec<Line> = Vec::new();
-    let rows = rows(view);
+    let rows = rows(view, t);
     let room = (inner.height as usize).saturating_sub(1);
     for row in rows.iter().take(room) {
         let mut cells = vec![' '; track];
         for &m in &row.marks {
-            cells[x(m)] = '┃';
+            if let Some(c) = cells.get_mut(x(m)) {
+                *c = '┃';
+            }
         }
         let cursor = cells[now] == ' ';
         let before: String = cells[..now].iter().collect();
@@ -105,12 +165,12 @@ pub fn render(frame: &mut Frame, area: Rect, view: &View) {
             Span::styled(before, Style::new().fg(row.color)),
             Span::styled(
                 at.to_string(),
-                Style::new().fg(if cursor { DIM } else { row.color }),
+                Style::new().fg(if cursor { t.dim } else { row.color }),
             ),
             Span::styled(after, Style::new().fg(row.color)),
         ]));
     }
-    lines.push(axis(job.phase_ticks, track, &x, now));
+    lines.push(axis(job.phase_ticks, track, &x, now, t));
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
@@ -120,6 +180,7 @@ fn axis(
     track: usize,
     x: &dyn Fn(u32) -> usize,
     now: usize,
+    t: &Theme,
 ) -> Line<'static> {
     let mut cells = vec![' '; track];
     let mut lit = vec![false; track];
@@ -145,7 +206,7 @@ fn axis(
     }
     let mut spans = vec![Span::styled(
         format!("{:<LABEL_W$} ", "steps"),
-        Style::new().fg(LABEL),
+        Style::new().fg(t.label),
     )];
     // Group runs of the same style into one span.
     let mut run = String::new();
@@ -153,15 +214,19 @@ fn axis(
     for (i, c) in cells.into_iter().enumerate() {
         let is_lit = lit[i];
         if run_lit.is_some_and(|l| l != is_lit) {
-            spans.push(axis_span(std::mem::take(&mut run), run_lit == Some(true)));
+            spans.push(axis_span(
+                std::mem::take(&mut run),
+                run_lit == Some(true),
+                t,
+            ));
         }
         run_lit = Some(is_lit);
         run.push(c);
     }
-    spans.push(axis_span(run, run_lit == Some(true)));
+    spans.push(axis_span(run, run_lit == Some(true), t));
     Line::from(spans)
 }
 
-fn axis_span(text: String, lit: bool) -> Span<'static> {
-    Span::styled(text, Style::new().fg(if lit { LABEL } else { ORANGE }))
+fn axis_span(text: String, lit: bool, t: &Theme) -> Span<'static> {
+    Span::styled(text, Style::new().fg(if lit { t.label } else { t.lead }))
 }

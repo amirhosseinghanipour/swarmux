@@ -6,7 +6,10 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 use serde::de::IgnoredAny;
-use swarmux_application::{GuardSettings, JevProvider, JevSettings, ReviewSettings, Settings};
+use swarmux_application::{
+    GuardSettings, JevProvider, JevSettings, LayoutSettings, ReviewSettings, RowSettings, Settings,
+    UiSettings,
+};
 use swarmux_domain::{Pattern, Unmatched};
 
 /// Why the config file couldn't be used.
@@ -40,6 +43,29 @@ struct RawConfig {
     review: Option<RawReview>,
     telemetry: Option<crate::config_telemetry::RawTelemetry>,
     pricing: Option<crate::config_telemetry::RawPricing>,
+    theme: Option<String>,
+    layout: Option<String>,
+    icons: Option<String>,
+    gaps: Option<i64>,
+    fps: Option<i64>,
+    low_power: Option<bool>,
+    splash: Option<bool>,
+    layouts: Option<Vec<RawLayout>>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawLayout {
+    name: String,
+    rows: Vec<RawRow>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawRow {
+    panels: Vec<String>,
+    height: Option<i64>,
+    weight: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -136,7 +162,102 @@ pub fn parse_settings(text: &str, path: &Path) -> Result<Settings, ConfigError> 
     if let Some(pricing) = raw.pricing {
         settings.pricing = crate::config_telemetry::parse_pricing(pricing, text, path)?;
     }
+    let ui = RawUi {
+        theme: raw.theme,
+        layout: raw.layout,
+        icons: raw.icons,
+        gaps: raw.gaps,
+        fps: raw.fps,
+        low_power: raw.low_power,
+        splash: raw.splash,
+        layouts: raw.layouts,
+    };
+    settings.ui = parse_ui(ui, text, path)?;
     Ok(settings)
+}
+
+/// The look-and-feel keys of [`RawConfig`].
+struct RawUi {
+    theme: Option<String>,
+    layout: Option<String>,
+    icons: Option<String>,
+    gaps: Option<i64>,
+    fps: Option<i64>,
+    low_power: Option<bool>,
+    splash: Option<bool>,
+    layouts: Option<Vec<RawLayout>>,
+}
+
+fn parse_ui(raw: RawUi, text: &str, path: &Path) -> Result<UiSettings, ConfigError> {
+    let error = |key: &str, message: String| ConfigError {
+        path: path.to_path_buf(),
+        line: key_line(text, key),
+        message,
+    };
+    let in_range = |key: &str, v: i64, lo: u16, hi: u16| {
+        u16::try_from(v)
+            .ok()
+            .filter(|v| (lo..=hi).contains(v))
+            .ok_or_else(|| error(key, format!("{key} must be between {lo} and {hi}")))
+    };
+    let name = |key: &str, v: String| {
+        let v = v.trim().to_string();
+        if v.is_empty() {
+            Err(error(key, format!("{key} can't be empty")))
+        } else {
+            Ok(v)
+        }
+    };
+    let mut ui = UiSettings::default();
+    if let Some(theme) = raw.theme {
+        ui.theme = name("theme", theme)?;
+    }
+    if let Some(layout) = raw.layout {
+        ui.layout = name("layout", layout)?;
+    }
+    if let Some(icons) = raw.icons {
+        let icons = icons.trim().to_ascii_lowercase();
+        if icons != "ascii" && icons != "nerd" {
+            return Err(error("icons", "icons must be \"ascii\" or \"nerd\"".into()));
+        }
+        ui.icons = icons;
+    }
+    if let Some(gaps) = raw.gaps {
+        ui.gaps = in_range("gaps", gaps, 0, 4)?;
+    }
+    if let Some(fps) = raw.fps {
+        ui.fps = in_range("fps", fps, 1, 30)?;
+    }
+    ui.low_power = raw.low_power.unwrap_or(ui.low_power);
+    ui.splash = raw.splash.unwrap_or(ui.splash);
+    for layout in raw.layouts.unwrap_or_default() {
+        let name = name("name", layout.name)?;
+        if layout.rows.is_empty() || layout.rows.iter().any(|r| r.panels.is_empty()) {
+            return Err(error(
+                "rows",
+                format!("layout \"{name}\" needs rows, each with at least one panel"),
+            ));
+        }
+        let rows = layout
+            .rows
+            .into_iter()
+            .map(|r| {
+                Ok(RowSettings {
+                    panels: r.panels.into_iter().map(|p| p.trim().to_string()).collect(),
+                    height: r
+                        .height
+                        .map(|h| in_range("height", h, 1, 200))
+                        .transpose()?,
+                    weight: r
+                        .weight
+                        .map(|w| in_range("weight", w, 1, 100))
+                        .transpose()?,
+                })
+            })
+            .collect::<Result<_, ConfigError>>()?;
+        ui.layouts.push(LayoutSettings { name, rows });
+    }
+    Ok(ui)
 }
 
 fn parse_review(raw: RawReview, text: &str, path: &Path) -> Result<ReviewSettings, ConfigError> {
@@ -502,6 +623,57 @@ api_key = \"sk-SECRET-123\"",
         assert_eq!(e.line, Some(2));
         assert!(parse("[review]\nenabled = \"yes\"").is_err());
         assert!(parse("[review]\nreviewer = \"x\"").is_err());
+    }
+
+    #[test]
+    fn look_and_feel_keys_are_read() {
+        let s = parse(
+            "theme = \"tokyo-night\"\nlayout = \"btop\"\nicons = \"Nerd\"\ngaps = 0\nfps = 24\n\
+             low_power = true\nsplash = false\n\n[[layouts]]\nname = \"focus\"\n\
+             rows = [{ panels = [\"lead:2\", \"guard\"], height = 6 }, { panels = [\"log\"] }]\n",
+        )
+        .unwrap();
+        let ui = s.ui;
+        assert_eq!(
+            (ui.theme.as_str(), ui.layout.as_str()),
+            ("tokyo-night", "btop")
+        );
+        assert_eq!((ui.icons.as_str(), ui.gaps, ui.fps), ("nerd", 0, 24));
+        assert!(ui.low_power && !ui.splash);
+        assert_eq!(
+            ui.layouts,
+            [LayoutSettings {
+                name: "focus".into(),
+                rows: vec![
+                    RowSettings {
+                        panels: vec!["lead:2".into(), "guard".into()],
+                        height: Some(6),
+                        weight: None,
+                    },
+                    RowSettings {
+                        panels: vec!["log".into()],
+                        height: None,
+                        weight: None,
+                    },
+                ],
+            }]
+        );
+        assert_eq!(parse("").unwrap().ui, UiSettings::default());
+    }
+
+    #[test]
+    fn bad_look_and_feel_values_name_the_line() {
+        let e = parse("theme = \"x\"\nfps = 60").unwrap_err();
+        assert_eq!(e.line, Some(2));
+        assert!(e.message.contains("between 1 and 30"), "{e}");
+        assert!(parse("icons = \"emoji\"").is_err());
+        assert!(parse("gaps = 9").is_err());
+        assert!(parse("theme = \" \"").is_err());
+        assert!(parse("[[layouts]]\nname = \"x\"\nrows = []").is_err());
+        assert!(parse("[[layouts]]\nname = \"x\"\nrows = [{ panels = [] }]").is_err());
+        assert!(
+            parse("[[layouts]]\nname = \"x\"\nrows = [{ panels = [\"a\"], height = 0 }]").is_err()
+        );
     }
 
     #[test]

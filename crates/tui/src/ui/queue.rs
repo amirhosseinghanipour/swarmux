@@ -3,21 +3,22 @@ use ratatui::{
     layout::{Constraint, Rect},
     style::{Style, Stylize},
     text::Span,
-    widgets::{Block, Cell, Paragraph, Row, Table, TableState},
+    widgets::{Cell, Paragraph, Row, Table, TableState},
 };
 
-use super::{MUTED, status_span};
+use super::status_span;
 use crate::app::App;
 
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
-    let block = Block::bordered()
-        .border_style(Style::new().fg(MUTED))
+    let t = &app.look.theme;
+    let block = super::rounded(t)
+        .border_style(Style::new().fg(t.muted))
         .title(" queue ");
     let rows = app.queue_rows();
     if rows.is_empty() {
         frame.render_widget(
             Paragraph::new("no jobs yet: press 1 then p to send a prompt")
-                .fg(MUTED)
+                .fg(t.muted)
                 .block(block),
             area,
         );
@@ -32,8 +33,8 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
             };
             Row::new(vec![
                 Cell::from(format!("#{}", e.job_id)),
-                Cell::from(status_span(e.status)),
-                Cell::from(Span::styled(priority, Style::new().fg(MUTED))),
+                Cell::from(status_span(t, e.status)),
+                Cell::from(Span::styled(priority, Style::new().fg(t.muted))),
                 Cell::from(e.session_name.clone()),
                 Cell::from(format!("${:.4}", e.cost_usd)),
                 Cell::from(e.prompt.lines().next().unwrap_or_default().to_string()),
@@ -48,7 +49,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         Constraint::Length(9),
         Constraint::Fill(1),
     ];
-    let header = Row::new(["job", "status", "pri", "session", "cost", "prompt"]).fg(MUTED);
+    let header = Row::new(["job", "status", "pri", "session", "cost", "prompt"]).fg(t.muted);
     let table = Table::new(table_rows, widths)
         .header(header)
         .block(block)

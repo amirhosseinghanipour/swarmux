@@ -238,7 +238,7 @@ mod tests {
             "{out}"
         );
         assert!(
-            out.contains("which session ███████████░ 0.93 → api"),
+            out.contains("which session ███████████▏ 0.93 → api"),
             "{out}"
         );
         let rows = t.decisions.rows();

@@ -3,20 +3,20 @@ use ratatui::{
     layout::Rect,
     style::{Style, Stylize},
     text::{Line, Span},
-    widgets::{Block, List, ListItem, ListState, Paragraph},
+    widgets::{List, ListItem, ListState, Paragraph},
 };
 
-use super::{GREEN, MUTED, ORANGE};
 use crate::app::App;
 
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
-    let block = Block::bordered()
-        .border_style(Style::new().fg(MUTED))
+    let t = &app.look.theme;
+    let block = super::rounded(t)
+        .border_style(Style::new().fg(t.muted))
         .title(" sessions ");
     if app.sessions.is_empty() {
         frame.render_widget(
             Paragraph::new("no sessions yet: press n to create one in the current folder")
-                .fg(MUTED)
+                .fg(t.muted)
                 .block(block),
             area,
         );
@@ -28,12 +28,12 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         .map(|s| {
             ListItem::new(Line::from(vec![
                 Span::raw(format!("{:<20} ", s.name)),
-                Span::styled(format!("{:<8} ", s.model), Style::new().fg(ORANGE)),
+                Span::styled(format!("{:<8} ", s.model), Style::new().fg(t.lead)),
                 Span::styled(
                     if s.lean { "lean " } else { "     " },
-                    Style::new().fg(GREEN),
+                    Style::new().fg(t.ok),
                 ),
-                Span::styled(s.cwd.display().to_string(), Style::new().fg(MUTED)),
+                Span::styled(s.cwd.display().to_string(), Style::new().fg(t.muted)),
             ]))
         })
         .collect();

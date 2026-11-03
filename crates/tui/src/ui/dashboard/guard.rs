@@ -3,28 +3,105 @@
 use ratatui::{
     Frame,
     layout::Rect,
-    style::Style,
+    style::{Color, Style},
     text::{Line, Span},
     widgets::Paragraph,
 };
 use swarmux_application::{Outcome, Source};
 
-use super::widgets::{bar, dim, fit, label, panel};
+use super::parts::{dim, fit, label};
 use crate::app::App;
+use crate::theme::{Theme, mix};
+use crate::ui::grid::chrome::{self, fingerprint};
+use crate::ui::grid::{Panel, PanelId, ViewModel};
 use crate::ui::guard::{decision_line, jev_decision_line, jev_line, latency};
-use crate::ui::{BLUE, DIM, GREEN, ORANGE, RED};
+use crate::ui::look::Icon;
+use crate::ui::widgets::bar_spans;
 
 const NAME_W: usize = 14;
 const BAR_W: usize = 12;
 
+pub struct Guard;
+
+impl Panel for Guard {
+    fn id(&self) -> PanelId {
+        PanelId::Guard
+    }
+    fn title(&self) -> &'static str {
+        "guard"
+    }
+    fn icon(&self) -> Icon {
+        Icon::Guard
+    }
+    fn min_size(&self) -> (u16, u16) {
+        (34, 3)
+    }
+    fn priority(&self) -> u8 {
+        1
+    }
+
+    /// The box with as many rows as fit.
+    fn render(&self, frame: &mut Frame, area: Rect, vm: &ViewModel, t: &Theme, _tick: u64) {
+        let app = vm.app;
+        let total = app.guard.stats().total();
+        let block = chrome::block(
+            self,
+            vm,
+            t,
+            t.guard,
+            vec![chrome::title(title(app), t.guard)],
+            Some(fingerprint(total)),
+        );
+        let inner = block.inner(area);
+        let room = inner.height as usize;
+        let all = rows(vm, t, inner.width as usize);
+        let mut keep: Vec<u8> = all.iter().map(|(p, _)| *p).collect();
+        keep.sort_unstable();
+        keep.truncate(room);
+        let lines: Vec<Line> = all
+            .into_iter()
+            .filter(|(p, _)| keep.contains(p))
+            .map(|(_, l)| l)
+            .collect();
+        frame.render_widget(Paragraph::new(lines).block(block), area);
+    }
+
+    /// One line for small windows.
+    fn summary(&self, vm: &ViewModel, t: &Theme, _tick: u64) -> Line<'static> {
+        let app = vm.app;
+        let s = app.guard.stats();
+        let mut spans = vec![Span::styled(title(app), Style::new().fg(t.guard))];
+        if let Some(share) = s.share(s.allowed) {
+            spans.push(label(
+                t,
+                format!(
+                    " allow {:.0}% · ask {} · stop {}",
+                    share * 100.0,
+                    s.asked,
+                    s.stopped
+                ),
+            ));
+        }
+        Line::from(spans)
+    }
+}
+
 /// Rows in display order, with how much each matters when space is short
 /// (lower stays longer).
-fn rows(app: &App, width: usize) -> Vec<(u8, Line<'_>)> {
+fn rows<'a>(vm: &ViewModel<'a>, t: &Theme, width: usize) -> Vec<(u8, Line<'a>)> {
+    let app = vm.app;
     let s = app.guard.stats();
-    let mut rows = vec![(2, route_row(app))];
+    let mut rows = vec![(2, route_row(vm, t))];
 
     let tool_gate = match s.share(s.allowed) {
-        None => row("tool gate", None, dim("no tool calls yet"), GREEN),
+        None => row(
+            vm,
+            t,
+            "tool gate",
+            None,
+            dim(t, "no tool calls yet"),
+            t.guard,
+        ),
         Some(share) => {
             let mut mix = format!("allow {:.0}%", share * 100.0);
             for (name, n) in [("ask", s.asked), ("deny", s.denied), ("pass", s.passed)] {
@@ -33,13 +110,15 @@ fn rows(app: &App, width: usize) -> Vec<(u8, Line<'_>)> {
                 }
             }
             row(
+                vm,
+                t,
                 "tool gate",
                 Some(share),
                 Span::styled(
                     format!("{mix} of {}", s.tool_calls()),
-                    Style::new().fg(GREEN),
+                    Style::new().fg(t.guard),
                 ),
-                GREEN,
+                t.guard,
             )
         }
     };
@@ -47,62 +126,80 @@ fn rows(app: &App, width: usize) -> Vec<(u8, Line<'_>)> {
 
     let to_you = s.asked + s.stopped;
     let retry = match (s.total() > 0).then(|| to_you as f64 / s.total() as f64) {
-        None => row("retry/stop", None, dim("nothing stopped"), ORANGE),
+        None => row(vm, t, "retry/stop", None, dim(t, "nothing stopped"), t.warn),
         Some(share) => row(
+            vm,
+            t,
             "retry/stop",
             Some(share),
             Span::styled(
                 format!("stop {} · split → you {}", s.stopped, s.asked),
-                Style::new().fg(if s.stopped > 0 { RED } else { ORANGE }),
+                Style::new().fg(if s.stopped > 0 { t.error } else { t.warn }),
             ),
-            ORANGE,
+            t.warn,
         ),
     };
     rows.push((1, retry));
 
     let latest = app.guard.recent().next().map_or_else(
-        || Line::from(dim("every tool call your jobs make is checked here")),
+        || Line::from(dim(t, "every tool call your jobs make is checked here")),
         |d| match (d.source, d.confidence) {
-            (Source::Jev, Some(c)) => jev_decision_line(d, c),
-            _ => decision_line(d),
+            (Source::Jev, Some(c)) => jev_decision_line(d, c, t),
+            _ => decision_line(d, t),
         },
     );
     rows.push((3, latest));
-    rows.push((4, jev_line(app)));
+    rows.push((4, jev_line(app, t)));
     rows.push((
         5,
-        Line::from(Span::styled(
+        Line::from(dim(
+            t,
             fit("sharp: runs in code, the lead never sees it", width),
-            Style::new().fg(DIM),
         )),
     ));
     rows
 }
 
-/// `name  ██████░░░░░░ label`; a dim empty track when there is no figure.
+/// `name  ██████▍───── label`; a dim empty track when there is no figure.
 fn row(
+    vm: &ViewModel,
+    t: &Theme,
     name: &str,
     fraction: Option<f64>,
     text: Span<'static>,
-    color: ratatui::style::Color,
+    color: Color,
 ) -> Line<'static> {
-    let track = match fraction {
-        Some(f) => Span::styled(bar(f, BAR_W), Style::new().fg(color)),
-        None => dim("─".repeat(BAR_W)),
-    };
-    Line::from(vec![
-        label(format!("{name:<NAME_W$}")),
-        track,
-        Span::raw(" "),
-        text,
-    ])
+    let mut spans = vec![label(t, format!("{name:<NAME_W$}"))];
+    match fraction {
+        Some(f) => {
+            let shown = vm.tween(&format!("guard.{name}"), f);
+            spans.extend(bar_spans(
+                shown,
+                BAR_W,
+                &[mix(t.dim, color, 0.55), color],
+                t.dim,
+            ));
+        }
+        None => spans.push(dim(t, "─".repeat(BAR_W))),
+    }
+    spans.push(Span::raw(" "));
+    spans.push(text);
+    Line::from(spans)
 }
 
 /// The latest routing decision: JEV's confidence when it decided, else
 /// who picked (Haiku has no confidence to show).
-fn route_row(app: &App) -> Line<'static> {
+fn route_row(vm: &ViewModel, t: &Theme) -> Line<'static> {
+    let app = vm.app;
     let Some(d) = app.routing.recent().find(|d| d.outcome == Outcome::Route) else {
-        return row("which session", None, dim("no routed prompt yet (P)"), BLUE);
+        return row(
+            vm,
+            t,
+            "which session",
+            None,
+            dim(t, "no routed prompt yet (P)"),
+            t.haiku,
+        );
     };
     let target = d
         .rule
@@ -111,23 +208,18 @@ fn route_row(app: &App) -> Line<'static> {
         .and_then(|r| r.split([':', ' ']).next())
         .unwrap_or("?")
         .to_string();
-    match d.confidence {
-        Some(c) => row(
-            "which session",
-            Some(c),
-            Span::styled(format!("{c:.2} → {target}"), Style::new().fg(BLUE)),
-            BLUE,
-        ),
-        None => row(
-            "which session",
-            None,
-            Span::styled(
-                format!("{} → {target}", d.source.as_str()),
-                Style::new().fg(BLUE),
-            ),
-            BLUE,
-        ),
-    }
+    let text = match d.confidence {
+        Some(c) => format!("{c:.2} → {target}"),
+        None => format!("{} → {target}", d.source.as_str()),
+    };
+    row(
+        vm,
+        t,
+        "which session",
+        d.confidence,
+        Span::styled(text, Style::new().fg(t.haiku)),
+        t.haiku,
+    )
 }
 
 /// `GUARD · fork layer · 2,418 decisions · < 0.4 ms`.
@@ -139,38 +231,6 @@ fn title(app: &App) -> String {
         .map_or_else(String::new, |us| format!(" · p95 < {}", latency(us)));
     let noun = if n == 1 { "decision" } else { "decisions" };
     format!(" GUARD · fork layer · {} {noun}{p95} ", thousands(n))
-}
-
-/// The box with as many rows as fit.
-pub fn panel_box(frame: &mut Frame, area: Rect, app: &App) {
-    let block = panel(title(app), GREEN);
-    let inner = block.inner(area);
-    let room = inner.height as usize;
-    let all = rows(app, inner.width as usize);
-    let mut keep: Vec<u8> = all.iter().map(|(p, _)| *p).collect();
-    keep.sort_unstable();
-    keep.truncate(room);
-    let lines: Vec<Line> = all
-        .into_iter()
-        .filter(|(p, _)| keep.contains(p))
-        .map(|(_, l)| l)
-        .collect();
-    frame.render_widget(Paragraph::new(lines).block(block), area);
-}
-
-/// One line for small windows.
-pub fn one_line(app: &App) -> Line<'static> {
-    let s = app.guard.stats();
-    let mut spans = vec![Span::styled(title(app), Style::new().fg(GREEN))];
-    if let Some(share) = s.share(s.allowed) {
-        spans.push(label(format!(
-            " allow {:.0}% · ask {} · stop {}",
-            share * 100.0,
-            s.asked,
-            s.stopped
-        )));
-    }
-    Line::from(spans)
 }
 
 /// 2418 → "2,418".

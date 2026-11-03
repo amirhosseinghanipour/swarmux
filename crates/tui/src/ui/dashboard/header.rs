@@ -10,12 +10,14 @@ use ratatui::{
 use swarmux_domain::{Family, Phase, ReviewState, display_name};
 
 use super::View;
-use super::widgets::{dim, fit, label, model_color};
+use super::parts::{dim, fit, label};
 use crate::app::App;
-use crate::ui::{BG, DIM, GREEN, LABEL, MUTED, ORANGE};
+use crate::theme::Theme;
+use crate::ui::grid::{Panel, PanelId, ViewModel};
+use crate::ui::look::Icon;
 
 /// `SWARMUX · OPUS 5.5 ORCHESTRATES · OPUS AUDITS`, centered.
-pub fn title(app: &App, view: &View) -> Line<'static> {
+pub fn title(app: &App, view: &View, t: &Theme) -> Line<'static> {
     let bold = |s: String, color: Color| {
         Span::styled(s, Style::new().fg(color).add_modifier(Modifier::BOLD))
     };
@@ -26,24 +28,24 @@ pub fn title(app: &App, view: &View) -> Line<'static> {
             .map(|s| s.model.clone())
             .unwrap_or_default(),
     };
-    let mut spans = vec![bold("SWARMUX".into(), Color::White), label(" · ")];
+    let mut spans = vec![bold("SWARMUX".into(), t.title), label(t, " · ")];
     if !lead.is_empty() {
         spans.push(bold(
             display_name(&lead).to_uppercase(),
-            model_color(Some(&lead)),
+            t.model(Some(&lead)),
         ));
-        spans.push(bold(" ORCHESTRATES".into(), Color::White));
-        spans.push(label(" · "));
+        spans.push(bold(" ORCHESTRATES".into(), t.title));
+        spans.push(label(t, " · "));
     }
     match reviewer_model(app, view) {
         Some(model) => {
             spans.push(bold(
                 display_name(&model).to_uppercase(),
-                model_color(Some(&model)),
+                t.model(Some(&model)),
             ));
-            spans.push(bold(" AUDITS".into(), Color::White));
+            spans.push(bold(" AUDITS".into(), t.title));
         }
-        None => spans.push(label("REVIEW OFF (v)")),
+        None => spans.push(label(t, "REVIEW OFF (v)")),
     }
     Line::from(spans).centered()
 }
@@ -63,33 +65,33 @@ pub fn reviewer_model(app: &App, view: &View) -> Option<String> {
 
 /// `■ opus lead  ■ sonnet builder  ■ haiku 340 t/s  ■ guard  ■ reviewer`,
 /// listing only what the current job has.
-pub fn legend(view: &View) -> Line<'static> {
+pub fn legend(view: &View, t: &Theme) -> Line<'static> {
     let Some(job) = view.job else {
-        return Line::from(dim("no job yet")).centered();
+        return Line::from(dim(t, "no job yet")).centered();
     };
     let mut spans = Vec::new();
     let mut entry = |color: Color, text: String| {
         spans.push(Span::styled("■ ", Style::new().fg(color)));
-        spans.push(label(text));
+        spans.push(label(t, text));
         spans.push(Span::raw("   "));
     };
     let lead_family = Family::of(&job.model);
     entry(
-        model_color(Some(&job.model)),
+        t.model(Some(&job.model)),
         format!("{} lead", lead_family.as_str()),
     );
-    let mut builders: Vec<Family> = Vec::new();
-    for f in job
-        .subagents
-        .iter()
-        .filter_map(|s| s.model.as_deref().map(Family::of))
-    {
-        if f != Family::Haiku && !builders.contains(&f) {
-            builders.push(f);
+    let mut builders: Vec<(Family, Color)> = Vec::new();
+    for s in &job.subagents {
+        let Some(model) = s.model.as_deref() else {
+            continue;
+        };
+        let f = Family::of(model);
+        if f != Family::Haiku && !builders.iter().any(|(b, _)| *b == f) {
+            builders.push((f, t.model(Some(model))));
         }
     }
-    for f in builders {
-        entry(ORANGE, format!("{} builder", f.as_str()));
+    for (f, color) in builders {
+        entry(color, format!("{} builder", f.as_str()));
     }
     // Haiku throughput: output tokens per second of every Haiku actor.
     let mut haiku = Vec::new();
@@ -114,16 +116,13 @@ pub fn legend(view: &View) -> Line<'static> {
             .flatten()
             .fold(None, |a: Option<f64>, r| Some(a.map_or(r, |a| a.max(r))));
         let rate = best.map_or("—".into(), |r| format!("{r:.0}"));
-        entry(crate::ui::BLUE, format!("haiku {rate} t/s"));
+        entry(t.haiku, format!("haiku {rate} t/s"));
     }
     if !job.decision_marks.is_empty() {
-        entry(GREEN, "guard".into());
+        entry(t.guard, "guard".into());
     }
     if job.review.is_some() {
-        let color = match view.review.map(|r| model_color(Some(&r.model))) {
-            Some(c) if c != MUTED => c,
-            _ => LABEL,
-        };
+        let color = view.review.map_or(t.reviewer, |r| t.model(Some(&r.model)));
         entry(color, "reviewer".into());
     }
     spans.pop();
@@ -132,7 +131,7 @@ pub fn legend(view: &View) -> Line<'static> {
 
 /// `> claude -p … --model … --resume …` and, on the right,
 /// `3 subagents mounted · reviewer on call`.
-pub fn command(frame: &mut Frame, area: Rect, view: &View) {
+pub fn command(frame: &mut Frame, area: Rect, view: &View, t: &Theme) {
     let right = match view.job {
         Some(job) => {
             let reviewer = match &job.review {
@@ -148,29 +147,29 @@ pub fn command(frame: &mut Frame, area: Rect, view: &View) {
     let right_w = (right.chars().count() as u16).min(area.width / 2);
     let [left, right_area] =
         Layout::horizontal([Constraint::Fill(1), Constraint::Length(right_w)]).areas(area);
-    let cmd = view.job.and_then(|j| j.command.as_deref()).unwrap_or("—");
-    let max = left.width.saturating_sub(3) as usize;
+    frame.render_widget(command_line(view, t, left.width), left);
     frame.render_widget(
-        Line::from(vec![
-            Span::styled(" > ", Style::new().fg(ORANGE).add_modifier(Modifier::BOLD)),
-            Span::styled(fit(cmd, max), Style::new().fg(MUTED)),
-        ]),
-        left,
-    );
-    frame.render_widget(
-        Line::from(label(fit(&right, right_w as usize))).right_aligned(),
+        Line::from(label(t, fit(&right, right_w as usize))).right_aligned(),
         right_area,
     );
 }
 
-/// `1 plan · 2 fork · … · 7 ship` with the current step as `> plan_`, and
-/// key hints on the right.
-pub fn steps(frame: &mut Frame, area: Rect, view: &View, hints: &str) {
+fn command_line(view: &View, t: &Theme, width: u16) -> Line<'static> {
+    let cmd = view.job.and_then(|j| j.command.as_deref()).unwrap_or("—");
+    let max = width.saturating_sub(3) as usize;
+    Line::from(vec![
+        Span::styled(" > ", Style::new().fg(t.lead).add_modifier(Modifier::BOLD)),
+        Span::styled(fit(cmd, max), Style::new().fg(t.muted)),
+    ])
+}
+
+/// `1 plan · 2 fork · … · 7 ship` with the current step as `> plan_`.
+fn steps_line(view: &View, t: &Theme) -> Line<'static> {
     let current = view.job.map(|j| j.phase());
     let mut spans = vec![Span::raw(" ")];
     for (i, phase) in Phase::ALL.iter().enumerate() {
         if i > 0 {
-            spans.push(dim(" · "));
+            spans.push(dim(t, " · "));
         }
         let reached = view
             .job
@@ -178,67 +177,128 @@ pub fn steps(frame: &mut Frame, area: Rect, view: &View, hints: &str) {
         if Some(*phase) == current {
             spans.push(Span::styled(
                 format!(" > {}_ ", phase.as_str()),
-                Style::new().fg(BG).bg(ORANGE).add_modifier(Modifier::BOLD),
+                Style::new()
+                    .fg(t.on_accent)
+                    .bg(t.lead)
+                    .add_modifier(Modifier::BOLD),
             ));
         } else {
-            let color = if reached { LABEL } else { DIM };
+            let color = if reached { t.label } else { t.dim };
             spans.push(Span::styled(
                 format!("{} {}", i + 1, phase.as_str()),
                 Style::new().fg(color),
             ));
         }
     }
-    let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+    Line::from(spans)
+}
+
+/// The step tabs and, when there is room, key hints on the right.
+pub fn steps(frame: &mut Frame, area: Rect, view: &View, hints: &str, t: &Theme) {
+    let line = steps_line(view, t);
+    let used = line.width();
     let room = (area.width as usize).saturating_sub(used + 2);
-    frame.render_widget(Line::from(spans), area);
+    frame.render_widget(line, area);
     if room > 12 {
         let hint = fit(hints.trim(), room);
-        frame.render_widget(Line::from(dim(format!("{hint} "))).right_aligned(), area);
+        frame.render_widget(Line::from(dim(t, format!("{hint} "))).right_aligned(), area);
     }
 }
 
 /// Where the next prompt goes, highlighted so it can't be missed.
-pub fn target(frame: &mut Frame, area: Rect, app: &App) {
+pub fn target(app: &App, t: &Theme, width: u16) -> Line<'static> {
     let Some(s) = app.selected_session() else {
-        frame.render_widget(
-            Line::from(vec![
-                Span::styled(" ▶ ", Style::new().fg(ORANGE)),
-                label("no session yet: press 5 then n to create one in this folder"),
-            ]),
-            area,
-        );
-        return;
+        return Line::from(vec![
+            Span::styled(" ▶ ", Style::new().fg(t.lead)),
+            label(
+                t,
+                "no session yet: press 5 then n to create one in this folder",
+            ),
+        ]);
     };
     let mut spans = vec![
-        Span::styled(" ▶ prompts go to ", Style::new().fg(LABEL)),
+        label(t, " ▶ prompts go to "),
         Span::styled(
             format!(" {} ", s.name),
-            Style::new().fg(BG).bg(ORANGE).add_modifier(Modifier::BOLD),
+            Style::new()
+                .fg(t.on_accent)
+                .bg(t.lead)
+                .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
             format!(" {} ", s.model),
-            Style::new().fg(model_color(Some(&s.model))),
+            Style::new().fg(t.model(Some(&s.model))),
         ),
     ];
     if s.lean {
-        spans.push(Span::styled("lean ", Style::new().fg(GREEN)));
+        spans.push(Span::styled("lean ", Style::new().fg(t.ok)));
     }
-    let review = if app.review_next() {
-        Span::styled("· review on ", Style::new().fg(GREEN))
+    spans.push(if app.review_next() {
+        Span::styled("· review on ", Style::new().fg(t.ok))
     } else {
-        dim("· review off ")
-    };
-    spans.push(review);
-    spans.push(dim("· "));
+        dim(t, "· review off ")
+    });
+    spans.push(dim(t, "· "));
     let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
     let tail = "   ↑↓ change";
-    let room = (area.width as usize).saturating_sub(used + tail.len());
+    let room = (width as usize).saturating_sub(used + tail.len());
     spans.push(Span::styled(
         fit(&s.cwd.display().to_string(), room),
-        Style::new().fg(MUTED),
+        Style::new().fg(t.muted),
     ));
     if room > 0 {
-        spans.push(dim(tail));
+        spans.push(dim(t, tail));
     }
-    frame.render_widget(Line::from(spans), area);
+    Line::from(spans)
+}
+
+/// A one-line strip of the header.
+pub struct Strip(pub PanelId);
+
+impl Panel for Strip {
+    fn id(&self) -> PanelId {
+        self.0
+    }
+    fn title(&self) -> &'static str {
+        match self.0 {
+            PanelId::Legend => "legend",
+            PanelId::Command => "command",
+            PanelId::Steps => "steps",
+            _ => "target",
+        }
+    }
+    fn icon(&self) -> Icon {
+        Icon::Steps
+    }
+    fn min_size(&self) -> (u16, u16) {
+        (1, 1)
+    }
+    fn priority(&self) -> u8 {
+        match self.0 {
+            PanelId::Steps => 1,
+            PanelId::Target => 4,
+            PanelId::Command => 6,
+            _ => 7,
+        }
+    }
+    fn boxed(&self) -> bool {
+        false
+    }
+    fn render(&self, frame: &mut Frame, area: Rect, vm: &ViewModel, t: &Theme, _tick: u64) {
+        let area = Rect { height: 1, ..area };
+        match self.0 {
+            PanelId::Legend => frame.render_widget(legend(&vm.view, t), area),
+            PanelId::Command => command(frame, area, &vm.view, t),
+            PanelId::Steps => steps(frame, area, &vm.view, crate::ui::hints(vm.app), t),
+            _ => frame.render_widget(target(vm.app, t, area.width), area),
+        }
+    }
+    fn summary(&self, vm: &ViewModel, t: &Theme, _tick: u64) -> Line<'static> {
+        match self.0 {
+            PanelId::Legend => legend(&vm.view, t),
+            PanelId::Command => command_line(&vm.view, t, 200),
+            PanelId::Steps => steps_line(&vm.view, t),
+            _ => target(vm.app, t, 80),
+        }
+    }
 }

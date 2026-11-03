@@ -30,7 +30,8 @@ pub use prompts::{BUILTIN_VARIABLES, PromptService, RenderedPrompt};
 pub use routing::{ROUTE_PROMPT_MAX, RouteReport, Routed, RoutingService};
 pub use sessions::SessionService;
 pub use settings::{
-    GuardSettings, JevProvider, JevSettings, ReviewSettings, Settings, TelemetrySettings,
+    GuardSettings, JevProvider, JevSettings, LayoutSettings, ReviewSettings, RowSettings, Settings,
+    TelemetrySettings, UiSettings,
 };
 pub use telemetry::{
     ActivityView, Battery, CiRun, Collected, Commit, DiffStat, DiskUsage, ENVIRONMENTS,

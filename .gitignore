@@ -2,3 +2,6 @@
 
 # Private working notes, never committed
 docs/
+
+# Local agent worktrees
+.claude/worktrees/

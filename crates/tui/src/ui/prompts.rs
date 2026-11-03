@@ -8,35 +8,38 @@ use ratatui::{
 use swarmux_application::{BUILTIN_VARIABLES, PromptService};
 use swarmux_domain::{PromptTemplate, variables};
 
+use super::editor;
 use super::input::Input;
-use super::{MUTED, ORANGE, editor};
 use crate::app::App;
 use crate::prompts::{Field, PromptForm};
+use crate::theme::Theme;
 
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
+    let t = &app.look.theme;
     let [list_area, right] =
         Layout::horizontal([Constraint::Percentage(35), Constraint::Percentage(65)]).areas(area);
     render_list(frame, list_area, app);
     match (&app.prompts.form, app.prompts.selected_prompt()) {
-        (Some(form), _) => render_form(frame, right, form),
+        (Some(form), _) => render_form(frame, right, form, t),
         (None, Some(prompt)) => render_preview(frame, right, app, prompt),
         (None, None) => {}
     }
 }
 
-fn panel(title: &str) -> Block<'static> {
-    Block::bordered()
-        .border_style(Style::new().fg(MUTED))
+fn panel(t: &Theme, title: &str) -> Block<'static> {
+    super::rounded(t)
+        .border_style(Style::new().fg(t.muted))
         .title(format!(" {title} "))
 }
 
 fn render_list(frame: &mut Frame, area: Rect, app: &App) {
+    let t = &app.look.theme;
     if app.prompts.list.is_empty() {
         frame.render_widget(
             Paragraph::new("no prompts yet: press n to write one")
-                .fg(MUTED)
+                .fg(t.muted)
                 .wrap(Wrap { trim: true })
-                .block(panel("prompts")),
+                .block(panel(t, "prompts")),
             area,
         );
         return;
@@ -50,14 +53,14 @@ fn render_list(frame: &mut Frame, area: Rect, app: &App) {
             if !p.tags.is_empty() {
                 spans.push(Span::styled(
                     format!("  {}", p.tags.join(", ")),
-                    Style::new().fg(MUTED),
+                    Style::new().fg(t.muted),
                 ));
             }
             ListItem::new(Line::from(spans))
         })
         .collect();
     let list = List::new(items)
-        .block(panel("prompts"))
+        .block(panel(t, "prompts"))
         .highlight_symbol("› ")
         .highlight_style(Style::new().bold());
     let mut state = ListState::default().with_selected(Some(app.prompts.selected));
@@ -65,11 +68,12 @@ fn render_list(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 fn render_preview(frame: &mut Frame, area: Rect, app: &App, prompt: &PromptTemplate) {
+    let t = &app.look.theme;
     let target = app
         .selected_session()
         .map_or("no session", |s| s.name.as_str());
-    let block = panel(&format!("{} → {target}", prompt.name));
-    let mut lines = vec![variables_line(&prompt.body), Line::raw("")];
+    let block = panel(t, &format!("{} → {target}", prompt.name));
+    let mut lines = vec![variables_line(t, &prompt.body), Line::raw("")];
     lines.extend(prompt.body.lines().map(Line::raw));
     frame.render_widget(
         Paragraph::new(lines)
@@ -79,7 +83,7 @@ fn render_preview(frame: &mut Frame, area: Rect, app: &App, prompt: &PromptTempl
     );
 }
 
-fn variables_line(body: &str) -> Line<'static> {
+fn variables_line(t: &Theme, body: &str) -> Line<'static> {
     let user = PromptService::user_variables(body);
     let builtin: Vec<String> = variables(body)
         .into_iter()
@@ -95,16 +99,16 @@ fn variables_line(body: &str) -> Line<'static> {
     if parts.is_empty() {
         parts.push("no variables".into());
     }
-    Line::styled(parts.join(" · "), Style::new().fg(MUTED))
+    Line::styled(parts.join(" · "), Style::new().fg(t.muted))
 }
 
-fn render_form(frame: &mut Frame, area: Rect, form: &PromptForm) {
+fn render_form(frame: &mut Frame, area: Rect, form: &PromptForm, t: &Theme) {
     let title = if form.id.is_some() {
         "edit prompt"
     } else {
         "new prompt"
     };
-    let outer = panel(title);
+    let outer = panel(t, title);
     let inner = outer.inner(area);
     frame.render_widget(outer, area);
     let [name, tags, body] = Layout::vertical([
@@ -114,26 +118,26 @@ fn render_form(frame: &mut Frame, area: Rect, form: &PromptForm) {
     ])
     .areas(inner);
     frame.render_widget(
-        field_line("name", &form.name, form.focus == Field::Name),
+        field_line(t, "name", &form.name, form.focus == Field::Name),
         name,
     );
     frame.render_widget(
-        field_line("tags", &form.tags, form.focus == Field::Tags),
+        field_line(t, "tags", &form.tags, form.focus == Field::Tags),
         tags,
     );
     let focused = form.focus == Field::Body;
-    let border = if focused { ORANGE } else { MUTED };
-    let block = Block::bordered()
+    let border = if focused { t.lead } else { t.muted };
+    let block = super::rounded(t)
         .border_style(Style::new().fg(border))
         .title(" body · {{ variable }} ");
     editor::render(frame, body, &form.body, block, focused);
 }
 
-fn field_line(label: &str, input: &Input, focused: bool) -> Line<'static> {
+fn field_line(t: &Theme, label: &str, input: &Input, focused: bool) -> Line<'static> {
     let label_style = if focused {
-        Style::new().fg(ORANGE)
+        Style::new().fg(t.lead)
     } else {
-        Style::new().fg(MUTED)
+        Style::new().fg(t.muted)
     };
     let label = Span::styled(format!("{label:<6}"), label_style);
     if !focused {
