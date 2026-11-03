@@ -2,6 +2,7 @@
 
 pub mod agents;
 pub mod claude_cli;
+pub mod clean_checkout;
 mod clock;
 pub mod config;
 pub mod config_edit;
@@ -13,6 +14,7 @@ pub mod evidence;
 pub mod gate;
 pub mod git;
 mod git_evidence;
+pub mod holdout;
 pub mod hook;
 pub mod jev;
 pub mod mission;
@@ -27,6 +29,7 @@ pub mod worktree;
 
 pub use agents::FsAgentCatalog;
 pub use claude_cli::{ClaudeCli, GuardHook, HaikuLinter, HaikuRouter};
+pub use clean_checkout::GitCleanCheckout;
 pub use clock::SystemClock;
 pub use config::{ConfigError, load_settings};
 pub use config_edit::ConfigRuleWriter;
@@ -34,6 +37,7 @@ pub use evidence::EvidenceFiles;
 pub use gate::{FsGateSource, ProcessChecker};
 pub use git::GitCli;
 pub use git_evidence::{GitCheckouts, GitVcs};
+pub use holdout::FsHoldoutStore;
 pub use hook::HookServer;
 pub use jev::{Endpoint, JevHttp};
 pub use mission::MissionFiles;

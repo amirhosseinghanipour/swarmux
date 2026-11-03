@@ -9,6 +9,10 @@ pub struct Paths {
     pub data_dir: PathBuf,
     pub db: PathBuf,
     pub config: PathBuf,
+    /// Hidden checks, per repository: never inside a repository.
+    pub holdout: PathBuf,
+    /// Clean copies the verifier makes and their shared build folders.
+    pub verify: PathBuf,
 }
 
 impl Paths {
@@ -16,11 +20,15 @@ impl Paths {
         let data_dir = home.join(".swarmux");
         let db = data_dir.join("swarmux.db");
         let config = data_dir.join("config.toml");
+        let holdout = data_dir.join("holdout");
+        let verify = data_dir.join("verify");
         Paths {
             home: home.to_path_buf(),
             data_dir,
             db,
             config,
+            holdout,
+            verify,
         }
     }
 
@@ -42,5 +50,7 @@ mod tests {
         assert_eq!(p.data_dir, Path::new("/home/u/.swarmux"));
         assert_eq!(p.db, Path::new("/home/u/.swarmux/swarmux.db"));
         assert_eq!(p.config, Path::new("/home/u/.swarmux/config.toml"));
+        assert_eq!(p.holdout, Path::new("/home/u/.swarmux/holdout"));
+        assert_eq!(p.verify, Path::new("/home/u/.swarmux/verify"));
     }
 }

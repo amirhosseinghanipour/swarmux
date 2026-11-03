@@ -11,7 +11,7 @@ use serde::Deserialize;
 use swarmux_application::{GateSource, LoadedGate};
 use swarmux_domain::gate::{
     DEFAULT_CHECK_TIMEOUT_SECS, DEFAULT_MAX_BLOCKS, GateCheck, GateOrigin, GateSpec, Pin,
-    RepoFacts, detect, protected_glob, search_roots,
+    RepoFacts, VerifierSpec, detect, protected_glob, search_roots,
 };
 use swarmux_domain::ledger::{hex, sha256};
 
@@ -41,6 +41,34 @@ struct RawFile {
     gate: RawGate,
     #[serde(default)]
     check: Vec<RawCheck>,
+    #[serde(default)]
+    verifier: RawVerifier,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawVerifier {
+    /// Run the checks in a clean copy (default) or in the worktree.
+    clean: Option<bool>,
+    /// `"block"` (default) or `"allow"`: edits to existing tests.
+    test_edits: Option<String>,
+}
+
+fn verifier_spec(raw: &RawVerifier) -> Result<VerifierSpec, String> {
+    let mut spec = VerifierSpec::default();
+    if let Some(clean) = raw.clean {
+        spec.clean = clean;
+    }
+    spec.block_test_edits = match raw.test_edits.as_deref().map(str::trim) {
+        None | Some("block") => true,
+        Some("allow") => false,
+        Some(other) => {
+            return Err(format!(
+                "verifier.test_edits is \"block\" or \"allow\", not {other:?}"
+            ));
+        }
+    };
+    Ok(spec)
 }
 
 #[derive(Debug, Deserialize)]
@@ -139,6 +167,7 @@ pub fn parse_gates(text: &str, repo: &RepoFacts) -> Result<GateSpec, String> {
         protected: raw.gate.protected,
         evidence: raw.gate.evidence,
         subagent_checks: raw.gate.subagent_checks,
+        verifier: verifier_spec(&raw.verifier)?,
     })
 }
 
@@ -432,5 +461,22 @@ run = ["cargo", "clippy"]
         assert!(f.pytest_configured);
         let names: Vec<String> = detect(&f).iter().map(GateCheck::command_line).collect();
         assert_eq!(names, ["npm test", "pytest -q"]);
+    }
+
+    #[test]
+    fn the_verifier_section_is_read() {
+        let f = facts(&[]);
+        let spec = parse_gates("", &f).unwrap();
+        assert_eq!(spec.verifier, VerifierSpec::default());
+        assert!(spec.verifier.clean && spec.verifier.block_test_edits);
+        let spec = parse_gates("[verifier]\nclean = false\ntest_edits = \"allow\"\n", &f).unwrap();
+        assert!(!spec.verifier.clean);
+        assert!(!spec.verifier.block_test_edits);
+        let err = parse_gates("[verifier]\ntest_edits = \"maybe\"\n", &f).unwrap_err();
+        assert!(err.contains("block"), "{err}");
+        assert!(
+            parse_gates("[verifier]\nhidden = true\n", &f).is_err(),
+            "typos"
+        );
     }
 }

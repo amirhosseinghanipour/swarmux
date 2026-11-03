@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 use serde::de::IgnoredAny;
 use swarmux_application::{
-    GuardSettings, JevProvider, JevSettings, LayoutSettings, ReviewSettings, RowSettings, Settings,
-    UiSettings,
+    GuardSettings, JevProvider, JevSettings, LayoutSettings, ReviewSettings, ReviewWhen,
+    RowSettings, Settings, UiSettings,
 };
 use swarmux_domain::{Pattern, Unmatched};
 
@@ -76,6 +76,7 @@ struct RawRow {
 struct RawReview {
     enabled: Option<bool>,
     model: Option<String>,
+    when: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -290,6 +291,13 @@ fn parse_review(raw: RawReview, text: &str, path: &Path) -> Result<ReviewSetting
             });
         }
         review.model = model.to_string();
+    }
+    if let Some(when) = raw.when {
+        review.when = ReviewWhen::parse(&when).ok_or_else(|| ConfigError {
+            path: path.to_path_buf(),
+            line: key_line(text, "when"),
+            message: "review when must be \"risk\" or \"always\"".into(),
+        })?;
     }
     Ok(review)
 }
@@ -767,7 +775,8 @@ ntfy = \"https://ntfy.sh/my-topic\"
             s.review,
             ReviewSettings {
                 enabled: true,
-                model: "haiku".into()
+                model: "haiku".into(),
+                when: ReviewWhen::Risk,
             }
         );
         assert_eq!(parse("").unwrap().review, ReviewSettings::default());
@@ -775,6 +784,10 @@ ntfy = \"https://ntfy.sh/my-topic\"
         assert_eq!(e.line, Some(2));
         assert!(parse("[review]\nenabled = \"yes\"").is_err());
         assert!(parse("[review]\nreviewer = \"x\"").is_err());
+        let always = parse("[review]\nwhen = \"always\"\n").unwrap();
+        assert_eq!(always.review.when, ReviewWhen::Always);
+        let e = parse("[review]\nenabled = true\nwhen = \"sometimes\"\n").unwrap_err();
+        assert_eq!(e.line, Some(3));
     }
 
     #[test]
