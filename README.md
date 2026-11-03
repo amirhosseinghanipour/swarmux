@@ -21,6 +21,9 @@ review live in one terminal.
   decisions such as unmatched tool calls and which session should take a prompt
 - **Let swarmux route**: one cheap Haiku call picks the session for a prompt
 - **Review step**: a read-only reviewer model audits a finished job's diff
+- **Done-gate**: when an agent says it is finished, swarmux runs the
+  repository's tests itself and sends it back with the failure until they
+  pass; tests and other oracles it may not edit are protected
 - **History**: every prompt with cost, outcome and review; re-run or fork from any point
 - **Lean mode** per session: skip your user-level Claude Code settings
 - **Audit ledger**: a tamper-evident, hash-chained record of every job,
@@ -101,12 +104,14 @@ cache_read = 0.20
 Screen 1 is where swarmux starts. It answers three questions: does anything
 need me, who is doing what, and will I hit a limit.
 
-- **Needs you** (left): held tool calls, failed jobs, reviews with concerns,
-  finished results and stalled jobs, most urgent first. Only things that need
+- **Needs you** (left): held tool calls, failed jobs, done-gates that gave
+  up, reviews with concerns, finished results and stalled jobs, most urgent
+  first. Only things that need
   a human decision or a look are here; everything else goes to the change log.
 - **Wall**: one card per session in a fixed order (by creation), with model,
-  permission mode, task, context, activity, todo progress and cost. Cards never
-  move when a state changes.
+  permission mode, task, context, activity, todo progress, done-gate chips
+  (`✓ cargo test`, `✗ cargo test`, `gate 1/3`, `evidence missing`) and cost.
+  Cards never move when a state changes.
 - **Top strip**: sessions by state, queue, burn, machine load, the 5-hour and
   weekly limits with a marker for how far through the window you are, and a
   note on any data source that has gone stale.
@@ -352,6 +357,75 @@ characters), or the first 200 characters of a prompt and your session names.
 Never file contents, diffs or folders. The first time a provider is enabled,
 swarmux shows exactly this and the host, and uses JEV only after you press
 `y`; the answer is remembered per provider.
+
+## Done-gate
+
+An agent's "done" is not taken on its word. Every `claude` job gets `Stop`
+and `SubagentStop` hooks; when the agent tries to finish, swarmux:
+
+1. **Runs the repository's checks** itself, in the repository root, each as a
+   child process: the program and its arguments directly, never through a
+   shell, with no console window, killed (with everything it started) at its
+   timeout, output kept to 64 KB. A check that fails is run once more; passing
+   then marks it *flaky* instead of failing the gate. Checks run only when
+   the session used a tool that can change files since the last pass.
+2. **Compares protected files with their hashes** from the start of the
+   session, so an edit that got past the Guard is still caught.
+3. **Looks for evidence**: if the last message says the tests pass or names a
+   test command, that command's latest run in the job's stream must have
+   succeeded.
+
+Anything wrong blocks the stop: the agent continues with a short digest (the
+failing check, its first failing lines verbatim, the changed protected files,
+the claims nothing backs). After `max_blocks` blocks the agent is let go and
+the job shows up in *Needs you*. Every verdict is recorded in the audit
+ledger and shows as chips on the job's wall card.
+
+Writes to **protected paths** are refused by the Guard before any rule is
+looked at: `Edit`/`Write`/`MultiEdit`/`NotebookEdit` on them, and shell
+commands that redirect into them or remove, move, copy over or edit them in
+place. Reading and running them is fine. `.swarmux/**` (the gate's own
+configuration) is always protected.
+
+Without a `.swarmux/gates.toml` the checks are guessed from the files at the
+repository root:
+
+| Found | Check |
+| --- | --- |
+| `Cargo.toml` | `cargo test --workspace --quiet` |
+| `go.mod` | `go test ./...` |
+| `package.json` with a real `test` script | `pnpm test` with `pnpm-lock.yaml`, else `npm test` |
+| `pytest.ini`, `conftest.py`, or pytest settings in `pyproject.toml` / `setup.cfg` / `tox.ini` | `pytest -q` |
+
+`.swarmux/gates.toml` (commit it with the repository):
+
+```toml
+[gate]
+max_blocks = 3            # blocks before the user decides (0: never block)
+evidence = true           # claimed test runs must appear in the stream
+subagent_checks = false   # subagents' stops: protected files and evidence only
+detect = true             # with no [[check]], guess the checks as above
+protected = ["tests/oracles/**", "golden.json"]   # relative to the root; a bare name matches anywhere
+
+[[check]]
+name = "tests"
+run = ["cargo", "test", "--workspace"]   # a list of arguments: no shell
+timeout_secs = 600
+
+[[check]]
+name = "lint"
+run = ["cargo", "clippy", "--", "-D", "warnings"]
+```
+
+The repository root is the nearest folder with a `.swarmux/gates.toml`, else
+the nearest with `.git`. A `Stop` hook may take up to 30 minutes; a gate
+still running then lets the agent stop.
+
+```sh
+swarmux gate show            # the gate that applies here: checks, protected paths, limits
+swarmux gate run             # run the checks now (recorded in the ledger); exits 1 if one fails
+swarmux gate run --dir ../x  # for another repository
+```
 
 ## Audit ledger
 
