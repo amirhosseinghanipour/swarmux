@@ -2,7 +2,7 @@ use ratatui::{
     Frame,
     layout::{Constraint, Rect},
     style::{Style, Stylize},
-    text::Span,
+    text::{Line, Span},
     widgets::{Cell, Paragraph, Row, Table, TableState},
 };
 
@@ -37,7 +37,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
                 Cell::from(Span::styled(priority, Style::new().fg(t.muted))),
                 Cell::from(e.session_name.clone()),
                 Cell::from(format!("${:.4}", e.cost_usd)),
-                Cell::from(e.prompt.lines().next().unwrap_or_default().to_string()),
+                Cell::from(prompt_cell(t, e.note.as_deref(), &e.prompt)),
             ])
         })
         .collect();
@@ -57,6 +57,19 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         .row_highlight_style(Style::new().bold());
     let mut state = TableState::default().with_selected(Some(app.queue.index(&rows)));
     frame.render_stateful_widget(table, area, &mut state);
+}
+
+/// The prompt's first line, after the governor's word on the job if any.
+fn prompt_cell<'a>(t: &crate::theme::Theme, note: Option<&'a str>, prompt: &'a str) -> Line<'a> {
+    let first = prompt.lines().next().unwrap_or_default();
+    match note {
+        Some(note) => Line::from(vec![
+            Span::styled(note, Style::new().fg(t.warn)),
+            Span::raw("  "),
+            Span::raw(first),
+        ]),
+        None => Line::from(first),
+    }
 }
 
 #[cfg(test)]
@@ -104,6 +117,38 @@ mod tests {
             "{out}"
         );
         assert!(out.contains("running 1/3 · queued 1"), "{out}");
+    }
+
+    #[test]
+    fn deferred_jobs_say_why_and_when_they_resume() {
+        use swarmux_domain::telemetry::{HOUR, LimitState, RateLimit};
+        let mut t = test_app();
+        t.usage.set(vec![LimitState::new(
+            RateLimit {
+                window: "five_hour".into(),
+                status: "allowed".into(),
+                utilization: Some(0.97),
+                resets_at: Some(3 * HOUR + 58 * 60_000),
+                surpassed_threshold: None,
+            },
+            1_000,
+        )]);
+        t.with_session("demo");
+        t.send("held job");
+        press(&mut t.app, KeyCode::Char('4'));
+        assert_eq!(t.runner.started(), 0);
+        let out = render_to_string(&t.app, 140, 10);
+        assert!(
+            out.contains("deferred: 5h at 97%, resumes 03:58") && out.contains("held job"),
+            "{out}"
+        );
+        assert!(out.contains("deferred 1 ·"), "{out}");
+        // The reset passes: it starts by itself.
+        t.clock.advance(4 * HOUR);
+        t.app.update();
+        assert_eq!(t.runner.started(), 1);
+        let out = render_to_string(&t.app, 140, 10);
+        assert!(!out.contains("deferred"), "{out}");
     }
 
     #[test]

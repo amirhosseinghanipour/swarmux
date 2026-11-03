@@ -17,9 +17,9 @@ use clap::{Parser, Subcommand};
 use swarmux_application::ledger::{LedgerService, LedgeredDecisions, LedgeredJobs};
 use swarmux_application::ports::Clock;
 use swarmux_application::{
-    CombinedStatusline, GateKeeper, GateService, GuardService, HandoffBoard, HistoryService,
-    HookBus, Jev, JobService, MissionService, PromptService, RoutingService, SessionService,
-    SharedPolicy, StatuslineFeed, TruthBoard,
+    CombinedStatusline, GateKeeper, GateService, Governor, GuardService, HandoffBoard,
+    HistoryService, HookBus, Jev, JobService, MissionService, PromptService, RoutingService,
+    SessionService, SharedPolicy, StatuslineFeed, TruthBoard,
 };
 use swarmux_infrastructure::hook::{self, HookServer, Responders};
 use swarmux_infrastructure::{
@@ -322,6 +322,12 @@ fn run_tui(no_splash: bool) -> anyhow::Result<()> {
         clock.clone(),
     );
     let history = HistoryService::new(jobs_log.clone());
+    // Usage windows from the status lines and the jobs' own streams decide
+    // what may start; work a limit stopped resumes after the reset.
+    let governor = Governor::new(&settings.governor)
+        .with_probe(truth.clone())
+        .with_resume_book(store.clone())
+        .with_utc_offset(swarmux_infrastructure::telemetry::localtime::utc_offset_minutes());
     // Collectors run from the start so the stations have data once shown.
     let telemetry = telemetry::start(&settings, &paths, store.clone(), clock.clone())
         .with_truth(truth, statuslines);
@@ -333,7 +339,8 @@ fn run_tui(no_splash: bool) -> anyhow::Result<()> {
         .with_review(workspace, &settings.review)
         .with_agent_catalog(Rc::new(FsAgentCatalog::new(Some(paths.home.clone()))))
         .with_execution_log(Rc::new(keeper))
-        .with_worktrees(worktrees);
+        .with_worktrees(worktrees)
+        .with_governor(governor);
     jobs.recover()?;
     let app = App::new(
         sessions,

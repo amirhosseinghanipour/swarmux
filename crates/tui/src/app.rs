@@ -1398,12 +1398,12 @@ pub(crate) mod tests_support {
     use swarmux_application::testing::{
         FakeAdvisor, FakeAgentCatalog, FakeConsents, FakeDecisionRepo, FakeHookInbox, FakeJobGates,
         FakeLinter, FakeMonitor, FakeRouter, FakeRuleWriter, FakeRunner, FakeTelemetry,
-        FakeTerminal, FakeWorkspace, FixedClock, InMemoryMissions, InMemoryStore,
+        FakeTerminal, FakeUsageProbe, FakeWorkspace, FixedClock, InMemoryMissions, InMemoryStore,
     };
     use swarmux_application::{
-        GuardService, HistoryService, Jev, JobService, MissionService, PromptService,
-        ReviewSettings, RoutingService, SessionService, SharedPolicy, TelemetryService,
-        TelemetrySettings,
+        Governor, GovernorSettings, GuardService, HistoryService, Jev, JobService, MissionService,
+        PromptService, ReviewSettings, RoutingService, SessionService, SharedPolicy,
+        TelemetryService, TelemetrySettings,
     };
     use swarmux_domain::{GuardPolicy, PromptDraft};
 
@@ -1432,6 +1432,8 @@ pub(crate) mod tests_support {
         pub linter: Rc<FakeLinter>,
         /// The gates mission jobs were given.
         pub job_gates: Rc<FakeJobGates>,
+        /// The usage windows the governor reads.
+        pub usage: Rc<FakeUsageProbe>,
     }
 
     /// An app wired to in-memory fakes.
@@ -1456,7 +1458,10 @@ pub(crate) mod tests_support {
         let workspace = Rc::new(FakeWorkspace::with_diff("+diff"));
         let sessions = SessionService::new(store.clone(), clock.clone());
         let catalog = Rc::new(FakeAgentCatalog::default());
+        let usage = Rc::new(FakeUsageProbe::default());
+        let governor = Governor::new(&GovernorSettings::default()).with_probe(usage.clone());
         let jobs = JobService::new(store.clone(), store.clone(), runner.clone(), clock.clone())
+            .with_governor(governor)
             .with_monitor(monitor.clone())
             .with_review(workspace.clone(), &ReviewSettings::default())
             .with_agent_catalog(catalog.clone());
@@ -1535,6 +1540,7 @@ pub(crate) mod tests_support {
             missions,
             linter,
             job_gates,
+            usage,
         }
     }
 
