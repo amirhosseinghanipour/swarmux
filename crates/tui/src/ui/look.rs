@@ -3,9 +3,10 @@
 
 use std::time::Duration;
 
-use swarmux_application::{Base16, UiSettings};
+use swarmux_application::{Base16, MotionSetting, UiSettings};
 
 use super::grid::layout::{self, LayoutSpec};
+use super::motion::{AutoMotion, Motion, Reason, resolve};
 use super::widgets::SpinnerSet;
 use crate::theme::{ColorDepth, Theme};
 
@@ -334,6 +335,10 @@ pub struct Look {
     pub gaps: u16,
     fps: u16,
     pub low_power: bool,
+    /// The `motion` key.
+    pub motion: MotionSetting,
+    /// What `motion = "auto"` senses: SSH, battery and slow frames.
+    pub auto_motion: AutoMotion,
     /// Presets first, then the user's.
     pub layouts: Vec<LayoutSpec>,
     /// Index into `layouts`.
@@ -352,6 +357,8 @@ impl Default for Look {
             gaps: 1,
             fps: 10,
             low_power: false,
+            motion: MotionSetting::Auto,
+            auto_motion: AutoMotion::default(),
             layouts: layout::presets(),
             layout: 0,
             splash_until: None,
@@ -414,6 +421,8 @@ impl Look {
             gaps: ui.gaps.min(4),
             fps,
             low_power: ui.low_power,
+            motion: ui.motion,
+            auto_motion: AutoMotion::default(),
             layouts,
             layout,
             splash_until: None,
@@ -423,10 +432,22 @@ impl Look {
 
     /// Frames per second actually drawn.
     pub fn fps(&self) -> u16 {
-        if self.low_power {
-            LOW_POWER_FPS
-        } else {
-            self.fps
+        match self.tier() {
+            Motion::Full => self.fps,
+            Motion::Reduced | Motion::Off => LOW_POWER_FPS,
+        }
+    }
+
+    /// The motion tier in force.
+    pub fn tier(&self) -> Motion {
+        resolve(self.motion, self.low_power, self.auto_motion.reason())
+    }
+
+    /// Why `auto` reduced the motion, when it did.
+    pub fn motion_reason(&self) -> Option<Reason> {
+        match self.motion {
+            MotionSetting::Auto => self.auto_motion.reason(),
+            _ => None,
         }
     }
 
@@ -442,7 +463,7 @@ impl Look {
 
     /// Whether tweens and pulses run.
     pub fn animated(&self) -> bool {
-        !self.low_power
+        self.tier() == Motion::Full
     }
 
     pub fn layout_spec(&self) -> &LayoutSpec {
@@ -501,6 +522,40 @@ mod tests {
         assert_eq!(look.fps(), 4);
         assert!(!look.animated());
         assert_eq!(look.frames(1500), 6);
+    }
+
+    #[test]
+    fn motion_tiers_set_the_frame_rate_and_what_animates() {
+        let at = |motion, low_power| {
+            let ui = UiSettings {
+                motion,
+                low_power,
+                fps: 20,
+                ..UiSettings::default()
+            };
+            Look::from_settings(&ui, ColorDepth::TrueColor).0
+        };
+        let full = at(MotionSetting::Auto, false);
+        assert_eq!(
+            (full.tier(), full.fps(), full.animated()),
+            (Motion::Full, 20, true)
+        );
+        for look in [
+            at(MotionSetting::Reduced, false),
+            at(MotionSetting::Off, false),
+            at(MotionSetting::Auto, true),
+        ] {
+            assert_eq!((look.fps(), look.animated()), (4, false));
+        }
+        assert_eq!(at(MotionSetting::Off, false).tier(), Motion::Off);
+        let mut remote = at(MotionSetting::Auto, false);
+        remote.auto_motion = AutoMotion::from_vars(|k| k == "SSH_CONNECTION");
+        assert_eq!(remote.tier(), Motion::Reduced);
+        assert_eq!(remote.motion_reason(), Some(Reason::Ssh));
+        let mut pinned = at(MotionSetting::Full, false);
+        pinned.auto_motion = AutoMotion::from_vars(|k| k == "SSH_CONNECTION");
+        assert_eq!(pinned.tier(), Motion::Full, "an explicit full is kept");
+        assert_eq!(pinned.motion_reason(), None);
     }
 
     #[test]

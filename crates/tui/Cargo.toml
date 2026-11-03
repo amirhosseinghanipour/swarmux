@@ -15,4 +15,5 @@ ratatui.workspace = true
 
 [dev-dependencies]
 swarmux-application = { workspace = true, features = ["test-support"] }
+sysinfo.workspace = true
 toml.workspace = true

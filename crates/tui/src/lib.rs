@@ -5,6 +5,7 @@
 
 mod app;
 mod dashboard;
+pub mod fetch;
 mod focus;
 mod inbox;
 mod ledger;
@@ -13,6 +14,7 @@ mod missions;
 mod prompts;
 mod queue;
 mod routing;
+mod showcase;
 pub mod telemetry;
 pub mod theme;
 pub mod theme_export;

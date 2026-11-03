@@ -3,6 +3,7 @@
 
 pub mod anim;
 pub mod confirm;
+pub mod constellation;
 pub mod dashboard;
 pub mod editor;
 pub mod focus;
@@ -13,15 +14,20 @@ pub mod ledger;
 pub mod look;
 pub mod mission;
 pub mod missions;
+pub mod motion;
 pub mod prompts;
 pub mod queue;
 pub mod sessions;
+mod showcase_chrome;
+pub mod spectrum;
 pub mod splash;
 pub mod telemetry;
 pub mod widgets;
 
 #[cfg(test)]
 mod rice_tests;
+#[cfg(test)]
+mod showcase_tests;
 
 use ratatui::{
     Frame,
@@ -44,6 +50,13 @@ pub fn draw(frame: &mut Frame, app: &App) {
     );
     if app.look.splash_at(app.frame) {
         splash::render(frame, frame.area(), app);
+    } else if let Some(mode) = app.showcase.mode {
+        match mode {
+            crate::showcase::Mode::Constellation => {
+                constellation::render(frame, frame.area(), app);
+            }
+            crate::showcase::Mode::Spectrum => spectrum::render(frame, frame.area(), app),
+        }
     } else {
         draw_screens(frame, app, t);
     }

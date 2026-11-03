@@ -142,7 +142,7 @@ fn info_lines(app: &App, t: &Theme) -> Vec<Line<'static>> {
             format!(
                 "{} fps{}",
                 look.fps(),
-                if look.low_power { " · low power" } else { "" }
+                if look.animated() { "" } else { " · low power" }
             ),
         ),
         row("keys", "t theme · L layout · tab focus".into()),

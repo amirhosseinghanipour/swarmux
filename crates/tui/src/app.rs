@@ -18,7 +18,9 @@ use swarmux_application::{
 use swarmux_domain::alarm::{Breakpoint, LoadMeter};
 use swarmux_domain::evidence::{brief, heat_strip};
 use swarmux_domain::mission::Contract;
-use swarmux_domain::{AttentionKind, JobId, JobProgress, Millis, PromptId, Session, SessionId};
+use swarmux_domain::{
+    AttentionKind, JobId, JobProgress, Millis, Priority, PromptId, Session, SessionId,
+};
 
 use crate::dashboard::DashboardState;
 use crate::focus::{Checkpoints, FocusState};
@@ -29,12 +31,14 @@ use crate::missions::{Composer, ComposerAction, MissionsScreen};
 use crate::prompts::{FormAction, PendingDispatch, PromptForm, PromptsScreen};
 use crate::queue::{QueueAction, QueueScreen};
 use crate::routing::RoutePayload;
+use crate::showcase::{AgentInput, Alert, Mode as ShowMode, Refresh, Showcase};
 use crate::telemetry::Telemetry;
 use crate::theme::{ColorDepth, Theme};
 use crate::ui::anim::Anim;
 use crate::ui::grid::PanelId;
 use crate::ui::input::{Input, InputAction};
-use crate::ui::look::{IconHints, Look};
+use crate::ui::look::{IconHints, LOW_POWER_FPS, Look};
+use crate::ui::motion::AutoMotion;
 use crate::ui::splash::SplashInfo;
 
 /// The top-level screens, in tab order: `1` to `6`, then Focus on `0`
@@ -195,6 +199,10 @@ pub struct App {
     notifier: Option<NotifyService>,
     /// Whether the terminal window has the user's attention.
     window: FocusTracker,
+    /// The Constellation and Spectrum screens.
+    pub showcase: Showcase,
+    /// When the showcase scene was last rebuilt.
+    showcase_at: Option<Millis>,
 }
 
 /// The user counts as away after this long without opening swarmux.
@@ -237,6 +245,12 @@ pub struct Launch {
 const SPLASH_MS: u64 = 1500;
 /// Lines of diff Focus keeps.
 const DIFF_LINES: usize = 2000;
+/// Frames per second of the Constellation at full motion, at least. The
+/// Spectrum's bars only move by the minute, so it needs fewer.
+const CONSTELLATION_FPS: u16 = 12;
+const SPECTRUM_FPS: u16 = 8;
+/// The longest step the showcase's animation clock takes at once.
+const SHOWCASE_MAX_STEP_MS: u64 = 250;
 /// How long a toast stays up, in milliseconds.
 const TOAST_MS: u64 = 2500;
 /// How often Focus re-reads the job's checkpoints.
@@ -294,6 +308,8 @@ impl App {
             idle_noted: false,
             notifier: None,
             window: FocusTracker::default(),
+            showcase: Showcase::default(),
+            showcase_at: None,
             focus: None,
             toast: None,
             splash: SplashInfo::default(),
@@ -318,6 +334,7 @@ impl App {
             &IconHints::from_env(&ui.font),
         );
         self.look = look;
+        self.look.auto_motion = AutoMotion::from_env();
         if let Some(p) = problems.into_iter().next() {
             self.error = Some(p);
         }
@@ -586,9 +603,15 @@ impl App {
     pub fn run(mut self, terminal: &mut DefaultTerminal) -> std::io::Result<()> {
         while !self.quit {
             self.update();
-            terminal.draw(|frame| crate::ui::draw(frame, &self))?;
+            let mut drew = std::time::Duration::ZERO;
+            terminal.draw(|frame| {
+                let started = std::time::Instant::now();
+                crate::ui::draw(frame, &self);
+                drew = started.elapsed();
+            })?;
+            self.look.auto_motion.observe_frame(drew);
             self.frame = self.frame.wrapping_add(1);
-            if event::poll(self.look.frame_time())? {
+            if event::poll(self.frame_time())? {
                 self.on_event(event::read()?);
             }
         }
@@ -662,10 +685,146 @@ impl App {
             self.error = Some(e.to_string());
         }
         self.refresh_checkpoints();
+        self.sense_motion();
+        self.refresh_showcase();
         let on_focus = (self.screen == Screen::Dashboard && !self.dashboard.classic)
             .then(|| self.current_job().map(|j| (j.job_id, j.log.len())))
             .flatten();
         self.focus_state.observe(on_focus, self.frame);
+    }
+
+    /// Time between frames: slow while a showcase screen stands still,
+    /// smoother while one moves.
+    pub fn frame_time(&self) -> std::time::Duration {
+        use std::time::Duration;
+        if !self.showcase.active() {
+            return self.look.frame_time();
+        }
+        if self.showcase.frozen() {
+            return Duration::from_millis(250);
+        }
+        let fps = match (self.look.animated(), self.showcase.mode) {
+            (true, Some(ShowMode::Constellation)) => self.look.fps().max(CONSTELLATION_FPS),
+            (true, _) => self.look.fps().clamp(LOW_POWER_FPS, SPECTRUM_FPS),
+            (false, _) => self.look.fps(),
+        };
+        Duration::from_millis(1000 / u64::from(fps.max(1)))
+    }
+
+    /// Tells `motion = "auto"` whether the machine runs on battery.
+    fn sense_motion(&mut self) {
+        let on_battery = self
+            .mission
+            .snapshot
+            .system
+            .data
+            .as_ref()
+            .and_then(|s| s.battery.as_ref())
+            .map(|b| !b.plugged_in && !b.charging);
+        self.look.auto_motion.set_battery(on_battery);
+    }
+
+    /// The first P1 or P2 item in the inbox: it holds the showcase still.
+    fn showcase_alert(&self) -> Option<Alert> {
+        self.mission
+            .items
+            .iter()
+            .find(|i| matches!(i.priority, Priority::P1 | Priority::P2))
+            .map(|i| Alert {
+                priority: i.priority,
+                text: i.title.clone(),
+            })
+    }
+
+    /// Rebuilds the showcase scene from the wall while a showcase screen is up.
+    fn refresh_showcase(&mut self) {
+        if !self.showcase.active() {
+            self.showcase_at = None;
+            return;
+        }
+        let now = self.now();
+        let dt_ms = match (self.showcase_at, &self.clock) {
+            (Some(at), Some(_)) => u64::try_from(now - at)
+                .unwrap_or(0)
+                .min(SHOWCASE_MAX_STEP_MS),
+            (Some(_), None) => self.look.frame_time().as_millis() as u64,
+            (None, _) => 0,
+        };
+        self.showcase_at = Some(now);
+        let alert = self.showcase_alert();
+        let agents = {
+            self.wall()
+                .into_iter()
+                .map(|tile| {
+                    let activity = tile.job.and_then(|j| self.jobs.job_activity(j));
+                    let tool_ages_ms = activity.map_or_else(Vec::new, |a| {
+                        a.tools
+                            .ticker(8)
+                            .iter()
+                            .map(|c| u64::try_from(now - c.started_at).unwrap_or(0))
+                            .collect()
+                    });
+                    let io = activity.map_or_else(Vec::new, |a| {
+                        a.flow
+                            .series(now)
+                            .iter()
+                            .map(|b| (b.input + b.cache_write, b.output))
+                            .collect()
+                    });
+                    AgentInput {
+                        tile,
+                        tool_ages_ms,
+                        io,
+                    }
+                })
+                .collect()
+        };
+        let spend_today = self.mission.usage().map(|u| u.today.cost);
+        self.showcase.refresh(Refresh {
+            agents,
+            alert,
+            tier: self.look.tier(),
+            dt_ms,
+            spend_today,
+        });
+    }
+
+    /// `z` and `S` open the Constellation and the Spectrum; `esc` leaves.
+    /// Returns whether the key was taken.
+    fn showcase_key(&mut self, code: KeyCode) -> bool {
+        let enterable = matches!(
+            self.screen,
+            Screen::Mission | Screen::Dashboard | Screen::Sessions
+        );
+        let mode = self.showcase.mode;
+        let open = |app: &mut App, to: ShowMode| {
+            app.showcase.mode = Some(to);
+            app.showcase_at = None;
+            app.refresh_showcase();
+            true
+        };
+        match (code, mode) {
+            (KeyCode::Char('z'), None) if enterable => open(self, ShowMode::Constellation),
+            (KeyCode::Char('S'), None) if enterable => open(self, ShowMode::Spectrum),
+            (KeyCode::Char('z'), Some(ShowMode::Spectrum)) => open(self, ShowMode::Constellation),
+            (KeyCode::Char('S'), Some(ShowMode::Constellation)) => open(self, ShowMode::Spectrum),
+            (KeyCode::Esc | KeyCode::Char('z' | 'S'), Some(_)) => {
+                self.showcase.mode = None;
+                true
+            }
+            (KeyCode::Char('t'), Some(_)) => {
+                let name = self.look.next_theme().name;
+                self.show_toast(format!("theme · {name}"));
+                true
+            }
+            (KeyCode::Char('q'), Some(_)) => false,
+            (KeyCode::Char(c), Some(_)) if Screen::by_key(c).is_some() => {
+                self.showcase.mode = None;
+                false
+            }
+            (_, Some(_)) => true,
+            _ => false,
+        }
     }
 
     pub fn selected_session(&self) -> Option<&Session> {
@@ -827,6 +986,9 @@ impl App {
         {
             let result = self.answer_approval(c);
             self.show(result);
+            return;
+        }
+        if self.showcase_key(key.code) {
             return;
         }
         let confirming_delete = std::mem::take(&mut self.prompts.confirm_delete);

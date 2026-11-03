@@ -2406,6 +2406,7 @@ dependencies = [
  "ratatui",
  "swarmux-application",
  "swarmux-domain",
+ "sysinfo",
  "toml",
 ]
 
