@@ -549,3 +549,87 @@ fn a_passed_stop_takes_a_checkpoint_and_nothing_else_does() {
     assert_eq!(kinds.last(), Some(&LedgerKind::Checkpoint));
     assert_eq!(kinds[kinds.len() - 2], LedgerKind::GateVerdict);
 }
+
+fn mission_gate() -> MissionGate {
+    MissionGate {
+        checks: vec![
+            GateCheck::new("cargo test", "cargo", &["test"]),
+            GateCheck::new("bench", "sh", &["scripts/bench.sh"]),
+        ],
+        protected: vec!["scripts/bench.sh".into()],
+    }
+}
+
+#[test]
+fn a_job_given_a_mission_gate_is_judged_and_fenced_with_it() {
+    let mut f = fixture(3);
+    f.keeper.assign(f.job, mission_gate());
+    f.start();
+    f.edit();
+    f.fix();
+    assert_eq!(f.stop(HookEvent::Stop, "done"), StopAnswer::Allow);
+    f.service.pump();
+    let state = f.service.state(f.job).unwrap();
+    let names: Vec<&str> = state.checks.iter().map(|c| c.0.as_str()).collect();
+    assert_eq!(
+        names,
+        ["cargo test", "bench"],
+        "the repository's check is not repeated"
+    );
+
+    let refuses = |job: Option<JobId>| {
+        f.keeper
+            .refuses(job, "Edit", "/w/scripts/bench.sh", "/w")
+            .map(|r| r.to_string())
+    };
+    assert_eq!(
+        refuses(Some(f.job)).as_deref(),
+        Some("protected path scripts/bench.sh (gate)")
+    );
+    assert_eq!(refuses(Some(JobId(99))), None, "other jobs are not fenced");
+    assert_eq!(refuses(None), None);
+}
+
+/// Waits for the record a check run on another thread sends.
+fn next_record(f: &mut Fixture) {
+    for _ in 0..500 {
+        if f.service.pump().0 {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    panic!("no verdict arrived");
+}
+
+#[test]
+fn verify_runs_the_checks_with_no_agent_waiting() {
+    let mut f = fixture(3);
+    f.keeper.assign(f.job, mission_gate());
+    f.keeper.verify(f.job, Path::new("/w")).unwrap();
+    next_record(&mut f);
+    let state = f.service.state(f.job).unwrap().clone();
+    assert_eq!(
+        state.outcome,
+        GateOutcome::Escalate,
+        "failing checks go to the user"
+    );
+    assert_eq!(state.blocks, 0);
+    f.fix();
+    f.keeper.verify(f.job, Path::new("/w")).unwrap();
+    next_record(&mut f);
+    let state = f.service.state(f.job).unwrap();
+    assert_eq!(state.outcome, GateOutcome::Pass);
+    assert_eq!(state.checks.len(), 2);
+    assert_eq!(f.gate_entries().len(), 2, "both runs are in the ledger");
+}
+
+#[test]
+fn verify_with_nothing_to_run_does_not_pass() {
+    let mut f = fixture(3);
+    lock(&f.source.spec).checks.clear();
+    f.keeper.verify(f.job, Path::new("/w")).unwrap();
+    next_record(&mut f);
+    let state = f.service.state(f.job).unwrap();
+    assert_eq!(state.outcome, GateOutcome::Escalate);
+    assert_eq!(state.digest, "swarmux gate: nothing to check");
+}

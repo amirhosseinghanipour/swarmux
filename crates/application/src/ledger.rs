@@ -173,6 +173,23 @@ impl LedgerService {
         )
     }
 
+    /// A mission went from `from` to its current state.
+    pub fn record_mission(
+        &self,
+        m: &swarmux_domain::mission::Mission,
+        from: swarmux_domain::mission::MissionState,
+        now: Millis,
+    ) -> AppResult<()> {
+        let payload = Payload::new()
+            .str("mission", &m.slug)
+            .str("from", from.as_str())
+            .str("to", m.state.as_str())
+            .text("title", &m.contract.title)
+            .num("spent_usd", m.spend.total())
+            .opt_str("note", m.note.as_deref());
+        self.append(now, LedgerKind::Mission, SWARMUX, m.job, m.session, payload)
+    }
+
     /// A checkpoint; returns the entry's `seq`.
     pub fn record_checkpoint(
         &self,

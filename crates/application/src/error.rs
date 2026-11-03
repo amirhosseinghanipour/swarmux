@@ -29,6 +29,11 @@ pub enum AppError {
     /// The settings file couldn't be changed.
     #[error("config error: {0}")]
     Config(String),
+    #[error("mission {0} not found")]
+    MissionNotFound(String),
+    /// The mission can't take that step now.
+    #[error("{0}")]
+    Mission(String),
 }
 
 pub type AppResult<T> = Result<T, AppError>;

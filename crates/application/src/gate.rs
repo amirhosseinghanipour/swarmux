@@ -19,6 +19,7 @@ use swarmux_domain::gate::{
     CheckRun, Executed, GateCheck, GateFindings, GateOrigin, GateOutcome, GateSpec, Pin, digest,
     evidence_gaps, judge, pin_changes, protected_write,
 };
+use swarmux_domain::mission::MissionGate;
 use swarmux_domain::{AttentionItem, CheckpointReason, HookEvent, JobId, Millis, SessionId};
 
 use crate::attention::{Change, ChangeKind};
@@ -67,8 +68,20 @@ pub trait ExecutionLog {
 
 /// Refuses writes for the Guard, before any rule is consulted.
 pub trait WriteFence: Send + Sync {
-    /// The rule that refuses `tool` on `subject` from `cwd`, if one does.
-    fn refuses(&self, tool: &str, subject: &str, cwd: &str) -> Option<String>;
+    /// The rule that refuses `tool` on `subject` from `cwd` (for `job`,
+    /// when known), if one does.
+    fn refuses(&self, job: Option<JobId>, tool: &str, subject: &str, cwd: &str) -> Option<String>;
+}
+
+/// Gives a job checks and protected paths of its own, on top of its
+/// repository's gate, and runs them on demand.
+pub trait JobGates {
+    /// From now on `job`'s stops are judged with `gate` as well.
+    fn assign(&self, job: JobId, gate: MissionGate);
+    /// Runs `job`'s checks now, in the repository it worked in (or
+    /// `dir`'s), with no agent waiting. The verdict arrives like a stop's:
+    /// a pass, or an escalation. Why the checks could not start, if not.
+    fn verify(&self, job: JobId, dir: &Path) -> Result<(), String>;
 }
 
 /// Runs `checks` in `root`; a failing check is run once more, and passing
@@ -147,6 +160,8 @@ pub struct GateKeeper {
     checker: Arc<dyn Checker>,
     watches: Mutex<HashMap<Key, Watch>>,
     out: Mutex<Sender<GateRecord>>,
+    /// Checks and protected paths of single jobs.
+    jobs: Mutex<HashMap<JobId, MissionGate>>,
 }
 
 impl GateKeeper {
@@ -161,8 +176,19 @@ impl GateKeeper {
             checker,
             watches: Mutex::default(),
             out: Mutex::new(tx),
+            jobs: Mutex::default(),
         };
         (keeper, rx)
+    }
+
+    /// The gate of the repository `dir` lies in, with what `job` was given
+    /// on top.
+    fn load(&self, job: Option<JobId>, dir: &Path) -> LoadedGate {
+        let mut gate = self.source.load(dir);
+        if let Some(extra) = job.and_then(|j| lock(&self.jobs).get(&j).cloned()) {
+            merge(&mut gate.spec, extra);
+        }
+        gate
     }
 
     /// Takes the pins of the repository `cwd` lies in for a session, unless
@@ -175,7 +201,11 @@ impl GateKeeper {
         {
             return;
         }
-        let gate = self.source.load(Path::new(cwd));
+        let job = match &key {
+            Key::Job(j) => Some(*j),
+            Key::Session(_) => None,
+        };
+        let gate = self.load(job, Path::new(cwd));
         let pins = self.source.pins(&gate.root, &gate.spec.protected_globs());
         let mut watches = lock(&self.watches);
         let watch = watches.entry(key).or_default();
@@ -193,7 +223,7 @@ impl GateKeeper {
         if stop.cwd.is_empty() {
             return None;
         }
-        let gate = self.source.load(Path::new(&stop.cwd));
+        let gate = self.load(stop.job, Path::new(&stop.cwd));
         let key = Key::of(stop.job, &stop.session);
         let subagent = stop.event == HookEvent::SubagentStop;
         let spec = &gate.spec;
@@ -332,15 +362,116 @@ impl<T: ExecutionLog + ?Sized> ExecutionLog for Arc<T> {
 }
 
 impl WriteFence for GateKeeper {
-    fn refuses(&self, tool: &str, subject: &str, cwd: &str) -> Option<String> {
+    fn refuses(&self, job: Option<JobId>, tool: &str, subject: &str, cwd: &str) -> Option<String> {
         if !changes_files(tool) || cwd.is_empty() {
             return None;
         }
-        let gate = self.source.load(Path::new(cwd));
+        let gate = self.load(job, Path::new(cwd));
         let root = gate.root.to_string_lossy().replace('\\', "/");
         let globs = gate.spec.protected_globs();
         protected_write(&globs, &root, tool, subject, cwd)
             .map(|glob| format!("protected path {glob} (gate)"))
+    }
+}
+
+impl JobGates for GateKeeper {
+    fn assign(&self, job: JobId, gate: MissionGate) {
+        lock(&self.jobs).insert(job, gate);
+    }
+
+    fn verify(&self, job: JobId, dir: &Path) -> Result<(), String> {
+        let baseline = lock(&self.watches)
+            .get(&Key::Job(job))
+            .and_then(|w| w.pins.clone());
+        let dir = baseline
+            .as_ref()
+            .map_or_else(|| dir.to_path_buf(), |(root, _)| root.clone());
+        let gate = self.load(Some(job), &dir);
+        let source = self.source.clone();
+        let checker = self.checker.clone();
+        let out = lock(&self.out).clone();
+        std::thread::Builder::new()
+            .name("swarmux-verify".into())
+            .spawn(move || {
+                let record = verify_now(&*source, &*checker, job, &gate, baseline);
+                // Nobody listening (the app is closing): nothing to record.
+                let _ = out.send(record);
+            })
+            .map(drop)
+            .map_err(|e| format!("cannot start the checks: {e}"))
+    }
+}
+
+impl<T: JobGates + ?Sized> JobGates for Arc<T> {
+    fn assign(&self, job: JobId, gate: MissionGate) {
+        (**self).assign(job, gate);
+    }
+
+    fn verify(&self, job: JobId, dir: &Path) -> Result<(), String> {
+        (**self).verify(job, dir)
+    }
+}
+
+/// `extra`'s checks (by name) and protected globs added to `spec`.
+fn merge(spec: &mut GateSpec, extra: MissionGate) {
+    for check in extra.checks {
+        if !spec.checks.iter().any(|c| c.name == check.name) {
+            spec.checks.push(check);
+        }
+    }
+    for glob in extra.protected {
+        if !spec.protected.contains(&glob) {
+            spec.protected.push(glob);
+        }
+    }
+}
+
+/// Runs a job's checks with no agent waiting: they pass, or the user is
+/// asked. With nothing to run there is nothing to pass.
+fn verify_now(
+    source: &dyn GateSource,
+    checker: &dyn Checker,
+    job: JobId,
+    gate: &LoadedGate,
+    baseline: Option<(PathBuf, Vec<Pin>)>,
+) -> GateRecord {
+    let spec = &gate.spec;
+    let globs = spec.protected_globs();
+    let runs = run_checks(checker, &spec.checks, &gate.root);
+    let pins = match baseline {
+        Some((root, before)) if root == gate.root => {
+            pin_changes(&before, &source.pins(&root, &globs))
+        }
+        _ => Vec::new(),
+    };
+    let findings = GateFindings {
+        runs,
+        pins,
+        gaps: Vec::new(),
+    };
+    let checked = !spec.checks.is_empty();
+    let outcome = if checked && findings.clean() {
+        GateOutcome::Pass
+    } else {
+        GateOutcome::Escalate
+    };
+    let text = if checked {
+        digest(&findings, outcome, 0, spec.max_blocks, &globs)
+    } else {
+        "swarmux gate: nothing to check".to_string()
+    };
+    GateRecord {
+        job: Some(job),
+        session: String::new(),
+        event: None,
+        root: gate.root.display().to_string(),
+        origin: gate.origin,
+        outcome,
+        blocks: 0,
+        max_blocks: spec.max_blocks,
+        findings,
+        digest: text,
+        problem: gate.problem.clone(),
     }
 }
 

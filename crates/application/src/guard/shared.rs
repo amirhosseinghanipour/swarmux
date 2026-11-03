@@ -43,10 +43,14 @@ impl SharedPolicy {
     /// The decision for `request`, and how long it took in microseconds.
     pub fn decide(&self, request: &HookRequest) -> (Decision, u64) {
         let start = Instant::now();
-        let fenced = self
-            .fence
-            .as_ref()
-            .and_then(|f| f.refuses(&request.tool_name, &request.subject, &request.cwd));
+        let fenced = self.fence.as_ref().and_then(|f| {
+            f.refuses(
+                request.job_id,
+                &request.tool_name,
+                &request.subject,
+                &request.cwd,
+            )
+        });
         let decision = match fenced {
             Some(rule) => Decision::new(Verdict::Deny, Some(rule)),
             None => self

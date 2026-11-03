@@ -1190,3 +1190,105 @@ impl crate::SessionTerminal for FakeTerminal {
         Ok(())
     }
 }
+
+/// Missions kept in memory, by slug.
+#[derive(Default)]
+pub struct InMemoryMissions {
+    missions: RefCell<Vec<swarmux_domain::mission::Mission>>,
+    /// Saves so far.
+    pub saves: Cell<usize>,
+}
+
+impl crate::missions::MissionStore for InMemoryMissions {
+    fn save(&self, mission: &swarmux_domain::mission::Mission) -> AppResult<()> {
+        self.saves.set(self.saves.get() + 1);
+        let mut all = self.missions.borrow_mut();
+        match all.iter_mut().find(|m| m.slug == mission.slug) {
+            Some(m) => *m = mission.clone(),
+            None => all.push(mission.clone()),
+        }
+        Ok(())
+    }
+
+    fn list(&self) -> AppResult<Vec<swarmux_domain::mission::Mission>> {
+        Ok(self.missions.borrow().clone())
+    }
+}
+
+/// Records lint requests; tests answer them with [`FakeLinter::reply`], or
+/// set an answer given at once with [`FakeLinter::answer_with`].
+#[derive(Default)]
+pub struct FakeLinter {
+    requests: RefCell<Vec<crate::missions::LintRequest>>,
+    sinks: RefCell<Vec<Option<crate::missions::LintSink>>>,
+    instant: RefCell<Option<crate::missions::LintReply>>,
+}
+
+impl FakeLinter {
+    pub fn requests(&self) -> Vec<crate::missions::LintRequest> {
+        self.requests.borrow().clone()
+    }
+
+    /// Answers the `i`-th request (once).
+    pub fn reply(&self, i: usize, reply: crate::missions::LintReply) {
+        if let Some(sink) = self.sinks.borrow_mut()[i].take() {
+            sink(reply);
+        }
+    }
+
+    /// Every later request gets `reply` at once.
+    pub fn answer_with(&self, reply: crate::missions::LintReply) {
+        *self.instant.borrow_mut() = Some(reply);
+    }
+}
+
+/// A linter reply asking `questions`, costing $0.0005.
+pub fn asks(questions: &[&str]) -> crate::missions::LintReply {
+    crate::missions::LintReply {
+        result: Ok(questions
+            .iter()
+            .map(|q| swarmux_domain::mission::Question {
+                question: q.to_string(),
+                why: "it matters".into(),
+            })
+            .collect()),
+        cost_usd: 0.0005,
+        source: "haiku".into(),
+    }
+}
+
+impl crate::missions::MissionLinter for FakeLinter {
+    fn lint(&self, request: crate::missions::LintRequest, sink: crate::missions::LintSink) {
+        self.requests.borrow_mut().push(request);
+        match self.instant.borrow().clone() {
+            Some(reply) => {
+                sink(reply);
+                self.sinks.borrow_mut().push(None);
+            }
+            None => self.sinks.borrow_mut().push(Some(sink)),
+        }
+    }
+}
+
+/// Records the gates jobs were given and the checks asked for.
+#[derive(Default)]
+pub struct FakeJobGates {
+    pub assigned: RefCell<Vec<(JobId, swarmux_domain::mission::MissionGate)>>,
+    pub verified: RefCell<Vec<(JobId, PathBuf)>>,
+    /// Makes `verify` fail with this.
+    pub broken: RefCell<Option<String>>,
+}
+
+impl crate::gate::JobGates for FakeJobGates {
+    fn assign(&self, job: JobId, gate: swarmux_domain::mission::MissionGate) {
+        self.assigned.borrow_mut().push((job, gate));
+    }
+
+    fn verify(&self, job: JobId, dir: &Path) -> Result<(), String> {
+        self.verified.borrow_mut().push((job, dir.to_path_buf()));
+        match self.broken.borrow().clone() {
+            Some(why) => Err(why),
+            None => Ok(()),
+        }
+    }
+}

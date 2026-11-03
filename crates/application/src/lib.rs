@@ -14,6 +14,7 @@ pub mod hookbus;
 mod jev;
 mod jobs;
 pub mod ledger;
+pub mod missions;
 pub mod ports;
 mod prompts;
 mod routing;
@@ -30,8 +31,8 @@ pub use checkpoint::{CheckpointService, HandoffBoard, Notes};
 pub use decision::{DecisionRecord, Outcome, Source};
 pub use error::{AppError, AppResult};
 pub use gate::{
-    Checker, ExecutionLog, GateKeeper, GateRecord, GateService, GateSource, GateState, LoadedGate,
-    WriteFence, run_checks,
+    Checker, ExecutionLog, GateKeeper, GateRecord, GateService, GateSource, GateState, JobGates,
+    LoadedGate, WriteFence, run_checks,
 };
 pub use guard::{
     AlwaysAllowed, GuardReport, GuardService, GuardStats, PendingApproval, SharedPolicy,
@@ -43,6 +44,9 @@ pub use hookbus::{
 };
 pub use jev::{Jev, JevState, SUMMARY_MAX, summarize};
 pub use jobs::{JobFact, JobService, PumpReport, QueueEntry, QueueStats};
+pub use missions::{
+    LintReply, LintRequest, LintSink, MissionLinter, MissionReport, MissionService, MissionStore,
+};
 pub use prompts::{BUILTIN_VARIABLES, PromptService, RenderedPrompt};
 pub use routing::{ROUTE_PROMPT_MAX, RouteReport, Routed, RoutingService};
 pub use sessions::SessionService;
