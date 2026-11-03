@@ -10,10 +10,10 @@ use std::rc::Rc;
 
 use swarmux_application::ports::Clock;
 use swarmux_application::{
-    AppError, AppResult, CheckpointService, EvidenceService, GateService, GuardService,
-    HistoryService, HookBus, JobService, MissionService, PendingApproval, PromptService,
-    QueueEntry, QueueStats, RoutingService, SessionService, SessionTerminal, TelemetryService,
-    TelemetrySettings, UiSettings,
+    AppError, AppResult, CheckpointService, EvidenceService, FocusTracker, GateService,
+    GuardService, HistoryService, HookBus, JobService, MissionService, NotifyService,
+    PendingApproval, PromptService, QueueEntry, QueueStats, RoutingService, SessionService,
+    SessionTerminal, TelemetryService, TelemetrySettings, UiSettings,
 };
 use swarmux_domain::evidence::{brief, heat_strip};
 use swarmux_domain::mission::Contract;
@@ -177,6 +177,10 @@ pub struct App {
     checkpoints: Option<Rc<CheckpointService>>,
     /// What was last read for the job Focus shows, and when.
     focus_checkpoints: Option<(JobId, Millis, Checkpoints)>,
+    /// Tells the user about new P1/P2 items while the window is away.
+    notifier: Option<NotifyService>,
+    /// Whether the terminal window has the user's attention.
+    window: FocusTracker,
 }
 
 /// The user counts as away after this long without opening swarmux.
@@ -260,6 +264,8 @@ impl App {
             terminal: None,
             checkpoints: None,
             focus_checkpoints: None,
+            notifier: None,
+            window: FocusTracker::default(),
             focus: None,
             toast: None,
             splash: SplashInfo::default(),
@@ -409,6 +415,13 @@ impl App {
         }
     }
 
+    /// Sends notifications for new P1 and P2 items while the terminal is
+    /// in the background.
+    pub fn with_notifier(mut self, notifier: NotifyService) -> App {
+        self.notifier = Some(notifier);
+        self
+    }
+
     /// Time for ages and countdowns; without it the screens show no ages.
     pub fn with_clock(mut self, clock: Rc<dyn Clock>) -> App {
         self.clock = Some(clock);
@@ -486,14 +499,37 @@ impl App {
             self.update();
             terminal.draw(|frame| crate::ui::draw(frame, &self))?;
             self.frame = self.frame.wrapping_add(1);
-            if event::poll(self.look.frame_time())?
-                && let Event::Key(key) = event::read()?
-                && key.kind == KeyEventKind::Press
-            {
-                self.on_key(key);
+            if event::poll(self.look.frame_time())? {
+                self.on_event(event::read()?);
             }
         }
         Ok(())
+    }
+
+    /// Handles one terminal event: a key, or the window gaining or losing focus.
+    pub(crate) fn on_event(&mut self, event: Event) {
+        match event {
+            Event::Key(key) if key.kind == KeyEventKind::Press => {
+                self.window.on_input(self.now());
+                self.on_key(key);
+            }
+            Event::FocusGained => self.window.on_focus(true),
+            Event::FocusLost => self.window.on_focus(false),
+            _ => {}
+        }
+    }
+
+    fn pump_notifications(&mut self) {
+        let now = self.now();
+        let unfocused = self.window.unfocused(now);
+        if let Some(notifier) = &mut self.notifier
+            && let Some(e) = notifier
+                .observe(&self.mission.items, unfocused, now)
+                .into_iter()
+                .last()
+        {
+            self.error = Some(e.to_string());
+        }
     }
 
     /// Applies pending job updates, starts queued jobs and handles guard requests.
@@ -528,6 +564,7 @@ impl App {
             self.refresh_ledger();
         }
         self.refresh_mission();
+        self.pump_notifications();
         if let Some(e) = self.pump_missions().into_iter().last() {
             self.error = Some(e.to_string());
         }
@@ -2064,5 +2101,64 @@ mod tests {
         assert_eq!(t.app.prompts.selected_prompt().unwrap().name, "b");
         press(&mut t.app, KeyCode::Down);
         assert_eq!(t.app.prompts.selected_prompt().unwrap().name, "a");
+    }
+}
+
+#[cfg(test)]
+mod notify_tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use crossterm::event::Event;
+    use swarmux_application::{AppResult, Notification, Notifier, NotifyService, NotifySettings};
+    use swarmux_domain::{AttentionId, AttentionItem, AttentionKind, Likelihood, Priority};
+
+    use super::tests_support::test_app;
+
+    struct Log(Rc<RefCell<Vec<Notification>>>);
+
+    impl Notifier for Log {
+        fn notify(&self, n: &Notification) -> AppResult<()> {
+            self.0.borrow_mut().push(n.clone());
+            Ok(())
+        }
+    }
+
+    fn item(key: &str, priority: Priority) -> AttentionItem {
+        AttentionItem {
+            id: AttentionId::new(key),
+            kind: AttentionKind::JobFailed,
+            priority,
+            title: key.into(),
+            detail: String::new(),
+            session: None,
+            job: None,
+            request: None,
+            since: 0,
+            deadline: None,
+            likelihood: Likelihood::Certain,
+        }
+    }
+
+    #[test]
+    fn a_background_window_notifies_p2_once_and_never_p3() {
+        let mut t = test_app();
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        t.app = t.app.with_notifier(NotifyService::new(
+            Box::new(Log(seen.clone())),
+            NotifySettings::default(),
+            || 0,
+        ));
+        t.app.mission.items = vec![item("a", Priority::P2), item("b", Priority::P3)];
+        // The user is here: nothing yet.
+        t.app.on_event(Event::FocusGained);
+        t.app.pump_notifications();
+        assert!(seen.borrow().is_empty());
+        // The window goes to the background.
+        t.app.on_event(Event::FocusLost);
+        t.app.pump_notifications();
+        t.app.pump_notifications();
+        assert_eq!(seen.borrow().len(), 1);
+        assert_eq!(seen.borrow()[0].id.as_str(), "a");
     }
 }
