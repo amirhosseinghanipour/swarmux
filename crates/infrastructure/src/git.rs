@@ -7,6 +7,8 @@ use std::process::{Command, Stdio};
 use swarmux_application::ports::Workspace;
 use swarmux_application::{AppError, AppResult};
 
+use crate::process::hide_std;
+
 /// Largest diff handed to a prompt, in bytes.
 pub const DIFF_CAP: usize = 64 * 1024;
 
@@ -26,15 +28,15 @@ impl Default for GitCli {
     }
 }
 
-/// A `git -C cwd` invocation: no shell, no console window, no stdin.
+/// A `git -C cwd` invocation: no shell, no console window, no stdin, and
+/// paths past 260 characters allowed.
 pub(crate) fn git_command(bin: &Path, cwd: &Path) -> Command {
     let mut cmd = Command::new(bin);
-    cmd.arg("-C").arg(cwd).stdin(Stdio::null());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-    }
+    cmd.arg("-C")
+        .arg(cwd)
+        .args(["-c", "core.longpaths=true"])
+        .stdin(Stdio::null());
+    hide_std(&mut cmd);
     cmd
 }
 

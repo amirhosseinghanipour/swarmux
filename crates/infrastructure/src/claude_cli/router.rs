@@ -2,7 +2,7 @@
 //! tools, no session file and none of the user's settings.
 
 use std::path::PathBuf;
-use std::process::Stdio;
+use std::process::{ExitStatus, Stdio};
 use std::time::Duration;
 
 use serde_json::{Value, json};
@@ -10,6 +10,9 @@ use swarmux_application::ports::{PromptRouter, RouteAnswer, RouteReply, RouteReq
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 use tokio::runtime::Handle;
+
+use super::contention::{self, is_config_contention};
+use crate::process::{Stagger, random_below, spawn_tokio};
 
 const SYSTEM: &str =
     "You route prompts to coding sessions. Answer with one JSON object and nothing else.";
@@ -59,8 +62,6 @@ impl PromptRouter for HaikuRouter {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
-        #[cfg(windows)]
-        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
         let timeout = self.timeout;
         let bin = self.bin.display().to_string();
         self.rt.spawn(async move {
@@ -76,8 +77,39 @@ impl PromptRouter for HaikuRouter {
 }
 
 /// Runs `claude` with `prompt` on stdin; its stdout, or why it failed.
+/// Starts are spaced apart and repeated when another session held Claude
+/// Code's config; dropping the future kills the process tree.
 pub(crate) async fn run(mut cmd: Command, prompt: String, bin: String) -> Result<String, String> {
-    let mut child = cmd.spawn().map_err(|e| format!("cannot run {bin}: {e}"))?;
+    let stagger = Stagger::shared();
+    let mut retries = 0;
+    loop {
+        stagger.wait().await;
+        let (stdout, status, stderr) = once(&mut cmd, &prompt, &bin).await?;
+        let collided = !status.success() && stdout.is_empty() && is_config_contention(&stderr);
+        if collided && retries < contention::RETRIES {
+            let spread = random_below(Duration::from_millis(250));
+            tokio::time::sleep(contention::backoff(retries, spread)).await;
+            retries += 1;
+            continue;
+        }
+        if !status.success() && !stdout.trim_start().starts_with('{') {
+            let code = status.code().map_or("?".into(), |c| c.to_string());
+            let detail = stderr.lines().next().unwrap_or_default();
+            return Err(format!("claude exited with code {code} {detail}")
+                .trim()
+                .to_string());
+        }
+        return Ok(stdout);
+    }
+}
+
+/// One start: stdout, exit status and stderr.
+async fn once(
+    cmd: &mut Command,
+    prompt: &str,
+    bin: &str,
+) -> Result<(String, ExitStatus, String), String> {
+    let (mut child, _tree) = spawn_tokio(cmd).map_err(|e| format!("cannot run {bin}: {e}"))?;
     if let Some(mut stdin) = child.stdin.take() {
         let _ = stdin.write_all(prompt.as_bytes()).await;
     }
@@ -90,14 +122,7 @@ pub(crate) async fn run(mut cmd: Command, prompt: String, bin: String) -> Result
         let _ = err.read_to_string(&mut stderr).await;
     }
     let status = child.wait().await.map_err(|e| e.to_string())?;
-    if !status.success() && !stdout.trim_start().starts_with('{') {
-        let code = status.code().map_or("?".into(), |c| c.to_string());
-        let detail = stderr.lines().next().unwrap_or_default();
-        return Err(format!("claude exited with code {code} {detail}")
-            .trim()
-            .to_string());
-    }
-    Ok(stdout)
+    Ok((stdout, status, stderr))
 }
 
 fn failed(why: String) -> RouteReply {

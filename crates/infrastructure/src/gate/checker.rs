@@ -3,18 +3,20 @@
 //! The program is started directly with its arguments, never through a
 //! shell, with no console window on Windows. Its output is kept within
 //! [`OUTPUT_MAX`] bytes (the start and the end), and at its timeout the
-//! whole process tree is killed.
+//! whole process tree is killed (a Job Object on Windows).
 
 use std::ffi::OsString;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::mpsc::channel;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use swarmux_application::Checker;
 use swarmux_domain::gate::{CheckRun, GateCheck};
+
+use crate::process::spawn_std;
 
 /// Output kept per run, in bytes.
 pub const OUTPUT_MAX: usize = 64 * 1024;
@@ -101,18 +103,8 @@ impl Checker for ProcessChecker {
             .stderr(Stdio::piped())
             .env("NO_COLOR", "1")
             .env("CARGO_TERM_COLOR", "never");
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-        }
-        #[cfg(unix)]
-        {
-            use std::os::unix::process::CommandExt;
-            cmd.process_group(0);
-        }
-        let mut child = match cmd.spawn() {
-            Ok(c) => c,
+        let (mut child, tree) = match spawn_std(&mut cmd) {
+            Ok(started) => started,
             Err(e) => {
                 run.spawn_error = Some(e.to_string());
                 return run;
@@ -156,12 +148,12 @@ impl Checker for ProcessChecker {
                 Ok(Some(status)) => break Some(status),
                 Ok(None) if Instant::now() >= deadline => {
                     run.timed_out = true;
-                    kill_tree(&mut child);
+                    tree.kill();
                     break child.wait().ok();
                 }
                 Ok(None) => std::thread::sleep(POLL),
                 Err(_) => {
-                    kill_tree(&mut child);
+                    tree.kill();
                     break child.wait().ok();
                 }
             }
@@ -210,35 +202,6 @@ fn resolve(program: &str, root: &Path) -> Option<PathBuf> {
             candidate.is_file().then_some(candidate)
         })
     })
-}
-
-/// Kills the check and everything it started.
-fn kill_tree(child: &mut Child) {
-    let pid = child.id().to_string();
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        let _ = Command::new("taskkill")
-            .args(["/T", "/F", "/PID", &pid])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .creation_flags(0x0800_0000)
-            .status();
-    }
-    #[cfg(unix)]
-    {
-        // The check leads its own process group.
-        let _ = Command::new("kill")
-            .args(["-KILL", &format!("-{pid}")])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-    }
-    #[cfg(not(any(windows, unix)))]
-    let _ = pid;
-    let _ = child.kill();
 }
 
 #[cfg(test)]

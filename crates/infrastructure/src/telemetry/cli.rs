@@ -1,9 +1,12 @@
-//! Runs a CLI (git, gh) with a time limit: no shell, no console window.
+//! Runs a CLI (git, gh) with a time limit: no shell, no console window. At
+//! the limit the process tree is killed.
 
 use std::io::{ErrorKind, Read};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
+
+use crate::process::spawn_std;
 
 /// Why a command gave no output.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -46,12 +49,7 @@ pub fn run(
     if let Some(cwd) = cwd {
         cmd.current_dir(cwd);
     }
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-    }
-    let mut child = cmd.spawn().map_err(|e| match e.kind() {
+    let (mut child, tree) = spawn_std(&mut cmd).map_err(|e| match e.kind() {
         ErrorKind::NotFound => CliError::NotFound,
         _ => CliError::Io(e.to_string()),
     })?;
@@ -64,7 +62,7 @@ pub fn run(
             Ok(Some(status)) => break status,
             Ok(None) if started.elapsed() >= limit => {
                 // Already gone is fine too.
-                let _ = child.kill();
+                tree.kill();
                 let _ = child.wait();
                 return Err(CliError::TimedOut);
             }

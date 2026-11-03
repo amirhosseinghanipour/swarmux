@@ -1,9 +1,14 @@
 //! `AgentRunner` adapter: runs each job as a `claude -p` child process.
+//!
+//! Starts are spaced apart, a start that fails because another session was
+//! writing Claude Code's config is repeated, and cancelling a job kills the
+//! whole process tree.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::Duration;
 
 use swarmux_application::ports::{AgentRunner, RunRequest, RunSink, RunnerMsg};
 use swarmux_domain::JobId;
@@ -13,8 +18,10 @@ use tokio::runtime::Handle;
 use tokio::task::AbortHandle;
 
 use super::command::{build_args, display, user_message};
+use super::contention::{self, is_config_contention};
 use super::parse::parse_line;
 use crate::hook::{ENV_JOB, ENV_PIPE, hook_settings};
+use crate::process::{Stagger, random_below, spawn_tokio};
 
 /// Makes `claude` report `system/session_state_changed` on stdout.
 const ENV_SESSION_STATE: &str = "CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS";
@@ -22,7 +29,7 @@ const ENV_SESSION_STATE: &str = "CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS";
 /// How much of the end of stderr is kept for error messages.
 const STDERR_TAIL: usize = 2048;
 
-/// Running jobs; aborting a job's task drops its child, which kills it.
+/// Running jobs; aborting a job's task drops its process tree, which kills it.
 type Running = Arc<Mutex<HashMap<JobId, AbortHandle>>>;
 
 pub struct ClaudeCli {
@@ -31,6 +38,7 @@ pub struct ClaudeCli {
     guard: Option<GuardHook>,
     rt: Handle,
     running: Running,
+    stagger: Arc<Stagger>,
 }
 
 /// The guard's PreToolUse hook, added to every job.
@@ -67,6 +75,7 @@ impl ClaudeCli {
             guard: None,
             rt,
             running: Running::default(),
+            stagger: Stagger::shared(),
         }
     }
 
@@ -78,6 +87,12 @@ impl ClaudeCli {
     /// Routes every job's tool calls through the guard's hook.
     pub fn with_guard(mut self, guard: GuardHook) -> ClaudeCli {
         self.guard = Some(guard);
+        self
+    }
+
+    /// Spaces this runner's starts with `stagger` instead of the shared one.
+    pub fn with_stagger(mut self, stagger: Arc<Stagger>) -> ClaudeCli {
+        self.stagger = stagger;
         self
     }
 
@@ -102,11 +117,12 @@ impl AgentRunner for ClaudeCli {
             env.push((ENV_JOB.into(), job.to_string()));
         }
         let running = self.running.clone();
+        let stagger = self.stagger.clone();
         // Held until the handle is stored, so a job that ends at once still
         // finds (and removes) its own entry.
         let mut map = lock(&self.running);
         let task = self.rt.spawn(async move {
-            run(bin, env, extra_args, request, sink).await;
+            run(bin, env, extra_args, request, sink, stagger).await;
             lock(&running).remove(&job);
         });
         map.insert(job, task.abort_handle());
@@ -127,12 +143,24 @@ impl AgentRunner for ClaudeCli {
     }
 }
 
+/// How one start of `claude` ended.
+enum Attempt {
+    SpawnFailed(String),
+    Exited {
+        code: Option<i32>,
+        stderr_tail: String,
+        /// Whether anything at all came out on stdout.
+        produced: bool,
+    },
+}
+
 async fn run(
     bin: PathBuf,
     env: Vec<(String, String)>,
     extra_args: Vec<String>,
     req: RunRequest,
-    sink: RunSink,
+    mut sink: RunSink,
+    stagger: Arc<Stagger>,
 ) {
     let mut cmd = Command::new(&bin);
     cmd.args(build_args(&req))
@@ -144,15 +172,36 @@ async fn run(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    #[cfg(windows)]
-    cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW: no console flash per job
 
-    let mut child = match cmd.spawn() {
-        Ok(child) => child,
-        Err(e) => {
-            sink(RunnerMsg::SpawnFailed(format!("{}: {e}", bin.display())));
-            return;
+    let mut retries = 0;
+    loop {
+        stagger.wait().await;
+        match attempt(&mut cmd, &bin, &req, &mut sink).await {
+            Attempt::SpawnFailed(why) => return sink(RunnerMsg::SpawnFailed(why)),
+            Attempt::Exited {
+                code,
+                stderr_tail,
+                produced,
+            } => {
+                let collided = code != Some(0) && !produced && is_config_contention(&stderr_tail);
+                if collided && retries < contention::RETRIES {
+                    let spread = random_below(Duration::from_millis(250));
+                    tokio::time::sleep(contention::backoff(retries, spread)).await;
+                    retries += 1;
+                    continue;
+                }
+                return sink(RunnerMsg::Exited { code, stderr_tail });
+            }
         }
+    }
+}
+
+/// Starts `claude` once and follows it to its end. The process tree dies
+/// with this future, so aborting the job's task kills every descendant.
+async fn attempt(cmd: &mut Command, bin: &Path, req: &RunRequest, sink: &mut RunSink) -> Attempt {
+    let (mut child, _tree) = match spawn_tokio(cmd) {
+        Ok(started) => started,
+        Err(e) => return Attempt::SpawnFailed(format!("{}: {e}", bin.display())),
     };
 
     if let Some(mut stdin) = child.stdin.take() {
@@ -178,6 +227,7 @@ async fn run(
         })
     });
 
+    let mut produced = false;
     if let Some(stdout) = child.stdout.take() {
         let mut reader = BufReader::new(stdout);
         let mut line = Vec::new();
@@ -186,6 +236,7 @@ async fn run(
             match reader.read_until(b'\n', &mut line).await {
                 Ok(0) | Err(_) => break,
                 Ok(_) => {
+                    produced = true;
                     for ev in parse_line(&String::from_utf8_lossy(&line)) {
                         sink(RunnerMsg::Event(ev));
                     }
@@ -199,7 +250,11 @@ async fn run(
         Some(t) => t.await.unwrap_or_default(),
         None => String::new(),
     };
-    sink(RunnerMsg::Exited { code, stderr_tail });
+    Attempt::Exited {
+        code,
+        stderr_tail,
+        produced,
+    }
 }
 
 fn last_bytes(s: &str, max: usize) -> String {

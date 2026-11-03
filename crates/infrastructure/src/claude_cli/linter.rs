@@ -76,8 +76,6 @@ impl MissionLinter for HaikuLinter {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
-        #[cfg(windows)]
-        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
         let timeout = self.timeout;
         let bin = self.bin.display().to_string();
         self.rt.spawn(async move {

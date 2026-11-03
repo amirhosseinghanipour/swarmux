@@ -10,6 +10,7 @@ use swarmux_application::{GuardSettings, Settings, SharedPolicy};
 use swarmux_domain::HookEvent;
 use swarmux_infrastructure::hook::{self, ENV_JOB, ENV_PIPE, HookServer};
 use swarmux_infrastructure::jev::keys;
+use swarmux_infrastructure::process::hide_std;
 use swarmux_infrastructure::{
     Endpoint, Paths, SqliteLedger, SqliteStore, SysinfoMonitor, SystemClock, load_settings,
 };
@@ -237,6 +238,7 @@ fn run_hook_event(
     if let Some(pipe) = pipe {
         cmd.env(ENV_PIPE, pipe);
     }
+    hide_std(&mut cmd);
     let start = Instant::now();
     let mut child = cmd.spawn().ok()?;
     child.stdin.take()?.write_all(input.as_bytes()).ok()?;
@@ -251,7 +253,10 @@ fn run_hook_event(
 }
 
 fn claude_version(bin: &Path) -> Option<String> {
-    let output = Command::new(bin).arg("--version").output().ok()?;
+    let mut cmd = Command::new(bin);
+    cmd.arg("--version");
+    hide_std(&mut cmd);
+    let output = cmd.output().ok()?;
     output
         .status
         .success()
