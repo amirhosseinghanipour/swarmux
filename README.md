@@ -28,7 +28,11 @@ review live in one terminal.
   may not touch and the budget; swarmux lints it (at most three questions),
   runs it as a job under its own gate and calls it delivered only when the
   gate passes
-- **History**: every prompt with cost, outcome and review; re-run or fork from any point
+- **Ledger screen**: every run as a card with its outcome, evidence, cost,
+  model mix and what became of it (merged, reverted); a digest of what
+  happened while you were away; re-run, fork, search or verify from any card
+- **Evidence bundles**: every delivered mission leaves a JSON receipt that
+  `swarmux verify` re-checks at the head commit in a clean checkout
 - **Lean mode** per session: skip your user-level Claude Code settings
 - **Audit ledger**: a tamper-evident, hash-chained record of every job,
   agent event, review and guard decision
@@ -189,10 +193,68 @@ phase (plan 10%, implement 60%, verify 20%, review 10%) and the topology
 | `Enter` | open its job in Focus |
 | `Esc` | close the composer |
 
+## Ledger (screen 5) and evidence bundles
+
+A mission is delivered only with a bundle. When the gate passes, swarmux
+seals `.swarmux/evidence/<mission>.json` (and keeps the same JSON in its
+database): the contract, the commit the work ended at (`head_sha`, with the
+branch point `base_sha`), the diff's size and hash, the checks the passing
+verdict ran (command, exit code, time, the first failing line on a failure),
+every gate verdict with the digest of its ledger entry, the checkpoints, the
+reviewer's verdict, the cost by phase and by model, and the stretch of the
+ledger that tells the story with the hash it ended at. The bundle's digest is
+the SHA-256 of its JSON without the signature, and the sealing is itself an
+entry in the audit ledger. The signature is only that hash for now: it shows
+a bundle was edited, it does not say who wrote it. A mission that cannot be
+sealed (no passing verdict on the ledger, no git repository) is escalated
+instead of delivered, and missions delivered before bundles existed get one
+the next time swarmux starts.
+
+```sh
+swarmux verify fast-search          # by mission
+swarmux verify .swarmux/evidence/fast-search.json
+```
+
+`verify` checks the signature, the stored copy, the sealing entry and the
+whole ledger chain, then makes a temporary clean checkout of `head_sha`
+(`git worktree add --detach`, removed afterwards), runs each check there and
+compares: a check that passed must pass again, one that failed must fail with
+the same exit code. It prints `match` or `mismatch` and exits 1 on a
+mismatch. Work that was still uncommitted when the bundle was sealed cannot
+be reproduced and is reported as a mismatch; jobs in their own worktree
+(the default inside a git repository) are committed at each gate pass, so
+they are covered.
+
+The ledger screen shows a card per run (outcome, title, cost; then time,
+checks passed and the bundle's digest, the models paid, the label). The
+strip on top gives pass^3 (the chance of three delivered missions in a row
+at the current rate), delivered over ended, dollars per verified outcome,
+gate blocks and hand-offs per mission, and a 28-day activity strip; under it
+the digest of what happened while you were away (since the previous run
+ended, when that was over 30 minutes ago), else the last 24 hours.
+Outcome labels come from `gh`: a pull request found for the branch is `pr
+open`, `merged` or `closed`, and a merge that a merged revert pull request
+undid within seven days is `reverted`; each new label is appended to the
+ledger.
+
+| Key | Does |
+| --- | --- |
+| `/` | search titles, outcomes, labels and prompts |
+| `o` | filter: all, delivered, needs you, labelled |
+| `v` | verify the selected bundle in the background |
+| `l` | ask GitHub what became of the delivered branches |
+| `r` / `f` | re-run / fork the job |
+| `Enter` | open it in Focus |
+
+```sh
+swarmux brief --hours 12   # what happened lately, as text
+swarmux labels             # sync the outcome labels now
+```
+
 ## Focus (`0`)
 
 Focus is one agent in detail: the job you last sent, or the one you open
-with `Enter` from Mission control, Missions, the queue or history (`0` goes
+with `Enter` from Mission control, Missions, the queue or the ledger (`0` goes
 back to it). It opens with the same sigil and colour the card had. From top
 to bottom:
 
@@ -314,7 +376,7 @@ project,local --strict-mcp-config`. It gets the prompt, the job's answer
 and the `git diff` (uncommitted changes in tracked files, capped at 48 KB)
 and must answer `{"verdict": "pass" | "concerns", "concerns": [...],
 "diffs_checked": n}`. The verdict and its cost are stored with the job and
-shown on the Dashboard and in History. A review that fails or answers
+shown on the Dashboard and in the Ledger. A review that fails or answers
 something else shows as `review failed: …`; it never changes the job's own
 result.
 

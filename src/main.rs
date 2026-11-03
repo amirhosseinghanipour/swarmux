@@ -2,6 +2,7 @@
 
 mod audit;
 mod doctor;
+mod evidence;
 mod gate;
 mod jev;
 mod telemetry;
@@ -62,6 +63,22 @@ enum Command {
         #[command(subcommand)]
         action: GateAction,
     },
+    /// Run the checks of a delivered mission's evidence bundle again, at its
+    /// head commit in a clean checkout, and say whether they still hold.
+    Verify {
+        /// The mission's slug, or the path of a bundle file.
+        target: String,
+    },
+    /// What happened lately: missions delivered, escalated, merged, and what
+    /// it cost.
+    Brief {
+        /// How many hours back to look.
+        #[arg(long, default_value_t = evidence::BRIEF_HOURS)]
+        hours: i64,
+    },
+    /// Ask GitHub what became of each delivered branch (merged, reverted
+    /// within seven days) and record it.
+    Labels,
     /// Per-job git worktrees, their port blocks and checkpoints.
     Worktree {
         #[command(subcommand)]
@@ -167,6 +184,15 @@ fn main() -> anyhow::Result<ExitCode> {
         Some(Command::Audit {
             action: AuditAction::Tail { n },
         }) => audit::tail_cmd(n),
+        Some(Command::Verify { target }) => {
+            return Ok(if evidence::verify(&target)? {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            });
+        }
+        Some(Command::Brief { hours }) => evidence::print_brief(hours),
+        Some(Command::Labels) => evidence::labels(),
         Some(Command::Gate {
             action: GateAction::Run { dir },
         }) => {
@@ -231,6 +257,8 @@ fn run_tui(no_splash: bool) -> anyhow::Result<()> {
         Rc::new(SqliteLedger::open(&paths.db)?),
         clock.clone(),
     ));
+    // When the user was last here: the newest entry before this run adds any.
+    let away_since = ledger.ledger().head()?.map(|e| e.draft.ts);
     let jobs_log = Rc::new(LedgeredJobs::new(store.clone(), ledger.clone()));
     let decisions = Rc::new(LedgeredDecisions::new(store.clone(), ledger.clone()));
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -287,10 +315,17 @@ fn run_tui(no_splash: bool) -> anyhow::Result<()> {
     // (`--bare` only works with an API key), judged by the gate.
     let linter = HaikuLinter::new(doctor::claude_bin(), rt.handle().clone())
         .with_bare(std::env::var_os("ANTHROPIC_API_KEY").is_some());
+    let evidence = evidence::service(
+        store.clone(),
+        ledger.clone(),
+        clock.clone(),
+        Some(checkpoints.clone()),
+    );
     let missions = MissionService::new(Rc::new(MissionFiles::new(store.clone())), clock.clone())?
         .with_linter(Rc::new(linter))
         .with_gates(Rc::new(keeper.clone()))
-        .with_ledger(ledger.clone());
+        .with_ledger(ledger.clone())
+        .with_evidence(evidence.clone());
     let hook_bus = HookBus::new(server.clone(), ledger, store.clone(), clock.clone())
         .with_checkpoints(checkpoints.clone())
         .with_truth(truth.clone());
@@ -348,6 +383,7 @@ fn run_tui(no_splash: bool) -> anyhow::Result<()> {
     .with_hook_bus(hook_bus)
     .with_gate(gate)
     .with_missions(missions)
+    .with_evidence(evidence, away_since)
     .with_checkpoints(checkpoints)
     .with_terminal(Rc::new(WindowsTerminal::new(doctor::claude_bin())))
     .with_telemetry_feed(telemetry, &settings.telemetry)

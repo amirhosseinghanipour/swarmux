@@ -2199,6 +2199,7 @@ dependencies = [
  "swarmux-domain",
  "swarmux-infrastructure",
  "swarmux-tui",
+ "tempfile",
  "tokio",
 ]
 
