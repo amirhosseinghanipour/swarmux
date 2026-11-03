@@ -8,6 +8,7 @@ mod holdout;
 mod jev;
 mod stats;
 mod telemetry;
+mod theme;
 mod worktree;
 
 use std::path::PathBuf;
@@ -26,9 +27,9 @@ use swarmux_application::{
 };
 use swarmux_infrastructure::hook::{self, HookServer, Responders};
 use swarmux_infrastructure::{
-    ClaudeCli, ConfigRuleWriter, FsAgentCatalog, FsGateSource, GitCli, GuardHook, HaikuLinter,
-    HaikuRouter, MissionFiles, Paths, SqliteLedger, SqliteStore, SysinfoMonitor, SystemClock,
-    WindowsTerminal, build_notifier, load_settings, utc_offset_minutes,
+    ClaudeCli, ConfigRuleWriter, FilePalette, FsAgentCatalog, FsGateSource, GitCli, GuardHook,
+    HaikuLinter, HaikuRouter, MissionFiles, Paths, SqliteLedger, SqliteStore, SysinfoMonitor,
+    SystemClock, WindowsTerminal, build_notifier, load_settings, utc_offset_minutes,
 };
 use swarmux_tui::{App, Launch};
 
@@ -54,6 +55,11 @@ enum Command {
     Jev {
         #[command(subcommand)]
         action: JevAction,
+    },
+    /// Themes: list them, or export one for another tool.
+    Theme {
+        #[command(subcommand)]
+        action: ThemeAction,
     },
     /// The tamper-evident ledger of everything swarmux observed or decided.
     Audit {
@@ -218,6 +224,22 @@ enum WorktreeAction {
 }
 
 #[derive(Subcommand)]
+enum ThemeAction {
+    /// The built-in themes and your own.
+    List,
+    /// Print a theme (default: the one in your config) as TOML for the
+    /// config, as a base16 scheme, or as a kitty, alacritty or wezterm palette.
+    Export {
+        /// A built-in theme, one from `[themes]`, `wal`, `base16:<file>` or
+        /// `matugen:<file>`.
+        name: Option<String>,
+        /// toml, base16, kitty, alacritty or wezterm.
+        #[arg(long, short, default_value = "toml")]
+        format: String,
+    },
+}
+
+#[derive(Subcommand)]
 enum AuditAction {
     /// Check the whole hash chain; exits with 1 if it is broken.
     Verify,
@@ -287,6 +309,10 @@ fn main() -> anyhow::Result<ExitCode> {
         },
         None => run_tui(cli.no_splash),
         Some(Command::Doctor) => doctor::run(),
+        Some(Command::Theme { action }) => match action {
+            ThemeAction::List => theme::list(),
+            ThemeAction::Export { name, format } => theme::export_cmd(name.as_deref(), &format),
+        },
         Some(Command::Jev {
             action: JevAction::SetKey { provider },
         }) => jev::set_key(&provider),
@@ -473,8 +499,13 @@ fn run_tui(no_splash: bool) -> anyhow::Result<()> {
         settings.notify.clone(),
         utc_offset_minutes,
     ))
-    .with_telemetry_feed(telemetry, &settings.telemetry)
-    .with_look(
+    .with_telemetry_feed(telemetry, &settings.telemetry);
+    // `theme = "wal"` and friends: a file the theme is read from and watched.
+    let app = match FilePalette::from_spec(&settings.ui.theme, &paths.home) {
+        Some(palette) => app.with_palette_source(Box::new(palette)),
+        None => app,
+    };
+    let app = app.with_look(
         &settings.ui,
         Launch {
             claude: doctor::claude_bin().display().to_string(),
