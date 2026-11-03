@@ -3,10 +3,11 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use swarmux_application::{
-    AttentionService, Change, GateService, GateState, GuardService, JobFact, JobService,
-    TelemetryService, TelemetrySettings, TelemetrySnapshot,
+    AlarmStore, AttentionService, Change, GateService, GateState, GuardService, JobFact,
+    JobService, TelemetryService, TelemetrySettings, TelemetrySnapshot,
 };
 use swarmux_domain::gate::GateOutcome;
 use swarmux_domain::telemetry::UsageReport;
@@ -117,6 +118,28 @@ impl Default for MissionState {
 }
 
 impl MissionState {
+    /// Keeps the inbox's memory (shelved items, tallies, the alarm log) in
+    /// `store`.
+    pub fn with_alarms(mut self, store: Rc<dyn AlarmStore>, now: Millis) -> MissionState {
+        self.attention = std::mem::take(&mut self.attention).with_store(store, now);
+        self
+    }
+
+    pub fn alarms(&self) -> &AttentionService {
+        &self.attention
+    }
+
+    pub fn alarms_mut(&mut self) -> &mut AttentionService {
+        &mut self.attention
+    }
+
+    /// Notes that the user has now looked at the selected item.
+    pub fn attend_selected(&mut self, now: Millis) {
+        if let Some(item) = self.selected_item().cloned() {
+            self.attention.attend(&item, now);
+        }
+    }
+
     pub fn with_feed(mut self, feed: TelemetryService, cadence: Cadence) -> MissionState {
         self.feed = Some(feed);
         self.cadence = cadence;

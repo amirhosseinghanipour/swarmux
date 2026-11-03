@@ -15,12 +15,14 @@ use swarmux_application::{
     QueueEntry, QueueStats, RoutingService, SessionService, SessionTerminal, TelemetryService,
     TelemetrySettings, UiSettings,
 };
+use swarmux_domain::alarm::{Breakpoint, LoadMeter};
 use swarmux_domain::evidence::{brief, heat_strip};
 use swarmux_domain::mission::Contract;
 use swarmux_domain::{AttentionKind, JobId, JobProgress, Millis, PromptId, Session, SessionId};
 
 use crate::dashboard::DashboardState;
 use crate::focus::{Checkpoints, FocusState};
+use crate::inbox::Confirm;
 use crate::ledger::{HEAT_DAYS, LedgerAction, LedgerScreen};
 use crate::mission::{Cadence, MissionState, Pane, Tile, wall_tiles};
 use crate::missions::{Composer, ComposerAction, MissionsScreen};
@@ -110,6 +112,10 @@ pub enum InputPurpose {
 pub enum Mode {
     Normal,
     Input(InputPurpose, Input),
+    /// An irreversible call waits for its target to be named.
+    Confirm(Confirm),
+    /// `s`: how long to shelve the selected item.
+    Shelve,
 }
 
 pub struct App {
@@ -177,6 +183,12 @@ pub struct App {
     checkpoints: Option<Rc<CheckpointService>>,
     /// What was last read for the job Focus shows, and when.
     focus_checkpoints: Option<(JobId, Millis, Checkpoints)>,
+    /// How much of their time the user spends in the inbox.
+    pub(crate) load: LoadMeter,
+    /// When a key was last pressed.
+    pub(crate) last_input: Millis,
+    /// The idle breakpoint has been noted since the last key.
+    pub(crate) idle_noted: bool,
 }
 
 /// The user counts as away after this long without opening swarmux.
@@ -260,6 +272,9 @@ impl App {
             terminal: None,
             checkpoints: None,
             focus_checkpoints: None,
+            load: LoadMeter::default(),
+            last_input: 0,
+            idle_noted: false,
             focus: None,
             toast: None,
             splash: SplashInfo::default(),
@@ -427,6 +442,16 @@ impl App {
         self
     }
 
+    /// Keeps the inbox's memory (shelved items, how asks were answered, the
+    /// alarm log) in `store`.
+    pub fn with_alarms(mut self, store: Rc<dyn swarmux_application::AlarmStore>) -> App {
+        let now = self.now();
+        let mission = std::mem::take(&mut self.mission);
+        self.mission = mission.with_alarms(store, now);
+        self.refresh_mission();
+        self
+    }
+
     /// Now, in milliseconds since the epoch.
     pub fn now(&self) -> Millis {
         self.clock.as_ref().map_or(0, |c| c.now())
@@ -448,7 +473,7 @@ impl App {
         approvals.into_iter().next()
     }
 
-    fn refresh_mission(&mut self) {
+    pub(crate) fn refresh_mission(&mut self) {
         let now = self.now();
         let cwd = self.selected_session().map(|s| s.cwd.clone());
         let hook_changes = self
@@ -528,6 +553,7 @@ impl App {
             self.refresh_ledger();
         }
         self.refresh_mission();
+        self.tick_inbox();
         if let Some(e) = self.pump_missions().into_iter().last() {
             self.error = Some(e.to_string());
         }
@@ -617,6 +643,18 @@ impl App {
             self.look.splash_until = None;
             return;
         }
+        self.last_input = self.now();
+        self.idle_noted = false;
+        if matches!(self.mode, Mode::Confirm(_)) {
+            let result = self.confirm_key(key);
+            self.show(result);
+            return;
+        }
+        if self.mode == Mode::Shelve {
+            let result = self.shelve_key(key);
+            self.show(result);
+            return;
+        }
         if let Mode::Input(purpose, input) = &mut self.mode {
             let purpose = *purpose;
             match input.handle(key) {
@@ -691,7 +729,11 @@ impl App {
         match key.code {
             KeyCode::Char('q') => self.quit = true,
             KeyCode::Char(c) if Screen::by_key(c).is_some() => {
+                let left_focus = self.on_focus();
                 self.screen = Screen::by_key(c).unwrap_or_default();
+                if left_focus && !self.on_focus() {
+                    self.note_breakpoint(Breakpoint::FocusClosed);
+                }
                 if self.screen == Screen::Ledger {
                     self.refresh_ledger();
                 }
@@ -726,16 +768,41 @@ impl App {
             }
             KeyCode::Up | KeyCode::Char('k') if self.screen == Screen::Mission => {
                 self.mission.move_selection(-1);
+                let now = self.now();
+                self.mission.attend_selected(now);
             }
             KeyCode::Down | KeyCode::Char('j') if self.screen == Screen::Mission => {
                 self.mission.move_selection(1);
+                let now = self.now();
+                self.mission.attend_selected(now);
             }
             KeyCode::Char('x') if self.screen == Screen::Mission => {
+                let now = self.now();
+                self.mission.attend_selected(now);
                 if !self.mission.acknowledge_selected() {
                     self.notice = Some("held tool calls stay until you answer them".into());
                 }
             }
+            KeyCode::Char('A') if self.screen == Screen::Mission => {
+                let result = self.answer_batch();
+                self.show(result);
+            }
+            KeyCode::Char('s') if self.screen == Screen::Mission => self.begin_shelve(),
+            KeyCode::Char('u') if self.screen == Screen::Mission => self.unshelve(),
+            KeyCode::Char(c @ ('r' | 'R'))
+                if self.screen == Screen::Mission
+                    && self
+                        .mission
+                        .selected_item()
+                        .is_some_and(|i| i.suggest.is_some()) =>
+            {
+                let result = self.settle_rule(c == 'r');
+                self.show(result);
+            }
+            KeyCode::Char('F') => self.toggle_focus_mode(),
             KeyCode::Enter if self.screen == Screen::Mission => {
+                let now = self.now();
+                self.mission.attend_selected(now);
                 let result = self.open_selected();
                 self.show(result);
             }
@@ -1076,6 +1143,7 @@ impl App {
         let last = self.sessions.len().saturating_sub(1);
         self.mission.wall_at = self.mission.wall_at.saturating_add_signed(delta).min(last);
         self.select_inbox_session();
+        self.note_breakpoint(Breakpoint::TileSwitched);
     }
 
     /// The session of the job Focus shows.
@@ -1110,6 +1178,7 @@ impl App {
     /// `d`: the uncommitted changes in place of the answer, and back.
     fn toggle_diff(&mut self) -> AppResult<()> {
         if self.focus_state.diff.take().is_some() {
+            self.note_breakpoint(Breakpoint::DiffReviewed);
             return Ok(());
         }
         let Some(cwd) = self.focus_session().map(|s| s.cwd.clone()) else {
@@ -1175,9 +1244,30 @@ impl App {
             return Ok(());
         };
         let id = target.request.request_id;
-        if let Some(job) = target.request.job_id {
-            self.focus_state.note_human(job, self.now());
+        let now = self.now();
+        if let Some(item) = self.mission.alarms().find_request(id).cloned() {
+            self.mission.alarms_mut().attend(&item, now);
         }
+        if App::is_irreversible(&target) {
+            // Irreversible calls are confirmed by naming their target, and
+            // are never allowed for good.
+            match key {
+                'y' => self.begin_confirm(&target),
+                'a' => {
+                    self.notice =
+                        Some("irreversible calls are never always-allowed: y to confirm".into());
+                }
+                _ => {
+                    self.guard.deny(id)?;
+                    self.mission.alarms_mut().answered_request(id, false);
+                }
+            }
+            return Ok(());
+        }
+        if let Some(job) = target.request.job_id {
+            self.focus_state.note_human(job, now);
+        }
+        self.mission.alarms_mut().answered_request(id, key != 'n');
         match key {
             'y' => self.guard.approve(id),
             'n' => self.guard.deny(id),
@@ -1487,6 +1577,7 @@ impl App {
         self.focus_state.note_human(job, self.now());
         self.dashboard.follow(job, None);
         self.refresh_sessions(Some(&session));
+        self.note_breakpoint(Breakpoint::PromptSent);
         Ok(())
     }
 

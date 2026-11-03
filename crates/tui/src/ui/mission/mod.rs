@@ -11,6 +11,8 @@ mod strip;
 mod wall;
 
 #[cfg(test)]
+mod alarm_tests;
+#[cfg(test)]
 pub(crate) mod tests;
 
 use ratatui::{

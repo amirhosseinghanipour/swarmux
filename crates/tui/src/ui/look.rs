@@ -75,6 +75,10 @@ pub enum Icon {
     Checkpoint,
     Human,
     Here,
+    /// The inbox: focus mode holding items back, a flood, shelved items.
+    Hold,
+    Flood,
+    Shelf,
 }
 
 impl IconSet {
@@ -134,6 +138,9 @@ impl IconSet {
                 Checkpoint => "o",
                 Human => "^",
                 Here => ">",
+                Hold => "|",
+                Flood => "!",
+                Shelf => "=",
             },
             IconSet::Unicode => match icon {
                 Lead => "▸",
@@ -179,6 +186,9 @@ impl IconSet {
                 Checkpoint => "◇",
                 Human => "▲",
                 Here => "▶",
+                Hold => "‖",
+                Flood => "▲",
+                Shelf => "≡",
             },
             IconSet::Nerd => match icon {
                 Lead => "\u{f06a9}",      // md-robot
@@ -224,6 +234,9 @@ impl IconSet {
                 Checkpoint => "\u{f10c}", // fa-circle_o
                 Human => "\u{f007}",      // fa-user
                 Here => "\u{f0da}",       // fa-caret_right
+                Hold => "\u{f04c}",       // fa-pause
+                Flood => "\u{f071}",      // fa-warning
+                Shelf => "\u{f187}",      // fa-archive
             },
         }
     }

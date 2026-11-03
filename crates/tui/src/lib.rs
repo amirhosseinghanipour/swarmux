@@ -6,6 +6,7 @@
 mod app;
 mod dashboard;
 mod focus;
+mod inbox;
 mod ledger;
 mod mission;
 mod missions;

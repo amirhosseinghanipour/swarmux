@@ -161,7 +161,11 @@ pub fn render_approval_bar(frame: &mut Frame, area: Rect, app: &App) {
     };
     let job = r.job_id.map_or(String::new(), |id| format!(" · #{id}"));
     let tail = format!("{job} · {} s  ", first.secs_left);
-    let keys = format!("y n a{more}");
+    let keys = if App::is_irreversible(&first) {
+        format!("y n{more}")
+    } else {
+        format!("y n a{more}")
+    };
     let what = if r.subject.is_empty() {
         shorten(&r.input, 200)
     } else {
@@ -215,6 +219,45 @@ pub fn render_approval(frame: &mut Frame, area: Rect, app: &App) {
         0 => String::new(),
         n => format!("   (+{n} more waiting)"),
     };
+    let item = app.mission.alarms().find_request(r.request_id);
+    let irreversible = App::is_irreversible(&first);
+    let tag = item
+        .and_then(|i| i.risk)
+        .map(|k| {
+            format!(
+                "{} {} · score {:.2}",
+                k.reversibility.as_str(),
+                k.tier.as_str(),
+                k.score
+            )
+        })
+        .unwrap_or_default();
+    let batch = item.map_or(0, |i| i.batch);
+    let mut keys = vec![
+        Span::styled("y", Style::new().fg(t.ok).add_modifier(Modifier::BOLD)),
+        Span::raw(if irreversible {
+            " confirm (name the target) · "
+        } else {
+            " approve · "
+        }),
+        Span::styled("n", Style::new().fg(t.error).add_modifier(Modifier::BOLD)),
+        Span::raw(" deny"),
+    ];
+    if !irreversible {
+        keys.extend([
+            Span::raw(" · "),
+            Span::styled("a", Style::new().fg(t.ok).add_modifier(Modifier::BOLD)),
+            Span::raw(" always allow"),
+        ]);
+        if batch > 1 {
+            keys.extend([
+                Span::raw(" · "),
+                Span::styled("A", Style::new().fg(t.ok).add_modifier(Modifier::BOLD)),
+                Span::raw(format!(" all {batch}")),
+            ]);
+        }
+    }
+    keys.push(Span::styled(more, Style::new().fg(t.lead)));
     let lines = vec![
         Line::from(vec![
             Span::styled(
@@ -225,18 +268,10 @@ pub fn render_approval(frame: &mut Frame, area: Rect, app: &App) {
         ]),
         Line::styled(format!("{job} · in {}", r.cwd), Style::new().fg(t.muted)),
         Line::styled(
-            format!("denied in {} s unless you answer", first.secs_left),
+            format!("denied in {} s unless you answer · {tag}", first.secs_left),
             Style::new().fg(t.muted),
         ),
-        Line::from(vec![
-            Span::styled("y", Style::new().fg(t.ok).add_modifier(Modifier::BOLD)),
-            Span::raw(" approve · "),
-            Span::styled("n", Style::new().fg(t.error).add_modifier(Modifier::BOLD)),
-            Span::raw(" deny · "),
-            Span::styled("a", Style::new().fg(t.ok).add_modifier(Modifier::BOLD)),
-            Span::raw(" always allow"),
-            Span::styled(more, Style::new().fg(t.lead)),
-        ]),
+        Line::from(keys),
     ];
     let block = super::rounded(t)
         .border_style(Style::new().fg(t.lead))

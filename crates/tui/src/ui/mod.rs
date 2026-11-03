@@ -2,6 +2,7 @@
 //! editor's scroll offset and the animation state (tweens and pulses).
 
 pub mod anim;
+pub mod confirm;
 pub mod dashboard;
 pub mod editor;
 pub mod focus;
@@ -91,6 +92,14 @@ fn draw_screens(frame: &mut Frame, app: &App, t: &Theme) {
             ..body
         };
         guard::render_consent(frame, overlay, app);
+    } else if let Mode::Confirm(c) = &app.mode {
+        let h = confirm::HEIGHT.min(body.height);
+        let overlay = Rect {
+            y: body.y + body.height - h,
+            height: h,
+            ..body
+        };
+        confirm::render(frame, overlay, app, c);
     } else if app.guard.pending_count() > 0 {
         let compact = body.height < guard::COMPACT_BELOW;
         let h = if compact {
@@ -299,6 +308,22 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App, t: &Theme) {
                 Span::styled(keys, Style::new().fg(t.muted)),
             ])
         }
+        Mode::Confirm(_) => Line::from(Span::styled(
+            " irreversible: name the target to approve · esc keeps the call held",
+            Style::new().fg(t.error),
+        )),
+        Mode::Shelve => Line::from(vec![
+            Span::styled(" shelve: ", Style::new().fg(t.lead)),
+            Span::styled("1", Style::new().add_modifier(Modifier::BOLD)),
+            Span::styled(" 15 min · ", Style::new().fg(t.muted)),
+            Span::styled("2", Style::new().add_modifier(Modifier::BOLD)),
+            Span::styled(" 60 min · ", Style::new().fg(t.muted)),
+            Span::styled("3", Style::new().add_modifier(Modifier::BOLD)),
+            Span::styled(
+                " until its job ends · esc cancel (it comes back by itself)",
+                Style::new().fg(t.muted),
+            ),
+        ]),
         Mode::Normal => match (&app.error, app.prompts.selected_prompt(), app.toast()) {
             (Some(e), _, _) => {
                 Line::from(Span::styled(format!(" ! {e}"), Style::new().fg(t.error)))
@@ -342,7 +367,7 @@ pub(crate) fn hints(app: &App) -> &'static str {
     }
     match app.screen {
         Screen::Mission => {
-            " ↑↓ select · tab inbox/wall · ⏎ open · y/n/a answer · p/P prompt · x dismiss · q quit"
+            " ↑↓ select · ⏎ open · y/n/a answer · A batch · s shelve · F focus · tab wall · p prompt · q quit"
         }
         Screen::Missions => {
             " n new · e edit · l lint · f protect oracles · r run · ⏎ focus · ↑↓ select · q quit"

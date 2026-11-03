@@ -247,7 +247,7 @@ fn full_dashboard_shows_every_panel_with_real_numbers() {
         "saved 182.4k tokens",
         "GUARD · fork layer · 7 decisions",
         "tool gate",
-        "sharp: runs in code, the lead never sees it",
+        "alarms ",
         ": delegate · 3 subagents",
         "worker",
         "tester",

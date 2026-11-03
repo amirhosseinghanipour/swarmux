@@ -150,14 +150,45 @@ fn rows<'a>(vm: &ViewModel<'a>, t: &Theme, width: usize) -> Vec<(u8, Line<'a>)> 
     );
     rows.push((3, latest));
     rows.push((4, jev_line(app, t)));
-    rows.push((
-        5,
-        Line::from(dim(
+    rows.push((5, alarm_line(app, t, width)));
+    rows
+}
+
+/// How the inbox is doing: new urgent items per ten minutes against the
+/// target of one, the priority mix, how long items wait to be noticed and
+/// what has been waiting too long. Before anything was raised, what the
+/// Guard is for.
+fn alarm_line(app: &App, t: &Theme, width: usize) -> Line<'static> {
+    let k = app.mission.alarms().kpis(app.now());
+    let raised: usize = k.distribution.iter().sum();
+    if raised == 0 {
+        return Line::from(dim(
             t,
             fit("sharp: runs in code, the lead never sees it", width),
-        )),
-    ));
-    rows
+        ));
+    }
+    let [p1, p2, p3] = k.shares();
+    let ttd = k
+        .ttd_median
+        .map_or("—".to_string(), |ms| format!("{}s", ms / 1000));
+    let mut text = format!(
+        "alarms {:.1}/10m · P1 {p1:.0}% P2 {p2:.0}% P3 {p3:.0}% · look {ttd}",
+        k.urgent_avg_10min
+    );
+    if k.stale > 0 {
+        text.push_str(&format!(" · stale {}", k.stale));
+    }
+    if k.standing > 0 {
+        text.push_str(&format!(" · standing {}", k.standing));
+    }
+    if k.flood {
+        text.push_str(" · FLOOD");
+    }
+    let warn = k.flood || k.urgent_avg_10min > 1.0;
+    Line::from(Span::styled(
+        fit(&text, width),
+        Style::new().fg(if warn { t.warn } else { t.muted }),
+    ))
 }
 
 /// `name  ██████▍───── label`; a dim empty track when there is no figure.

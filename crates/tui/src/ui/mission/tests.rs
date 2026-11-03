@@ -346,7 +346,7 @@ fn snapshot_160x48() {
         "P1 1",
         "git push origin feat/checkout",
         "2:00 left",
-        "y approve · n deny · a always",
+        "y confirm (name the target) · n deny",
         "wall",
         "4 sessions",
         "demo-shop",
