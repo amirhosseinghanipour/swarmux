@@ -8,7 +8,7 @@ use serde::Deserialize;
 use serde::de::IgnoredAny;
 use swarmux_application::{
     GuardSettings, JevProvider, JevSettings, LayoutSettings, ReviewSettings, ReviewWhen,
-    RowSettings, Settings, UiSettings,
+    RowSettings, Settings, ThemeDef, UiSettings,
 };
 use swarmux_domain::{Pattern, Unmatched};
 
@@ -49,6 +49,9 @@ struct RawConfig {
     theme: Option<String>,
     layout: Option<String>,
     icons: Option<String>,
+    font: Option<String>,
+    bg: Option<String>,
+    themes: Option<std::collections::BTreeMap<String, toml::Value>>,
     gaps: Option<i64>,
     fps: Option<i64>,
     low_power: Option<bool>,
@@ -179,6 +182,9 @@ pub fn parse_settings(text: &str, path: &Path) -> Result<Settings, ConfigError> 
         theme: raw.theme,
         layout: raw.layout,
         icons: raw.icons,
+        font: raw.font,
+        bg: raw.bg,
+        themes: raw.themes,
         gaps: raw.gaps,
         fps: raw.fps,
         low_power: raw.low_power,
@@ -194,6 +200,9 @@ struct RawUi {
     theme: Option<String>,
     layout: Option<String>,
     icons: Option<String>,
+    font: Option<String>,
+    bg: Option<String>,
+    themes: Option<std::collections::BTreeMap<String, toml::Value>>,
     gaps: Option<i64>,
     fps: Option<i64>,
     low_power: Option<bool>,
@@ -230,13 +239,31 @@ fn parse_ui(raw: RawUi, text: &str, path: &Path) -> Result<UiSettings, ConfigErr
     }
     if let Some(icons) = raw.icons {
         let icons = icons.trim().to_ascii_lowercase();
-        if !matches!(icons.as_str(), "ascii" | "unicode" | "nerd") {
+        if !matches!(icons.as_str(), "ascii" | "unicode" | "nerd" | "auto") {
             return Err(error(
                 "icons",
-                "icons must be \"ascii\", \"unicode\" or \"nerd\"".into(),
+                "icons must be \"unicode\", \"ascii\", \"nerd\" or \"auto\"".into(),
             ));
         }
         ui.icons = icons;
+    }
+    if let Some(font) = raw.font {
+        ui.font = font.trim().to_string();
+    }
+    if let Some(bg) = raw.bg {
+        ui.transparent = match bg.trim().to_ascii_lowercase().as_str() {
+            "none" | "transparent" => true,
+            "theme" | "solid" => false,
+            _ => {
+                return Err(error(
+                    "bg",
+                    "bg must be \"none\" (transparent) or \"theme\"".into(),
+                ));
+            }
+        };
+    }
+    for (theme_name, value) in raw.themes.unwrap_or_default() {
+        ui.themes.push(parse_theme_def(theme_name, value, &error)?);
     }
     if let Some(gaps) = raw.gaps {
         ui.gaps = in_range("gaps", gaps, 0, 4)?;
@@ -274,6 +301,58 @@ fn parse_ui(raw: RawUi, text: &str, path: &Path) -> Result<UiSettings, ConfigErr
         ui.layouts.push(LayoutSettings { name, rows });
     }
     Ok(ui)
+}
+
+/// One `[themes.<name>]` table: `base` plus colours by role.
+fn parse_theme_def(
+    name: String,
+    value: toml::Value,
+    error: &dyn Fn(&str, String) -> ConfigError,
+) -> Result<ThemeDef, ConfigError> {
+    let toml::Value::Table(table) = value else {
+        return Err(error("themes", format!("themes.{name} must be a table")));
+    };
+    let mut def = ThemeDef {
+        name: name.clone(),
+        base: None,
+        roles: std::collections::BTreeMap::new(),
+    };
+    for (key, v) in table {
+        if key == "base" {
+            let toml::Value::String(base) = v else {
+                return Err(error(&key, format!("themes.{name}.base must be a name")));
+            };
+            def.base = Some(base.trim().to_string());
+            continue;
+        }
+        let Some(arity) = swarmux_application::role_arity(&key) else {
+            return Err(error(
+                &key,
+                format!("themes.{name}: unknown role \"{key}\""),
+            ));
+        };
+        let texts: Vec<&str> = match &v {
+            toml::Value::String(s) => vec![s.as_str()],
+            toml::Value::Array(items) => items.iter().filter_map(toml::Value::as_str).collect(),
+            _ => Vec::new(),
+        };
+        let colours: Option<Vec<u32>> = texts
+            .iter()
+            .map(|t| swarmux_application::parse_hex(t))
+            .collect();
+        match colours {
+            Some(c) if c.len() == arity && texts.len() == arity => {
+                def.roles.insert(key, c);
+            }
+            _ => {
+                return Err(error(
+                    &key,
+                    format!("themes.{name}.{key} needs {arity} colour(s) like \"#1e1e2e\""),
+                ));
+            }
+        }
+    }
+    Ok(def)
 }
 
 fn parse_review(raw: RawReview, text: &str, path: &Path) -> Result<ReviewSettings, ConfigError> {
@@ -824,6 +903,76 @@ ntfy = \"https://ntfy.sh/my-topic\"
             }]
         );
         assert_eq!(parse("").unwrap().ui, UiSettings::default());
+    }
+
+    #[test]
+    fn rice_keys_bg_icons_font_and_user_themes() {
+        let s = parse(
+            "theme = \"mine\"
+bg = \"none\"
+icons = \"auto\"
+font = \"JetBrainsMono NF\"
+
+             [themes.mine]
+base = \"nord\"
+lead = \"#112233\"
+gauge = [\"#00ff00\", \"#ffff00\", \"#ff0000\"]
+",
+        )
+        .unwrap();
+        let ui = s.ui;
+        assert!(ui.transparent);
+        assert_eq!(
+            (ui.icons.as_str(), ui.font.as_str()),
+            ("auto", "JetBrainsMono NF")
+        );
+        assert_eq!(ui.themes.len(), 1);
+        let def = &ui.themes[0];
+        assert_eq!(
+            (def.name.as_str(), def.base.as_deref()),
+            ("mine", Some("nord"))
+        );
+        assert_eq!(def.roles["lead"], [0x112233]);
+        assert_eq!(def.roles["gauge"], [0x00ff00, 0xffff00, 0xff0000]);
+        assert!(!parse("bg = \"theme\"").unwrap().ui.transparent);
+        assert_eq!(
+            parse("").unwrap().ui.icons,
+            "unicode",
+            "unicode is the default"
+        );
+    }
+
+    #[test]
+    fn bad_rice_values_are_refused() {
+        assert!(parse("bg = \"blue\"").is_err());
+        assert!(
+            parse(
+                "[themes.x]
+nope = \"#000000\""
+            )
+            .is_err()
+        );
+        assert!(
+            parse(
+                "[themes.x]
+bg = \"red\""
+            )
+            .is_err()
+        );
+        assert!(
+            parse(
+                "[themes.x]
+gauge = [\"#000000\"]"
+            )
+            .is_err()
+        );
+        assert!(
+            parse(
+                "[themes.x]
+bg = [\"#000000\", \"#111111\"]"
+            )
+            .is_err()
+        );
     }
 
     #[test]
