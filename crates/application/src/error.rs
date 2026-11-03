@@ -22,6 +22,8 @@ pub enum AppError {
     JobNotFinished(JobId),
     #[error("job #{0} is no longer queued")]
     JobNotQueued(JobId),
+    #[error("job #{0} did not stop early, so there is nothing to resume")]
+    NotResumable(JobId),
     #[error("that approval is no longer pending")]
     ApprovalNotFound,
     /// The settings file couldn't be changed.

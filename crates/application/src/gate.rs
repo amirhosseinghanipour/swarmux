@@ -19,9 +19,10 @@ use swarmux_domain::gate::{
     CheckRun, Executed, GateCheck, GateFindings, GateOrigin, GateOutcome, GateSpec, Pin, digest,
     evidence_gaps, judge, pin_changes, protected_write,
 };
-use swarmux_domain::{AttentionItem, HookEvent, JobId, Millis, SessionId};
+use swarmux_domain::{AttentionItem, CheckpointReason, HookEvent, JobId, Millis, SessionId};
 
 use crate::attention::{Change, ChangeKind};
+use crate::checkpoint::{CheckpointService, Notes};
 use crate::hookbus::{HookNotice, StopAnswer, StopContext, StopPolicy};
 use crate::ledger::LedgerService;
 use crate::ports::{Clock, JobRepository};
@@ -367,6 +368,7 @@ pub struct GateService {
     clock: Rc<dyn Clock>,
     states: HashMap<JobId, GateState>,
     changes: VecDeque<Change>,
+    checkpoints: Option<Rc<CheckpointService>>,
 }
 
 impl GateService {
@@ -383,7 +385,14 @@ impl GateService {
             clock,
             states: HashMap::new(),
             changes: VecDeque::new(),
+            checkpoints: None,
         }
+    }
+
+    /// Takes a checkpoint of the job's worktree whenever its gate passes.
+    pub fn with_checkpoints(mut self, checkpoints: Rc<CheckpointService>) -> GateService {
+        self.checkpoints = Some(checkpoints);
+        self
     }
 
     /// Takes the verdicts that arrived and records them. Returns whether
@@ -449,7 +458,25 @@ impl GateService {
             Some(job) => self.jobs.get(job)?.map(|j| j.session_id),
             None => None,
         };
-        self.ledger.record_gate(r, session, now)
+        self.ledger.record_gate(r, session, now)?;
+        self.checkpoint_on_pass(r)
+    }
+
+    /// A passed stop of a job's lead is a point worth coming back to.
+    fn checkpoint_on_pass(&self, r: &GateRecord) -> AppResult<()> {
+        let (Some(checkpoints), Some(job)) = (&self.checkpoints, r.job) else {
+            return Ok(());
+        };
+        if r.outcome != GateOutcome::Pass || r.event != Some(HookEvent::Stop) {
+            return Ok(());
+        }
+        let notes = Notes {
+            state: format!("The done-gate passed: {}", first_line(&r.digest)),
+            ..Notes::default()
+        };
+        checkpoints
+            .take(job, &r.session, CheckpointReason::GatePass, &notes)
+            .map(drop)
     }
 
     /// The latest verdict for `job`.

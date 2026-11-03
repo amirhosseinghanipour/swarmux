@@ -142,7 +142,10 @@ fn existing_database_starts_its_ledger_at_genesis() {
     let c = Connection::open(&path).unwrap();
     c.execute_batch(
         "DROP TRIGGER ledger_no_update; DROP TRIGGER ledger_no_delete;
-         DROP TABLE ledger; PRAGMA user_version = 7;",
+         DROP TABLE ledger;
+         DROP TABLE checkpoints; DROP TABLE worktrees;
+         ALTER TABLE sessions DROP COLUMN worktree;
+         PRAGMA user_version = 7;",
     )
     .unwrap();
     drop(c);

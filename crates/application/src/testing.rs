@@ -3,6 +3,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use swarmux_domain::{
     Decision, Job, JobId, JobResult, JobStatus, Millis, PromptDraft, PromptId, PromptTemplate,
@@ -153,6 +154,16 @@ impl SessionRepository for InMemoryStore {
             .find(|s| s.id == id)
             .ok_or(AppError::SessionNotFound)?;
         s.lean = lean;
+        Ok(())
+    }
+
+    fn set_worktree(&self, id: SessionId, worktree: Option<bool>) -> AppResult<()> {
+        let mut sessions = self.sessions.borrow_mut();
+        let s = sessions
+            .iter_mut()
+            .find(|s| s.id == id)
+            .ok_or(AppError::SessionNotFound)?;
+        s.worktree = worktree;
         Ok(())
     }
 
@@ -877,5 +888,258 @@ impl FakeHookFeed {
 impl crate::hookbus::HookFeed for FakeHookFeed {
     fn poll_notices(&self) -> Vec<crate::hookbus::HookNotice> {
         std::mem::take(&mut *self.queue.borrow_mut())
+    }
+}
+
+/// Worktrees and checkpoints in memory.
+#[derive(Default)]
+pub struct InMemoryWorktrees {
+    records: RefCell<Vec<swarmux_domain::WorktreeRecord>>,
+    checkpoints: RefCell<Vec<swarmux_domain::Checkpoint>>,
+}
+
+impl crate::worktree::WorktreeStore for InMemoryWorktrees {
+    fn insert(&self, record: &swarmux_domain::WorktreeRecord) -> AppResult<()> {
+        let mut records = self.records.borrow_mut();
+        if records
+            .iter()
+            .any(|r| r.removed_at.is_none() && r.slot == record.slot)
+        {
+            return Err(AppError::Storage("slot taken".into()));
+        }
+        records.retain(|r| r.job != record.job);
+        records.push(record.clone());
+        Ok(())
+    }
+
+    fn get(&self, job: JobId) -> AppResult<Option<swarmux_domain::WorktreeRecord>> {
+        Ok(self.records.borrow().iter().find(|r| r.job == job).cloned())
+    }
+
+    fn active(&self) -> AppResult<Vec<swarmux_domain::WorktreeRecord>> {
+        Ok(self
+            .records
+            .borrow()
+            .iter()
+            .filter(|r| r.removed_at.is_none())
+            .cloned()
+            .collect())
+    }
+
+    fn rebind(&self, from: JobId, to: JobId) -> AppResult<bool> {
+        let mut records = self.records.borrow_mut();
+        let Some(r) = records
+            .iter_mut()
+            .find(|r| r.job == from && r.removed_at.is_none())
+        else {
+            return Ok(false);
+        };
+        r.job = to;
+        for c in self.checkpoints.borrow_mut().iter_mut() {
+            if c.job == from {
+                c.job = to;
+            }
+        }
+        Ok(true)
+    }
+
+    fn mark_removed(&self, job: JobId, now: Millis) -> AppResult<()> {
+        for r in self
+            .records
+            .borrow_mut()
+            .iter_mut()
+            .filter(|r| r.job == job)
+        {
+            r.removed_at = Some(now);
+        }
+        Ok(())
+    }
+
+    fn insert_checkpoint(&self, c: &swarmux_domain::Checkpoint) -> AppResult<i64> {
+        let mut all = self.checkpoints.borrow_mut();
+        let id = all.len() as i64 + 1;
+        let mut c = c.clone();
+        c.id = id;
+        all.push(c);
+        Ok(id)
+    }
+
+    fn checkpoints(&self, job: JobId) -> AppResult<Vec<swarmux_domain::Checkpoint>> {
+        Ok(self
+            .checkpoints
+            .borrow()
+            .iter()
+            .filter(|c| c.job == job)
+            .cloned()
+            .collect())
+    }
+
+    fn recent_checkpoints(&self, limit: usize) -> AppResult<Vec<swarmux_domain::Checkpoint>> {
+        Ok(self
+            .checkpoints
+            .borrow()
+            .iter()
+            .rev()
+            .take(limit)
+            .cloned()
+            .collect())
+    }
+}
+
+/// A git that only remembers what it was asked to do.
+#[derive(Default)]
+pub struct FakeGit {
+    /// Repository roots by folder prefix: any folder under a key is in it.
+    pub repos: RefCell<Vec<PathBuf>>,
+    pub folders: RefCell<Vec<PathBuf>>,
+    pub snapshots: Cell<u32>,
+    pub removed: RefCell<Vec<PathBuf>>,
+    pub handoffs: RefCell<Vec<(PathBuf, String)>>,
+}
+
+impl FakeGit {
+    pub fn with_repo(repo: &str) -> FakeGit {
+        let git = FakeGit::default();
+        git.repos.borrow_mut().push(PathBuf::from(repo));
+        git
+    }
+}
+
+impl crate::worktree::Worktrees for FakeGit {
+    fn repository(&self, dir: &Path) -> AppResult<Option<PathBuf>> {
+        Ok(self
+            .repos
+            .borrow()
+            .iter()
+            .find(|r| dir.starts_with(r))
+            .cloned())
+    }
+
+    fn add(&self, req: &crate::worktree::AddWorktree) -> AppResult<crate::worktree::Added> {
+        self.folders.borrow_mut().push(req.path.clone());
+        Ok(crate::worktree::Added {
+            created_branch: true,
+            copied: req.copy.clone(),
+        })
+    }
+
+    fn snapshot(&self, _: &Path, _: &str) -> AppResult<String> {
+        self.snapshots.set(self.snapshots.get() + 1);
+        Ok(format!("{:040x}", self.snapshots.get()))
+    }
+
+    fn remove(&self, _: &Path, path: &Path, _: &str) -> AppResult<crate::worktree::Removed> {
+        self.folders.borrow_mut().retain(|p| p != path);
+        self.removed.borrow_mut().push(path.to_path_buf());
+        Ok(crate::worktree::Removed {
+            snapshot: Some("saved".into()),
+            branch_deleted: false,
+        })
+    }
+
+    fn present(&self, path: &Path) -> bool {
+        self.folders.borrow().iter().any(|p| p == path)
+    }
+
+    fn write_handoff(&self, path: &Path, handoff: &swarmux_domain::Handoff) -> AppResult<PathBuf> {
+        self.handoffs
+            .borrow_mut()
+            .push((path.to_path_buf(), handoff.to_json()));
+        Ok(path.join("handoff.json"))
+    }
+}
+
+/// Everything worktrees and checkpoints need, wired to fakes: one session
+/// "Demo app" whose folder `/repo` is a git repository.
+pub struct WorktreeRig {
+    pub git: Rc<FakeGit>,
+    pub store: Rc<InMemoryStore>,
+    pub records: Rc<InMemoryWorktrees>,
+    pub ledger: Rc<InMemoryLedger>,
+    pub clock: Rc<FixedClock>,
+    pub ledger_service: Rc<crate::ledger::LedgerService>,
+    pub board: std::sync::Arc<crate::checkpoint::HandoffBoard>,
+    pub worktrees: Rc<crate::worktree::WorktreeService>,
+    pub checkpoints: Rc<crate::checkpoint::CheckpointService>,
+    pub session: Session,
+}
+
+impl WorktreeRig {
+    pub fn new() -> WorktreeRig {
+        WorktreeRig::with_settings(&crate::WorktreeSettings::default())
+    }
+
+    pub fn with_settings(settings: &crate::WorktreeSettings) -> WorktreeRig {
+        let git = Rc::new(FakeGit::with_repo("/repo"));
+        let store = Rc::new(InMemoryStore::default());
+        let records = Rc::new(InMemoryWorktrees::default());
+        let ledger = Rc::new(InMemoryLedger::default());
+        let clock = Rc::new(FixedClock::new(1_000_000));
+        let ledger_service = Rc::new(crate::ledger::LedgerService::new(
+            ledger.clone(),
+            clock.clone(),
+        ));
+        let board = crate::checkpoint::HandoffBoard::new();
+        let worktrees = Rc::new(
+            crate::worktree::WorktreeService::new(
+                git.clone(),
+                records.clone(),
+                store.clone(),
+                clock.clone(),
+                PathBuf::from("/wt"),
+            )
+            .with_settings(settings)
+            .with_ledger(ledger_service.clone())
+            .with_handoffs(board.clone()),
+        );
+        let checkpoints = Rc::new(
+            crate::checkpoint::CheckpointService::new(
+                worktrees.clone(),
+                store.clone(),
+                ledger_service.clone(),
+                clock.clone(),
+            )
+            .with_handoffs(board.clone()),
+        );
+        let session =
+            Session::new(SessionId::random(), "Demo app", "/repo".into(), "sonnet", 0).unwrap();
+        SessionRepository::insert(&*store, &session).unwrap();
+        WorktreeRig {
+            git,
+            store,
+            records,
+            ledger,
+            clock,
+            ledger_service,
+            board,
+            worktrees,
+            checkpoints,
+            session,
+        }
+    }
+
+    /// Queues a job of the session and returns its id.
+    pub fn job(&self, prompt: &str) -> JobId {
+        JobRepository::insert(
+            &*self.store,
+            &NewJob {
+                session_id: self.session.id,
+                prompt_id: None,
+                prompt: prompt.into(),
+                model: "sonnet".into(),
+                priority: 0,
+                fork: false,
+                wants_review: false,
+                review_of: None,
+            },
+            self.clock.now(),
+        )
+        .unwrap()
+    }
+}
+
+impl Default for WorktreeRig {
+    fn default() -> Self {
+        WorktreeRig::new()
     }
 }

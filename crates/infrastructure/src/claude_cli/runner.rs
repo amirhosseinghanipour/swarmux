@@ -138,6 +138,7 @@ async fn run(
     cmd.args(build_args(&req))
         .args(extra_args)
         .envs(env)
+        .envs(req.env.iter().map(|(k, v)| (k, v)))
         .current_dir(&req.cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

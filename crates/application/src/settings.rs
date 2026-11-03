@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use swarmux_domain::telemetry::PriceTable;
-use swarmux_domain::{DEFAULT_MODEL, GuardPolicy, Limits, Pattern, Unmatched};
+use swarmux_domain::{DEFAULT_MODEL, GuardPolicy, Limits, Pattern, PortPlan, Unmatched};
 
 /// User settings (`config.toml`); every field has a default.
 #[derive(Clone, Debug, PartialEq)]
@@ -20,6 +20,36 @@ pub struct Settings {
     pub pricing: PriceTable,
     /// Look and feel: theme, layout, icons, animation.
     pub ui: UiSettings,
+    pub worktree: WorktreeSettings,
+}
+
+/// The `[worktree]` section: where job worktrees live and what they get.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WorktreeSettings {
+    /// Where worktrees are created; `None` means `~/.swarmux/worktrees`.
+    pub root: Option<PathBuf>,
+    /// Files and folders (relative to the repository) copied into every
+    /// new worktree when they exist, such as `.env` and other ignored files.
+    pub copy: Vec<String>,
+    /// How port blocks are handed out to jobs.
+    pub ports: PortPlan,
+    /// Worktrees of jobs that ended this long ago are reclaimed.
+    pub stale_hours: u64,
+}
+
+impl Default for WorktreeSettings {
+    fn default() -> WorktreeSettings {
+        WorktreeSettings {
+            root: None,
+            copy: vec![
+                ".env".into(),
+                ".env.local".into(),
+                ".claude/settings.local.json".into(),
+            ],
+            ports: PortPlan::default(),
+            stale_hours: 12,
+        }
+    }
 }
 
 /// The `[telemetry]` section: which background sources run and how often.
@@ -153,6 +183,7 @@ impl Default for Settings {
             telemetry: TelemetrySettings::default(),
             pricing: PriceTable::builtin(),
             ui: UiSettings::default(),
+            worktree: WorktreeSettings::default(),
         }
     }
 }

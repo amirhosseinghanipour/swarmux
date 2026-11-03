@@ -44,6 +44,13 @@ impl SessionService {
         self.repo.list_active()
     }
 
+    /// Sets worktree mode for the session's next jobs: `Some(true)` always,
+    /// `Some(false)` never, `None` when its folder is a git repository.
+    pub fn set_worktree(&self, id: SessionId, worktree: Option<bool>) -> AppResult<()> {
+        self.repo.get(id)?.ok_or(AppError::SessionNotFound)?;
+        self.repo.set_worktree(id, worktree)
+    }
+
     /// Turns lean mode on or off for the session's next jobs. Returns the new value.
     pub fn toggle_lean(&self, id: SessionId) -> AppResult<bool> {
         let session = self.repo.get(id)?.ok_or(AppError::SessionNotFound)?;

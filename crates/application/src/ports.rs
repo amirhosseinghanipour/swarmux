@@ -17,6 +17,8 @@ pub trait SessionRepository {
     fn get(&self, id: SessionId) -> AppResult<Option<Session>>;
     fn touch(&self, id: SessionId, now: Millis) -> AppResult<()>;
     fn set_lean(&self, id: SessionId, lean: bool) -> AppResult<()>;
+    /// `None` follows the folder: worktrees on in a git repository.
+    fn set_worktree(&self, id: SessionId, worktree: Option<bool>) -> AppResult<()>;
     /// True once Claude Code has created the session (some job reported `init`).
     fn has_started(&self, id: SessionId) -> AppResult<bool>;
 }
@@ -113,6 +115,8 @@ pub struct RunRequest {
     pub lean: bool,
     /// A review run: read-only tools, no session file, the review system prompt.
     pub review: bool,
+    /// Extra environment for the child (a worktree's port block, …).
+    pub env: Vec<(String, String)>,
 }
 
 /// What a running job reports back.

@@ -30,6 +30,7 @@ fn request(cwd: PathBuf, prompt: &str) -> RunRequest {
         prompt: prompt.into(),
         lean: false,
         review: false,
+        env: Vec::new(),
     }
 }
 
@@ -264,6 +265,7 @@ fn review_runs_read_only_and_answer_with_a_verdict() {
     let echo = dir.path().join("echo.json");
     let req = RunRequest {
         review: true,
+        env: Vec::new(),
         model: "haiku".into(),
         ..request(dir.path().into(), "swarmux review of job #1")
     };

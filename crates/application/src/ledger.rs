@@ -120,6 +120,20 @@ impl LedgerService {
         session: Option<SessionId>,
         payload: Payload,
     ) -> AppResult<()> {
+        self.append_entry(ts, kind, actor, job, session, payload)
+            .map(drop)
+    }
+
+    /// Like `append`, and returns the entry's `seq`.
+    fn append_entry(
+        &self,
+        ts: Millis,
+        kind: LedgerKind,
+        actor: &str,
+        job: Option<JobId>,
+        session: Option<SessionId>,
+        payload: Payload,
+    ) -> AppResult<u64> {
         self.ledger
             .append(LedgerDraft {
                 ts,
@@ -129,7 +143,64 @@ impl LedgerService {
                 session: session.map(|s| s.to_string()),
                 payload_json: payload.build(),
             })
-            .map(drop)
+            .map(|e| e.seq)
+    }
+
+    /// A job's worktree was created (`action` `created`) or reclaimed
+    /// (`reclaimed`, with the commit that saved its last files in `detail`).
+    pub fn record_worktree(
+        &self,
+        w: &swarmux_domain::WorktreeRecord,
+        action: &str,
+        detail: Option<&str>,
+        now: Millis,
+    ) -> AppResult<()> {
+        let payload = Payload::new()
+            .str("action", action)
+            .text("path", &w.path.display().to_string())
+            .text("repo", &w.repo.display().to_string())
+            .str("branch", &w.branch)
+            .int("slot", i64::from(w.slot))
+            .int("port_base", i64::from(w.port_base))
+            .opt_str("saved_commit", detail);
+        self.append(
+            now,
+            LedgerKind::Worktree,
+            SWARMUX,
+            Some(w.job),
+            Some(w.session),
+            payload,
+        )
+    }
+
+    /// A checkpoint; returns the entry's `seq`.
+    pub fn record_checkpoint(
+        &self,
+        c: &swarmux_domain::Checkpoint,
+        handoff_file: Option<&str>,
+        session: Option<SessionId>,
+    ) -> AppResult<u64> {
+        let payload = Payload::new()
+            .str("reason", c.reason.as_str())
+            .str("claude_session", &c.session_id)
+            .str("commit", &c.commit)
+            .text("worktree", &c.worktree.display().to_string())
+            .str("branch", &c.branch)
+            .opt_str("handoff_file", handoff_file)
+            .json(
+                "handoff",
+                &c.handoff
+                    .as_ref()
+                    .map_or_else(|| "null".to_string(), |h| h.to_json()),
+            );
+        self.append_entry(
+            c.at,
+            LedgerKind::Checkpoint,
+            SWARMUX,
+            Some(c.job),
+            session,
+            payload,
+        )
     }
 
     pub fn record_job_queued(&self, id: JobId, job: &NewJob, now: Millis) -> AppResult<()> {

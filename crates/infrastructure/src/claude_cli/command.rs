@@ -120,6 +120,7 @@ mod tests {
             prompt: "hi".into(),
             lean: false,
             review: false,
+            env: Vec::new(),
         }
     }
 
@@ -184,6 +185,7 @@ mod tests {
     fn review_runs_are_read_only_and_sessionless() {
         let review = RunRequest {
             review: true,
+            env: Vec::new(),
             resume: true,
             model: "haiku".into(),
             ..req(true, true)

@@ -7,6 +7,7 @@ mod ledger;
 mod prompts;
 mod sessions;
 mod telemetry;
+mod worktrees;
 
 use std::path::Path;
 
@@ -157,9 +158,42 @@ CREATE TRIGGER ledger_no_delete BEFORE DELETE ON ledger
 BEGIN SELECT RAISE(ABORT, 'the ledger is append-only'); END;
 ";
 
+/// Job worktrees and checkpoints. `sessions.worktree` is NULL while the
+/// session follows its folder (worktrees on inside a git repository).
+const SCHEMA_V9: &str = "
+ALTER TABLE sessions ADD COLUMN worktree INTEGER;
+CREATE TABLE worktrees (
+    job_id INTEGER PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    repo TEXT NOT NULL,
+    path TEXT NOT NULL,
+    branch TEXT NOT NULL,
+    slot INTEGER NOT NULL,
+    port_base INTEGER NOT NULL,
+    port_count INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    removed_at INTEGER
+);
+CREATE UNIQUE INDEX worktrees_slot ON worktrees(slot) WHERE removed_at IS NULL;
+CREATE TABLE checkpoints (
+    id INTEGER PRIMARY KEY,
+    job_id INTEGER NOT NULL,
+    session_id TEXT NOT NULL,
+    commit_sha TEXT NOT NULL,
+    worktree TEXT NOT NULL,
+    branch TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    ledger_seq INTEGER,
+    handoff TEXT,
+    at INTEGER NOT NULL
+);
+CREATE INDEX checkpoints_job ON checkpoints(job_id);
+";
+
 /// Migrations in order; index + 1 is the resulting `user_version`.
 const MIGRATIONS: &[&str] = &[
     SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6, SCHEMA_V7, SCHEMA_V8,
+    SCHEMA_V9,
 ];
 
 /// Maps adapter errors into the application's error type.

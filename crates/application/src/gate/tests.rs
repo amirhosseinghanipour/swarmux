@@ -487,3 +487,65 @@ fn checks_run_only_after_something_could_change_files() {
     f.stop(HookEvent::Stop, "done");
     assert!(f.checker.runs.load(Ordering::SeqCst) > runs);
 }
+
+fn record(job: JobId, event: Option<HookEvent>, outcome: GateOutcome) -> GateRecord {
+    GateRecord {
+        job: Some(job),
+        session: "claude-9".into(),
+        event,
+        root: "/repo".into(),
+        origin: GateOrigin::File,
+        outcome,
+        blocks: 0,
+        max_blocks: 3,
+        findings: GateFindings::default(),
+        digest: "all checks passed".into(),
+        problem: None,
+    }
+}
+
+#[test]
+fn a_passed_stop_takes_a_checkpoint_and_nothing_else_does() {
+    let rig = crate::testing::WorktreeRig::new();
+    let job = rig.job("make it pass");
+    rig.worktrees.prepare(job, &rig.session).unwrap().unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut service = GateService::new(
+        rx,
+        rig.ledger_service.clone(),
+        rig.store.clone(),
+        rig.clock.clone(),
+    )
+    .with_checkpoints(rig.checkpoints.clone());
+
+    for (event, outcome) in [
+        (Some(HookEvent::Stop), GateOutcome::Block),
+        (Some(HookEvent::Stop), GateOutcome::Escalate),
+        (Some(HookEvent::SubagentStop), GateOutcome::Pass),
+        (None, GateOutcome::Pass),
+    ] {
+        tx.send(record(job, event, outcome)).unwrap();
+    }
+    let (_, errors) = service.pump();
+    assert!(errors.is_empty(), "{errors:?}");
+    assert!(rig.checkpoints.list(job).unwrap().is_empty());
+
+    tx.send(record(job, Some(HookEvent::Stop), GateOutcome::Pass))
+        .unwrap();
+    let (_, errors) = service.pump();
+    assert!(errors.is_empty(), "{errors:?}");
+    let all = rig.checkpoints.list(job).unwrap();
+    assert_eq!(all.len(), 1);
+    assert_eq!(all[0].reason, swarmux_domain::CheckpointReason::GatePass);
+    assert_eq!(all[0].session_id, "claude-9");
+    // The checkpoint is recorded after the verdict it follows.
+    let kinds: Vec<LedgerKind> = rig
+        .ledger
+        .entries()
+        .iter()
+        .map(|e| e.draft.kind)
+        .filter(|k| matches!(k, LedgerKind::GateVerdict | LedgerKind::Checkpoint))
+        .collect();
+    assert_eq!(kinds.last(), Some(&LedgerKind::Checkpoint));
+    assert_eq!(kinds[kinds.len() - 2], LedgerKind::GateVerdict);
+}

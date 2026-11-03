@@ -9,7 +9,7 @@ use uuid::Uuid;
 use super::{OrStorage, SqliteStore};
 
 const COLS: &str =
-    "id, name, cwd, model, permission_mode, created_at, last_used_at, archived, lean";
+    "id, name, cwd, model, permission_mode, created_at, last_used_at, archived, lean, worktree";
 
 /// Reads a session id stored as text in column `idx`.
 pub(crate) fn session_id_at(r: &Row, idx: usize) -> rusqlite::Result<SessionId> {
@@ -31,6 +31,7 @@ fn from_row(r: &Row) -> rusqlite::Result<Session> {
         last_used_at: r.get(6)?,
         archived: r.get(7)?,
         lean: r.get(8)?,
+        worktree: r.get(9)?,
     })
 }
 
@@ -39,7 +40,7 @@ impl SessionRepository for SqliteStore {
         self.conn
             .execute(
                 &format!(
-                    "INSERT INTO sessions ({COLS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)"
+                    "INSERT INTO sessions ({COLS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)"
                 ),
                 params![
                     s.id.to_string(),
@@ -50,7 +51,8 @@ impl SessionRepository for SqliteStore {
                     s.created_at,
                     s.last_used_at,
                     s.archived,
-                    s.lean
+                    s.lean,
+                    s.worktree
                 ],
             )
             .or_storage()?;
@@ -95,6 +97,16 @@ impl SessionRepository for SqliteStore {
             .execute(
                 "UPDATE sessions SET lean = ?1 WHERE id = ?2",
                 params![lean, id.to_string()],
+            )
+            .or_storage()?;
+        Ok(())
+    }
+
+    fn set_worktree(&self, id: SessionId, worktree: Option<bool>) -> AppResult<()> {
+        self.conn
+            .execute(
+                "UPDATE sessions SET worktree = ?1 WHERE id = ?2",
+                params![worktree, id.to_string()],
             )
             .or_storage()?;
         Ok(())

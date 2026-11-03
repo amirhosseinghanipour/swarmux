@@ -19,6 +19,7 @@ use crate::ports::{
     AgentCatalog, AgentRunner, Clock, JobRepository, NewJob, RunRequest, RunSink, RunnerMsg,
     SessionRepository, SystemMonitor, TelemetryStore, Workspace,
 };
+use crate::worktree::WorktreeService;
 use crate::{AppError, AppResult, RenderedPrompt, ReviewSettings, Settings};
 
 /// Finished jobs kept in memory for the queue and dashboard.
@@ -163,7 +164,16 @@ pub struct JobService {
     telemetry: Option<Rc<dyn TelemetryStore>>,
     /// Where the shell commands agents ran are reported, as evidence.
     executions: Option<Rc<dyn ExecutionLog>>,
+    /// Gives each job its own git worktree.
+    worktrees: Option<Rc<WorktreeService>>,
+    /// When worktrees were last reclaimed.
+    last_gc: Option<Millis>,
 }
+
+/// How often stale worktrees are looked for.
+const GC_EVERY_MS: Millis = 3_600_000;
+/// What a resumed job is told.
+const RESUME_PROMPT: &str = "The previous run stopped before it finished. Check the files in the working folder to see what is already done, then carry on from there.";
 
 /// Environments restored at start.
 const RESTORE_ENVIRONMENTS: usize = 50;
@@ -194,7 +204,16 @@ impl JobService {
             activity: SwarmActivity::default(),
             telemetry: None,
             executions: None,
+            worktrees: None,
+            last_gc: None,
         }
+    }
+
+    /// Runs each job in its own git worktree (when its session wants one),
+    /// and reclaims stale worktrees at start and every hour.
+    pub fn with_worktrees(mut self, worktrees: Rc<WorktreeService>) -> JobService {
+        self.worktrees = Some(worktrees);
+        self
     }
 
     /// Keeps usage-limit readings and session environments in `store`;
@@ -307,7 +326,7 @@ impl JobService {
     /// Queues `prompt` for the session; it starts as soon as it is allowed to.
     pub fn dispatch(&mut self, session_id: SessionId, prompt: &str) -> AppResult<JobId> {
         let review = self.review_next();
-        self.enqueue(session_id, prompt, None, None, false, (review, None))
+        self.enqueue(session_id, prompt, None, None, false, (review, None, None))
     }
 
     /// Like [`JobService::dispatch`], and records which template the job came from.
@@ -323,13 +342,32 @@ impl JobService {
             Some(rendered.prompt_id()),
             None,
             false,
-            (review, None),
+            (review, None, None),
         )
     }
 
     /// Queues a finished job's prompt again: same session, model and template.
+    /// A job that was interrupted continues in the worktree it had.
     pub fn retry(&mut self, id: JobId) -> AppResult<JobId> {
         self.requeue(id, false)
+    }
+
+    /// Continues a job that stopped early (interrupted by a quit or a crash,
+    /// or failed) in its Claude session and its worktree, with a short
+    /// instruction to pick up where it left off.
+    pub fn resume(&mut self, id: JobId) -> AppResult<JobId> {
+        let job = self.jobs.get(id)?.ok_or(AppError::JobNotFound)?;
+        if !matches!(job.status, JobStatus::Interrupted | JobStatus::Failed) {
+            return Err(AppError::NotResumable(id));
+        }
+        self.enqueue(
+            job.session_id,
+            RESUME_PROMPT,
+            None,
+            Some(job.model),
+            false,
+            (job.wants_review, job.review_of, Some(id)),
+        )
     }
 
     /// Queues a finished job's prompt in a branch of its Claude session. Once
@@ -389,6 +427,7 @@ impl JobService {
                 Err(e) => report.errors.push(e),
             }
         }
+        self.reclaim_worktrees(&mut report);
         // Read even with nothing queued, so the status bar always shows it.
         self.free_ram();
         match self.schedule() {
@@ -397,6 +436,24 @@ impl JobService {
         }
         self.prune();
         report
+    }
+
+    /// Reclaims stale worktrees: at the first pump, then every hour.
+    fn reclaim_worktrees(&mut self, report: &mut PumpReport) {
+        let Some(worktrees) = &self.worktrees else {
+            return;
+        };
+        let now = self.clock.now();
+        if self.last_gc.is_some_and(|at| now - at < GC_EVERY_MS) {
+            return;
+        }
+        self.last_gc = Some(now);
+        match worktrees.gc(false) {
+            Ok(gc) => report
+                .errors
+                .extend(gc.errors.into_iter().map(AppError::Workspace)),
+            Err(e) => report.errors.push(e),
+        }
     }
 
     /// Adds a swarmux line to a job's log (this run only).
@@ -610,13 +667,14 @@ impl JobService {
         if !job.status.is_finished() {
             return Err(AppError::JobNotFinished(id));
         }
+        let inherits = (job.status == JobStatus::Interrupted && !fork).then_some(id);
         self.enqueue(
             job.session_id,
             &job.prompt,
             job.prompt_id,
             Some(job.model),
             fork,
-            (job.wants_review, job.review_of),
+            (job.wants_review, job.review_of, inherits),
         )
     }
 
@@ -627,7 +685,7 @@ impl JobService {
         prompt_id: Option<PromptId>,
         model: Option<String>,
         fork: bool,
-        (wants_review, review_of): (bool, Option<JobId>),
+        (wants_review, review_of, inherits): (bool, Option<JobId>, Option<JobId>),
     ) -> AppResult<JobId> {
         let prompt = prompt.trim();
         if prompt.is_empty() {
@@ -665,8 +723,30 @@ impl JobService {
             },
             &session.name,
         );
+        // Before it can start: the job continues the other one's worktree.
+        if let (Some(from), Some(worktrees)) = (inherits, &self.worktrees) {
+            worktrees.rebind(from, id)?;
+        }
         self.schedule()?;
         Ok(id)
+    }
+
+    /// Where the job runs, and with which extra environment.
+    fn workdir(&self, i: usize, session: &Session) -> AppResult<(PathBuf, Vec<(String, String)>)> {
+        let own = || (session.cwd.clone(), Vec::new());
+        let Some(worktrees) = &self.worktrees else {
+            return Ok(own());
+        };
+        let job = &self.tracked[i].job;
+        if let Some(audited) = job.review_of {
+            // A reviewer reads the worktree of the job it audits.
+            return Ok(worktrees
+                .record_for(audited)?
+                .map_or_else(own, |r| (r.path, Vec::new())));
+        }
+        Ok(worktrees
+            .prepare(job.id, session)?
+            .map_or_else(own, |p| (p.cwd, p.env)))
     }
 
     /// Starts every queued job the scheduling rule allows. True if any started.
@@ -716,6 +796,17 @@ impl JobService {
             return Ok(());
         };
         let resume = self.sessions.has_started(session_id)?;
+        let (cwd, env) = match self.workdir(i, &session) {
+            Ok(dir) => dir,
+            Err(e) => {
+                if let Some(result) = self.tracked[i].progress.fail(&format!("worktree: {e}"), 0) {
+                    self.tracked[i].job.status = JobStatus::Failed;
+                    self.jobs.save_result(id, &result)?;
+                    self.jobs.set_status(id, JobStatus::Failed, now)?;
+                }
+                return Ok(());
+            }
+        };
         self.jobs.set_status(id, JobStatus::Running, now)?;
         self.sessions.touch(session_id, now)?;
 
@@ -730,13 +821,13 @@ impl JobService {
         t.last_event_at = Some(now);
         t.job.status = JobStatus::Running;
         t.progress.status = JobStatus::Running;
-        t.cwd = Some(session.cwd.clone());
+        t.cwd = Some(cwd.clone());
         if t.job.review_of.is_some() {
             t.progress.as_reviewer(offset);
         }
         let request = RunRequest {
             job_id: id,
-            cwd: session.cwd,
+            cwd,
             session_id,
             resume,
             fork: t.job.fork,
@@ -745,6 +836,7 @@ impl JobService {
             prompt: t.job.prompt.clone(),
             lean: session.lean,
             review: t.job.review_of.is_some(),
+            env,
         };
         t.progress.command = self.runner.command_line(&request);
         let tx = self.tx.clone();
@@ -966,3 +1058,6 @@ impl JobService {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod worktree_tests;

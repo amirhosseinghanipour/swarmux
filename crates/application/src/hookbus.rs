@@ -7,9 +7,10 @@
 use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
 
-use swarmux_domain::{HookEvent, JobId, Millis, SessionId};
+use swarmux_domain::{CheckpointReason, HookEvent, JobId, Millis, SessionId};
 
 use crate::attention::{Change, ChangeKind};
+use crate::checkpoint::{CheckpointService, Notes};
 use crate::ledger::LedgerService;
 use crate::ports::{Clock, JobRepository};
 use crate::{AppError, AppResult};
@@ -130,6 +131,7 @@ pub struct HookBus {
     clock: Rc<dyn Clock>,
     signals: HashMap<JobId, SessionSignals>,
     changes: VecDeque<Change>,
+    checkpoints: Option<Rc<CheckpointService>>,
 }
 
 impl HookBus {
@@ -146,7 +148,14 @@ impl HookBus {
             clock,
             signals: HashMap::new(),
             changes: VecDeque::new(),
+            checkpoints: None,
         }
+    }
+
+    /// Takes a checkpoint of the job's worktree before each compaction.
+    pub fn with_checkpoints(mut self, checkpoints: Rc<CheckpointService>) -> HookBus {
+        self.checkpoints = Some(checkpoints);
+        self
     }
 
     /// Takes the events that arrived and dispatches them. Returns what
@@ -171,7 +180,29 @@ impl HookBus {
             Some(job) => self.jobs.get(job)?.map(|j| j.session_id),
             None => None,
         };
-        self.record(notice, session, now)
+        self.record(notice, session, now)?;
+        self.checkpoint_before_compaction(notice)
+    }
+
+    fn checkpoint_before_compaction(&self, n: &HookNotice) -> AppResult<()> {
+        let (Some(checkpoints), Some(job), HookEvent::PreCompact) =
+            (&self.checkpoints, n.job, n.event)
+        else {
+            return Ok(());
+        };
+        let trigger = if n.detail.is_empty() {
+            "auto"
+        } else {
+            &n.detail
+        };
+        let notes = Notes {
+            state: format!("The context was about to be compacted ({trigger})."),
+            next_step: "Continue the task; re-read the files you need after the compaction.".into(),
+            ..Notes::default()
+        };
+        checkpoints
+            .take(job, &n.session, CheckpointReason::PreCompact, &notes)
+            .map(drop)
     }
 
     fn record(&self, n: &HookNotice, session: Option<SessionId>, now: Millis) -> AppResult<()> {

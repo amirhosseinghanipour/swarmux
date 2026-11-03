@@ -171,6 +171,7 @@ fn a_real_job_records_session_start_tool_use_and_stop() {
             prompt: "Run the Bash command `echo hi`, then reply with the word ok.".into(),
             lean: true,
             review: false,
+            env: Vec::new(),
         },
         Box::new(move |m| {
             let _ = tx.send(m);

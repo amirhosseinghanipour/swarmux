@@ -33,6 +33,7 @@ fn real_claude_job_reports_init_and_result() {
             prompt: "Read a.txt with the Read tool, then reply with exactly the word in it.".into(),
             lean: false,
             review: false,
+            env: Vec::new(),
         },
         Box::new(move |m| {
             let _ = tx.send(m);
