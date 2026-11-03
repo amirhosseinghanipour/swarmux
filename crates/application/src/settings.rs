@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
-use swarmux_domain::telemetry::PriceTable;
+use swarmux_domain::budget::GovernorPolicy;
+use swarmux_domain::telemetry::{MINUTE, PriceTable};
 use swarmux_domain::{DEFAULT_MODEL, GuardPolicy, Limits, Pattern, PortPlan, Unmatched};
 
 /// User settings (`config.toml`); every field has a default.
@@ -21,6 +22,57 @@ pub struct Settings {
     /// Look and feel: theme, layout, icons, animation.
     pub ui: UiSettings,
     pub worktree: WorktreeSettings,
+    pub governor: GovernorSettings,
+}
+
+/// The `[governor]` section: when queued work waits for a usage window to
+/// reset, runs on a cheaper model, or runs fewer at once.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GovernorSettings {
+    /// Off: every queued job is admitted as before.
+    pub enabled: bool,
+    /// New jobs wait while a usage window is at least this full (0 to 1),
+    /// and start by themselves once it resets.
+    pub hold_at: f64,
+    /// Jobs on a pricier model than `downgrade_to` run on it from here (0 to 1).
+    pub downgrade_at: f64,
+    pub downgrade_to: String,
+    /// How far ahead a job's window use is forecast.
+    pub horizon_minutes: u32,
+    /// Jobs that may run at once on battery.
+    pub battery_concurrency: usize,
+    /// Dollar cap of every job (`--max-budget-usd`); missions use their
+    /// own reservation.
+    pub max_job_usd: Option<f64>,
+    /// Tell each job its budget and the windows in a line after the prompt.
+    pub budget_line: bool,
+}
+
+impl Default for GovernorSettings {
+    fn default() -> GovernorSettings {
+        let policy = GovernorPolicy::default();
+        GovernorSettings {
+            enabled: true,
+            hold_at: policy.hold_at,
+            downgrade_at: policy.downgrade_at,
+            downgrade_to: policy.downgrade_to,
+            horizon_minutes: (policy.horizon / MINUTE) as u32,
+            battery_concurrency: 2,
+            max_job_usd: None,
+            budget_line: true,
+        }
+    }
+}
+
+impl GovernorSettings {
+    pub fn policy(&self) -> GovernorPolicy {
+        GovernorPolicy {
+            hold_at: self.hold_at,
+            downgrade_at: self.downgrade_at,
+            downgrade_to: self.downgrade_to.clone(),
+            horizon: i64::from(self.horizon_minutes) * MINUTE,
+        }
+    }
 }
 
 /// The `[worktree]` section: where job worktrees live and what they get.
@@ -189,6 +241,7 @@ impl Default for Settings {
             pricing: PriceTable::builtin(),
             ui: UiSettings::default(),
             worktree: WorktreeSettings::default(),
+            governor: GovernorSettings::default(),
         }
     }
 }
@@ -313,6 +366,13 @@ mod tests {
         );
         assert_eq!((s.ui.icons.as_str(), s.ui.gaps, s.ui.fps), ("ascii", 1, 10));
         assert!(s.ui.splash && !s.ui.low_power && s.ui.layouts.is_empty());
+        let g = &s.governor;
+        assert!(g.enabled && g.budget_line);
+        assert_eq!(
+            (g.hold_at, g.battery_concurrency, g.max_job_usd),
+            (0.97, 2, None)
+        );
+        assert_eq!(g.policy(), GovernorPolicy::default());
     }
 
     #[test]

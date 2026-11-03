@@ -197,6 +197,21 @@ fn stats_line(t: &Theme, s: QueueStats, approvals: usize, routing: usize) -> Lin
         ),
         Style::new().fg(t.muted),
     ));
+    if s.deferred > 0 {
+        spans.push(Span::styled(
+            format!("deferred {} · ", s.deferred),
+            Style::new().fg(t.warn),
+        ));
+    }
+    if s.awaiting_reset > 0 {
+        spans.push(Span::styled(
+            format!("awaiting reset {} · ", s.awaiting_reset),
+            Style::new().fg(t.warn),
+        ));
+    }
+    if s.on_battery {
+        spans.push(Span::styled("battery · ", Style::new().fg(t.muted)));
+    }
     if s.ram_low {
         spans.push(Span::styled(
             format!("RAM free {ram} (low) "),

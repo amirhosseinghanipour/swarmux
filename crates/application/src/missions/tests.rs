@@ -299,6 +299,10 @@ fn launch_compiles_a_job_and_its_gate() {
     assert_eq!((m.state, m.job), (MissionState::Queued, Some(job)));
     let req = f.runner.request(0);
     assert_eq!(req.session_id, f.session.id);
+    // Of the $2.00 budget the job may spend plan and implement shares
+    // (70%); verify and review stay reserved.
+    let cap = req.max_budget_usd.unwrap();
+    assert!((cap - 1.4).abs() < 1e-9, "{cap}");
     assert!(
         req.prompt.contains("- `cargo test -p search`"),
         "{}",

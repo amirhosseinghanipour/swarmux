@@ -468,19 +468,65 @@ impl AgentCatalog for FakeAgentCatalog {
     }
 }
 
-/// Reports whatever free memory the test sets (unknown by default).
+/// Reports whatever free memory and power source the test sets (unknown by default).
 #[derive(Default)]
-pub struct FakeMonitor(Cell<Option<u64>>);
+pub struct FakeMonitor(Cell<Option<u64>>, Cell<Option<bool>>);
 
 impl FakeMonitor {
     pub fn set(&self, free: Option<u64>) {
         self.0.set(free);
+    }
+
+    pub fn set_battery(&self, on_battery: Option<bool>) {
+        self.1.set(on_battery);
     }
 }
 
 impl SystemMonitor for FakeMonitor {
     fn free_memory_bytes(&self) -> Option<u64> {
         self.0.get()
+    }
+
+    fn on_battery(&self) -> Option<bool> {
+        self.1.get()
+    }
+}
+
+/// Window readings the test sets.
+#[derive(Default)]
+pub struct FakeUsageProbe(RefCell<Vec<swarmux_domain::telemetry::LimitState>>);
+
+impl FakeUsageProbe {
+    pub fn set(&self, windows: Vec<swarmux_domain::telemetry::LimitState>) {
+        *self.0.borrow_mut() = windows;
+    }
+}
+
+impl crate::governor::UsageProbe for FakeUsageProbe {
+    fn windows(&self) -> Vec<swarmux_domain::telemetry::LimitState> {
+        self.0.borrow().clone()
+    }
+}
+
+/// Pending resumes kept in memory.
+#[derive(Default)]
+pub struct InMemoryResumeBook(RefCell<Vec<crate::governor::PendingResume>>);
+
+impl crate::governor::ResumeBook for InMemoryResumeBook {
+    fn save(&self, resume: &crate::governor::PendingResume) -> AppResult<()> {
+        let mut rows = self.0.borrow_mut();
+        rows.retain(|r| r.job != resume.job);
+        rows.push(resume.clone());
+        Ok(())
+    }
+
+    fn remove(&self, job: JobId) -> AppResult<()> {
+        self.0.borrow_mut().retain(|r| r.job != job);
+        Ok(())
+    }
+
+    fn pending(&self) -> AppResult<Vec<crate::governor::PendingResume>> {
+        Ok(self.0.borrow().clone())
     }
 }
 

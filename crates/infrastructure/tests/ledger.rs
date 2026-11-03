@@ -144,6 +144,7 @@ fn existing_database_starts_its_ledger_at_genesis() {
         "DROP TRIGGER ledger_no_update; DROP TRIGGER ledger_no_delete;
          DROP TABLE ledger;
          DROP TABLE evidence;
+         DROP TABLE pending_resumes;
          DROP TABLE missions;
          DROP TABLE checkpoints; DROP TABLE worktrees;
          ALTER TABLE sessions DROP COLUMN worktree;

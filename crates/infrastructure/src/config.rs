@@ -44,6 +44,7 @@ struct RawConfig {
     telemetry: Option<crate::config_telemetry::RawTelemetry>,
     pricing: Option<crate::config_telemetry::RawPricing>,
     worktree: Option<crate::config_worktree::RawWorktree>,
+    governor: Option<crate::config_governor::RawGovernor>,
     theme: Option<String>,
     layout: Option<String>,
     icons: Option<String>,
@@ -165,6 +166,9 @@ pub fn parse_settings(text: &str, path: &Path) -> Result<Settings, ConfigError> 
     }
     if let Some(worktree) = raw.worktree {
         settings.worktree = crate::config_worktree::parse_worktree(worktree, text, path)?;
+    }
+    if let Some(governor) = raw.governor {
+        settings.governor = crate::config_governor::parse_governor(governor, text, path)?;
     }
     let ui = RawUi {
         theme: raw.theme,
@@ -635,6 +639,73 @@ api_key = \"sk-SECRET-123\"",
         assert_eq!(e.line, Some(3));
         assert!(e.message.contains("swarmux jev set-key"), "{e}");
         assert!(!e.to_string().contains("SECRET"), "{e}");
+    }
+
+    #[test]
+    fn governor_section_overrides_and_is_checked() {
+        let s = parse(
+            "[governor]
+enabled = true
+hold_at = 0.95
+downgrade_at = 0.8
+downgrade_to = \"haiku\"
+horizon_minutes = 45
+battery_concurrency = 1
+max_job_usd = 4.5
+budget_line = false
+",
+        )
+        .unwrap();
+        let g = &s.governor;
+        assert!(g.enabled && !g.budget_line);
+        assert_eq!((g.hold_at, g.downgrade_at), (0.95, 0.8));
+        assert_eq!(g.downgrade_to, "haiku");
+        assert_eq!((g.horizon_minutes, g.battery_concurrency), (45, 1));
+        assert_eq!(g.max_job_usd, Some(4.5));
+        assert_eq!(
+            parse("").unwrap().governor,
+            swarmux_application::GovernorSettings::default()
+        );
+        assert_eq!(
+            parse(
+                "[governor]
+hold_at = 0.97
+"
+            )
+            .unwrap()
+            .governor
+            .hold_at,
+            0.97
+        );
+        for bad in [
+            "[governor]
+hold_at = 97
+",
+            "[governor]
+hold_at = 0
+",
+            "[governor]
+downgrade_at = 1.5
+",
+            "[governor]
+downgrade_to = \"\"
+",
+            "[governor]
+horizon_minutes = 0
+",
+            "[governor]
+battery_concurrency = 0
+",
+            "[governor]
+max_job_usd = -1.0
+",
+            "[governor]
+unknown = 1
+",
+        ] {
+            let e = parse(bad).unwrap_err();
+            assert!(bad.contains("unknown") || e.line == Some(2), "{bad}: {e}");
+        }
     }
 
     #[test]

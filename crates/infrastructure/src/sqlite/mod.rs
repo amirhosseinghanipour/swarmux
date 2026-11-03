@@ -3,6 +3,7 @@
 mod consents;
 mod decisions;
 mod evidence;
+mod governor;
 mod jobs;
 mod ledger;
 mod missions;
@@ -225,10 +226,29 @@ CREATE TABLE evidence (
 CREATE INDEX evidence_job ON evidence(job_id);
 ";
 
+/// Jobs a usage limit stopped, resumed once their window resets.
+const SCHEMA_GOVERNOR: &str = "
+CREATE TABLE IF NOT EXISTS pending_resumes (
+    job_id INTEGER PRIMARY KEY,
+    resume_at INTEGER NOT NULL,
+    window TEXT NOT NULL
+);
+";
+
 /// Migrations in order; index + 1 is the resulting `user_version`.
 const MIGRATIONS: &[&str] = &[
-    SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6, SCHEMA_V7, SCHEMA_V8,
-    SCHEMA_V9, SCHEMA_V10, SCHEMA_V11,
+    SCHEMA_V1,
+    SCHEMA_V2,
+    SCHEMA_V3,
+    SCHEMA_V4,
+    SCHEMA_V5,
+    SCHEMA_V6,
+    SCHEMA_V7,
+    SCHEMA_V8,
+    SCHEMA_V9,
+    SCHEMA_V10,
+    SCHEMA_V11,
+    SCHEMA_GOVERNOR,
 ];
 
 /// Maps adapter errors into the application's error type.

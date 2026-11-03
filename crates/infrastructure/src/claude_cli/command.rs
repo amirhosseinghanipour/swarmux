@@ -42,13 +42,21 @@ pub fn build_args(req: &RunRequest) -> Vec<String> {
         // own `--settings` still apply.
         args.extend(["--setting-sources".into(), "project,local".into()]);
     }
+    push_budget(&mut args, req);
     args
+}
+
+/// `--max-budget-usd` when the run has a dollar cap.
+fn push_budget(args: &mut Vec<String>, req: &RunRequest) {
+    if let Some(usd) = req.max_budget_usd.filter(|u| u.is_finite() && *u > 0.0) {
+        args.extend(["--max-budget-usd".into(), format!("{usd:.2}")]);
+    }
 }
 
 /// A review run: read-only tools, no session file, none of the user's
 /// settings or MCP servers, and the reviewer's system prompt.
 fn review_args(req: &RunRequest) -> Vec<String> {
-    [
+    let mut args: Vec<String> = [
         "-p",
         "--output-format",
         "stream-json",
@@ -71,7 +79,9 @@ fn review_args(req: &RunRequest) -> Vec<String> {
         REVIEW_SYSTEM,
     ]
     .map(String::from)
-    .to_vec()
+    .to_vec();
+    push_budget(&mut args, req);
+    args
 }
 
 /// `claude` and its arguments as one line for display: long or JSON
@@ -121,6 +131,7 @@ mod tests {
             lean: false,
             review: false,
             env: Vec::new(),
+            max_budget_usd: None,
         }
     }
 
@@ -165,6 +176,28 @@ mod tests {
         assert!(has_pair(&args, "--model", "sonnet"));
         assert!(has_pair(&args, "--permission-mode", "default"));
         assert!(args.contains(&"--forward-subagent-text".to_string()));
+    }
+
+    #[test]
+    fn dollar_cap_becomes_max_budget_usd() {
+        assert!(!build_args(&req(false, false)).contains(&"--max-budget-usd".to_string()));
+        let capped = RunRequest {
+            max_budget_usd: Some(2.4),
+            ..req(false, false)
+        };
+        assert!(has_pair(&build_args(&capped), "--max-budget-usd", "2.40"));
+        let review = RunRequest {
+            review: true,
+            ..capped.clone()
+        };
+        assert!(has_pair(&build_args(&review), "--max-budget-usd", "2.40"));
+        for bad in [0.0, -1.0, f64::NAN] {
+            let none = RunRequest {
+                max_budget_usd: Some(bad),
+                ..req(false, false)
+            };
+            assert!(!build_args(&none).contains(&"--max-budget-usd".to_string()));
+        }
     }
 
     #[test]

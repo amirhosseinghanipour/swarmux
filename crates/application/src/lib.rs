@@ -9,6 +9,7 @@ mod decision;
 mod error;
 pub mod evidence;
 pub mod gate;
+pub mod governor;
 mod guard;
 mod history;
 pub mod hookbus;
@@ -39,6 +40,7 @@ pub use gate::{
     Checker, ExecutionLog, GateKeeper, GateRecord, GateService, GateSource, GateState, JobGates,
     LoadedGate, WriteFence, run_checks,
 };
+pub use governor::{Governor, PendingResume, ResumeBook, UsageProbe};
 pub use guard::{
     AlwaysAllowed, GuardReport, GuardService, GuardStats, PendingApproval, SharedPolicy,
 };
@@ -56,8 +58,8 @@ pub use prompts::{BUILTIN_VARIABLES, PromptService, RenderedPrompt};
 pub use routing::{ROUTE_PROMPT_MAX, RouteReport, Routed, RoutingService};
 pub use sessions::SessionService;
 pub use settings::{
-    GuardSettings, JevProvider, JevSettings, LayoutSettings, ReviewSettings, RowSettings, Settings,
-    TelemetrySettings, UiSettings, WorktreeSettings,
+    GovernorSettings, GuardSettings, JevProvider, JevSettings, LayoutSettings, ReviewSettings,
+    RowSettings, Settings, TelemetrySettings, UiSettings, WorktreeSettings,
 };
 pub use telemetry::{
     ActivityView, AgentsPoll, Battery, CacheView, CiRun, Collected, CombinedStatusline, Commit,

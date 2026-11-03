@@ -5,6 +5,7 @@ pub mod claude_cli;
 mod clock;
 pub mod config;
 pub mod config_edit;
+mod config_governor;
 mod config_telemetry;
 mod config_worktree;
 pub mod evidence;
