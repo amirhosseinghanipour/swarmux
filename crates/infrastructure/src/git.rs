@@ -26,19 +26,23 @@ impl Default for GitCli {
     }
 }
 
+/// A `git -C cwd` invocation: no shell, no console window, no stdin.
+pub(crate) fn git_command(bin: &Path, cwd: &Path) -> Command {
+    let mut cmd = Command::new(bin);
+    cmd.arg("-C").arg(cwd).stdin(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    cmd
+}
+
 impl Workspace for GitCli {
     fn git_diff(&self, cwd: &Path) -> AppResult<String> {
-        let mut cmd = Command::new(&self.bin);
-        cmd.arg("-C")
-            .arg(cwd)
-            .args(["diff", "--no-color", "--no-ext-diff"])
-            .stdin(Stdio::null())
+        let mut cmd = git_command(&self.bin, cwd);
+        cmd.args(["diff", "--no-color", "--no-ext-diff"])
             .stderr(Stdio::null());
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-        }
         let output = match cmd.output() {
             Ok(output) => output,
             // No git installed: same as no repository.

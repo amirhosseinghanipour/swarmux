@@ -43,6 +43,7 @@ struct RawConfig {
     review: Option<RawReview>,
     telemetry: Option<crate::config_telemetry::RawTelemetry>,
     pricing: Option<crate::config_telemetry::RawPricing>,
+    worktree: Option<crate::config_worktree::RawWorktree>,
     theme: Option<String>,
     layout: Option<String>,
     icons: Option<String>,
@@ -161,6 +162,9 @@ pub fn parse_settings(text: &str, path: &Path) -> Result<Settings, ConfigError> 
     }
     if let Some(pricing) = raw.pricing {
         settings.pricing = crate::config_telemetry::parse_pricing(pricing, text, path)?;
+    }
+    if let Some(worktree) = raw.worktree {
+        settings.worktree = crate::config_worktree::parse_worktree(worktree, text, path)?;
     }
     let ui = RawUi {
         theme: raw.theme,
@@ -406,6 +410,28 @@ mod tests {
 
     fn parse(text: &str) -> Result<Settings, ConfigError> {
         parse_settings(text, Path::new("config.toml"))
+    }
+
+    #[test]
+    fn worktree_section_overrides_and_is_checked() {
+        let s = parse(
+            "[worktree]\nroot = \"D:/wt\"\ncopy = [\".env\", \"config/*.local\"]\nport_base = 40000\nport_block = 10\nport_slots = 100\nstale_hours = 6\n",
+        )
+        .unwrap();
+        assert_eq!(s.worktree.root, Some(PathBuf::from("D:/wt")));
+        assert_eq!(s.worktree.copy, [".env", "config/*.local"]);
+        assert_eq!(s.worktree.ports.port_base(1), Some(40_010));
+        assert_eq!(s.worktree.stale_hours, 6);
+        for bad in [
+            "[worktree]\ncopy = [\"../secrets\"]\n",
+            "[worktree]\ncopy = [\"/etc/passwd\"]\n",
+            "[worktree]\nport_base = 80\n",
+            "[worktree]\nport_base = 65000\nport_block = 100\nport_slots = 50\n",
+            "[worktree]\nstale_hours = 0\n",
+            "[worktree]\nunknown = 1\n",
+        ] {
+            assert!(parse(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]
