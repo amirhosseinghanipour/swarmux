@@ -4,6 +4,7 @@
 pub mod anim;
 pub mod dashboard;
 pub mod editor;
+pub mod focus;
 pub mod grid;
 pub mod guard;
 pub mod history;
@@ -56,7 +57,7 @@ fn draw_screens(frame: &mut Frame, app: &App, t: &Theme) {
     ])
     .areas(frame.area());
 
-    let title = if app.screen == Screen::Dashboard {
+    let title = if app.screen == Screen::Dashboard && app.dashboard.classic {
         dashboard::header::title(app, &dashboard::View::of(app), t)
     } else {
         Line::from(vec![
@@ -73,7 +74,8 @@ fn draw_screens(frame: &mut Frame, app: &App, t: &Theme) {
 
     match app.screen {
         Screen::Mission => mission::render(frame, body, app),
-        Screen::Dashboard => dashboard::render(frame, body, app),
+        Screen::Dashboard if app.dashboard.classic => dashboard::render(frame, body, app),
+        Screen::Dashboard => focus::render(frame, body, app),
         Screen::Prompts => prompts::render(frame, body, app),
         Screen::Queue => queue::render(frame, body, app),
         Screen::History => history::render(frame, body, app),
@@ -119,6 +121,22 @@ fn draw_screens(frame: &mut Frame, app: &App, t: &Theme) {
     .areas(status);
     draw_status(frame, left, app, t);
     frame.render_widget(stats, right);
+}
+
+/// Rows the approval or consent overlay takes at the bottom of a body
+/// `body_height` rows tall.
+pub(crate) fn overlay_rows(app: &App, body_height: u16) -> u16 {
+    if app.guard.jev().is_some_and(|j| j.wants_consent()) {
+        guard::CONSENT_HEIGHT.min(body_height)
+    } else if app.guard.pending_count() > 0 {
+        if body_height < guard::COMPACT_BELOW {
+            1
+        } else {
+            guard::APPROVAL_HEIGHT.min(body_height)
+        }
+    } else {
+        0
+    }
 }
 
 /// A rounded panel border in the theme's border colour.
@@ -211,7 +229,7 @@ fn draw_tabs(frame: &mut Frame, area: Rect, app: &App, t: &Theme) {
     }
     let used = Line::from(spans.clone()).width();
     frame.render_widget(Line::from(spans), area);
-    if app.screen == Screen::Dashboard {
+    if app.screen == Screen::Dashboard && app.dashboard.classic {
         let look = &app.look;
         let right = Line::from(vec![
             Span::styled(
@@ -289,7 +307,7 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App, t: &Theme) {
                 ),
                 Span::styled(format!(" {toast}"), Style::new().fg(t.border_focus)),
             ]),
-            _ if app.screen == Screen::Dashboard => {
+            _ if app.screen == Screen::Dashboard && app.dashboard.classic => {
                 dashboard::status::line(app, &dashboard::View::of(app), t)
             }
             _ => Line::from(Span::styled(hints(app), Style::new().fg(t.muted))),
@@ -303,7 +321,12 @@ pub(crate) fn hints(app: &App) -> &'static str {
         return " tab next field · ctrl+s save · esc cancel";
     }
     match app.screen {
-        Screen::Mission => " ↑↓ select · ⏎ open · y/n/a answer · p/P prompt · x dismiss · q quit",
+        Screen::Mission => {
+            " ↑↓ select · tab inbox/wall · ⏎ open · y/n/a answer · p/P prompt · x dismiss · q quit"
+        }
+        Screen::Dashboard if !app.dashboard.classic => {
+            " ↑↓ scroll · d diff · t open session · p prompt · v review · D classic · q quit"
+        }
         Screen::Dashboard => {
             " p prompt · P route · v review · ↑↓ session · t theme · L layout · tab focus · q quit"
         }

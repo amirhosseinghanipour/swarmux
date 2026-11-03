@@ -263,6 +263,11 @@ impl JobService {
         self
     }
 
+    /// The uncommitted changes in `cwd`, when a workspace is configured.
+    pub fn working_diff(&self, cwd: &std::path::Path) -> AppResult<Option<String>> {
+        self.workspace.as_ref().map(|w| w.git_diff(cwd)).transpose()
+    }
+
     /// Whether newly dispatched jobs get a review.
     pub fn review_next(&self) -> bool {
         self.review.enabled && self.workspace.is_some()

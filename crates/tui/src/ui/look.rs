@@ -70,6 +70,11 @@ pub enum Icon {
     StateIdle,
     /// Where a window's time has got to on a gauge.
     Pace,
+    /// Focus: a tool call, a checkpoint, a human event, "you were here".
+    Call,
+    Checkpoint,
+    Human,
+    Here,
 }
 
 impl IconSet {
@@ -125,6 +130,10 @@ impl IconSet {
                 StateErr => "x",
                 StateIdle => "-",
                 Pace => "|",
+                Call => ">",
+                Checkpoint => "o",
+                Human => "^",
+                Here => ">",
             },
             IconSet::Unicode => match icon {
                 Lead => "▸",
@@ -166,6 +175,10 @@ impl IconSet {
                 StateErr => "✗",
                 StateIdle => "○",
                 Pace => "┃",
+                Call => "▸",
+                Checkpoint => "◇",
+                Human => "▲",
+                Here => "▶",
             },
             IconSet::Nerd => match icon {
                 Lead => "\u{f06a9}",      // md-robot
@@ -207,6 +220,10 @@ impl IconSet {
                 StateErr => "\u{f00d}",   // fa-times
                 StateIdle => "\u{f10c}",  // fa-circle_o
                 Pace => "┃",
+                Call => "\u{f054}",       // fa-chevron_right
+                Checkpoint => "\u{f10c}", // fa-circle_o
+                Human => "\u{f007}",      // fa-user
+                Here => "\u{f0da}",       // fa-caret_right
             },
         }
     }

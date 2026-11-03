@@ -19,7 +19,7 @@ pub(crate) mod tests;
 use ratatui::{Frame, layout::Rect, text::Line, widgets::Paragraph};
 use swarmux_domain::JobProgress;
 
-pub use parts::{dim, fit, label, text};
+pub use parts::{buckets, dim, fit, label, text};
 
 use crate::app::App;
 use crate::theme::Theme;

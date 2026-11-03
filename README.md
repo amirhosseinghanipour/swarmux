@@ -125,15 +125,47 @@ pull requests, MCP servers, system load and a 12-week activity calendar. From
 
 | Key | Does |
 | --- | --- |
-| `Up` / `Down` | select an item |
-| `Enter` | open the item's job in Focus |
+| `Up` / `Down` | select an item (or a wall card, after `Tab`) |
+| `Tab` | switch the arrow keys between the inbox and the wall |
+| `Enter` | open the selected item's or card's job in Focus |
 | `y` / `n` / `a` | approve, deny or always allow the selected held tool call (from any other screen they answer the oldest) |
 | `x` | dismiss an item (held tool calls stay until answered) |
 
-## Dashboard (screen 2, Focus)
+## Focus (screen 2)
 
-Screen 2 follows the job you last sent (or the one you open from the queue or
-history). From top to bottom:
+Screen 2 is one agent in detail: the job you last sent, or the one you open
+with `Enter` from Mission control, the queue or history. It opens with the same
+sigil and colour the card had. From top to bottom:
+
+- **Header**: session, state, the prompt, model, permission mode, folder,
+  time, cost and context.
+- **Situation**: `doing`, `because`, `next`, how `sure` swarmux is and what it
+  is `unsure` about. All of it comes from what swarmux saw: the last tool
+  call, the todo list, the done-gate, the review, loop stops and failed tool
+  calls. Nothing is guessed by a model.
+- **Gate**: the done-gate's checks and the review as chips, then the
+  checkpoints (empty until the job has any) and the recovery trail (loop-breaker
+  stops).
+- **Timeline**: one row per actor, with your own prompts and answers marked.
+- **Action stream**: tool calls as a tree with their results, subagents
+  indented, diff lines tinted, and a "you were here" line where you last looked.
+- **Answer**: the final report, formatted; `d` swaps in the working-tree diff.
+- **Reviewer**: only when the job has a review. Windows from 220x60 add the
+  agent's plan and its subagents.
+
+| Key | Does |
+| --- | --- |
+| `Up` / `Down`, `PgUp` / `PgDn`, `Home` / `End` | scroll the stream (`End` follows the newest row) |
+| `J` / `K` | scroll the answer or diff |
+| `d` | working-tree diff in place of the answer |
+| `t` | open the session in a new Windows Terminal tab (`wt -w 0 nt -d <folder> claude --resume <id>`) |
+| `p` / `P` | prompt the session / let swarmux pick one |
+| `v` | review the next jobs |
+| `D` | the classic panel grid below, and back |
+
+## Classic dashboard (`D` on Focus)
+
+The panel grid earlier versions opened with. From top to bottom:
 
 - **Header**: which model orchestrates and which audits, a legend of the
   actors in this job (Haiku shows its output tokens per second), the exact
@@ -176,7 +208,7 @@ the Guard), so your terminal's colour scheme never shows through.
 
 | Key | Does |
 | --- | --- |
-| `t` | next theme: `reference`, `catppuccin-mocha`, `tokyo-night`, `gruvbox-dark`, `rose-pine`, `nord`, `dracula` |
+| `t` | next theme (on Focus `t` opens the session in a terminal tab instead): `reference`, `catppuccin-mocha`, `tokyo-night`, `gruvbox-dark`, `rose-pine`, `nord`, `dracula` |
 | `L` | next layout: `command` (the dashboard above), `btop` (a dense grid of small panels), `minimal` (lead and log), then yours |
 | `Tab` / `Shift+Tab` | move the focus highlight between panels (`Esc` clears it) |
 

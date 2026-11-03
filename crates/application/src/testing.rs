@@ -1161,3 +1161,32 @@ impl crate::telemetry::StatuslineFeed for FakeStatuslineFeed {
         std::mem::take(&mut *self.queue.borrow_mut())
     }
 }
+
+/// Records the sessions it was asked to open; fails when told to.
+#[derive(Default)]
+pub struct FakeTerminal {
+    opened: RefCell<Vec<(PathBuf, String)>>,
+    fail: Cell<bool>,
+}
+
+impl FakeTerminal {
+    pub fn opened(&self) -> Vec<(PathBuf, String)> {
+        self.opened.borrow().clone()
+    }
+
+    pub fn fail_next(&self) {
+        self.fail.set(true);
+    }
+}
+
+impl crate::SessionTerminal for FakeTerminal {
+    fn open_resume(&self, cwd: &Path, session: &str) -> AppResult<()> {
+        if self.fail.replace(false) {
+            return Err(AppError::Workspace("no terminal".into()));
+        }
+        self.opened
+            .borrow_mut()
+            .push((cwd.to_path_buf(), session.to_string()));
+        Ok(())
+    }
+}

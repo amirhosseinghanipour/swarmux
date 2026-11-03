@@ -12,13 +12,14 @@ use swarmux_application::ports::Clock;
 use swarmux_application::{
     AppError, AppResult, GateService, GuardService, HistoryService, HookBus, JobService,
     PendingApproval, PromptService, QueueEntry, QueueStats, RoutingService, SessionService,
-    TelemetryService, TelemetrySettings, UiSettings,
+    SessionTerminal, TelemetryService, TelemetrySettings, UiSettings,
 };
 use swarmux_domain::{AttentionKind, JobId, JobProgress, Millis, PromptId, Session, SessionId};
 
 use crate::dashboard::DashboardState;
+use crate::focus::{Checkpoints, FocusState};
 use crate::history::{HistoryAction, HistoryScreen};
-use crate::mission::{Cadence, MissionState};
+use crate::mission::{Cadence, MissionState, Pane, Tile, wall_tiles};
 use crate::prompts::{FormAction, PendingDispatch, PromptForm, PromptsScreen};
 use crate::queue::{QueueAction, QueueScreen};
 use crate::routing::RoutePayload;
@@ -105,6 +106,8 @@ pub struct App {
     pub queue: QueueScreen,
     pub history: HistoryScreen,
     pub dashboard: DashboardState,
+    /// Scroll, human events and the "you were here" spot of Focus.
+    pub focus_state: FocusState,
     /// Mission control's inbox, change log and feeds.
     pub mission: MissionState,
     clock: Option<Rc<dyn Clock>>,
@@ -133,6 +136,8 @@ pub struct App {
     hooks: Option<HookBus>,
     /// The done-gate's verdicts.
     gate: Option<GateService>,
+    /// Opens a session in a terminal tab of its own.
+    terminal: Option<Rc<dyn SessionTerminal>>,
 }
 
 /// What the composition root knows at start-up.
@@ -148,6 +153,8 @@ pub struct Launch {
 
 /// How long the splash stays up, in milliseconds.
 const SPLASH_MS: u64 = 1500;
+/// Lines of diff Focus keeps.
+const DIFF_LINES: usize = 2000;
 /// How long a toast stays up, in milliseconds.
 const TOAST_MS: u64 = 2500;
 
@@ -175,6 +182,7 @@ impl App {
             queue: QueueScreen::default(),
             history: HistoryScreen::default(),
             dashboard: DashboardState::default(),
+            focus_state: FocusState::default(),
             mission: MissionState::default(),
             clock: None,
             session_service,
@@ -190,6 +198,7 @@ impl App {
             telemetry: Telemetry::default(),
             hooks: None,
             gate: None,
+            terminal: None,
             focus: None,
             toast: None,
             splash: SplashInfo::default(),
@@ -236,6 +245,12 @@ impl App {
 
     pub(crate) fn set_gate(&mut self, gate: GateService) {
         self.gate = Some(gate);
+    }
+
+    /// Lets `t` on Focus open the session in a new terminal tab.
+    pub fn with_terminal(mut self, terminal: Rc<dyn SessionTerminal>) -> App {
+        self.terminal = Some(terminal);
+        self
     }
 
     /// Time for ages and countdowns; without it the screens show no ages.
@@ -356,6 +371,10 @@ impl App {
             self.refresh_history();
         }
         self.refresh_mission();
+        let on_focus = (self.screen == Screen::Dashboard && !self.dashboard.classic)
+            .then(|| self.current_job().map(|j| (j.job_id, j.log.len())))
+            .flatten();
+        self.focus_state.observe(on_focus, self.frame);
     }
 
     pub fn selected_session(&self) -> Option<&Session> {
@@ -506,6 +525,10 @@ impl App {
                     self.refresh_history();
                 }
             }
+            KeyCode::Char('t') if self.on_focus() => {
+                let result = self.open_terminal();
+                self.show(result);
+            }
             KeyCode::Char('t') => {
                 let name = self.look.next_theme().name;
                 self.show_toast(format!("theme · {name}"));
@@ -513,6 +536,22 @@ impl App {
             KeyCode::Char('L') => {
                 let name = self.look.next_layout().name.clone();
                 self.show_toast(format!("layout · {name}"));
+            }
+            KeyCode::Tab | KeyCode::BackTab if self.screen == Screen::Mission => {
+                self.mission.pane = match self.mission.pane {
+                    Pane::Inbox => Pane::Wall,
+                    Pane::Wall => Pane::Inbox,
+                };
+            }
+            KeyCode::Up | KeyCode::Left | KeyCode::Char('k' | 'h')
+                if self.screen == Screen::Mission && self.mission.pane == Pane::Wall =>
+            {
+                self.move_wall(-1);
+            }
+            KeyCode::Down | KeyCode::Right | KeyCode::Char('j' | 'l')
+                if self.screen == Screen::Mission && self.mission.pane == Pane::Wall =>
+            {
+                self.move_wall(1);
             }
             KeyCode::Up | KeyCode::Char('k') if self.screen == Screen::Mission => {
                 self.mission.move_selection(-1);
@@ -529,7 +568,28 @@ impl App {
                 let result = self.open_selected();
                 self.show(result);
             }
-            KeyCode::Tab | KeyCode::BackTab if self.screen == Screen::Dashboard => {
+            KeyCode::Up | KeyCode::Char('k') if self.on_focus() => self.focus_state.scroll_by(1),
+            KeyCode::Down | KeyCode::Char('j') if self.on_focus() => {
+                self.focus_state.scroll_by(-1);
+            }
+            KeyCode::Char('J') if self.on_focus() => self.focus_state.scroll_answer(3),
+            KeyCode::Char('K') if self.on_focus() => self.focus_state.scroll_answer(-3),
+            KeyCode::PageUp if self.on_focus() => self.focus_state.scroll_by(10),
+            KeyCode::PageDown if self.on_focus() => self.focus_state.scroll_by(-10),
+            KeyCode::Home if self.on_focus() => self.focus_state.scroll_by(isize::MAX),
+            KeyCode::End | KeyCode::Char('G') if self.on_focus() => self.focus_state.scroll = 0,
+            KeyCode::Char('d') if self.on_focus() => {
+                let result = self.toggle_diff();
+                self.show(result);
+            }
+            KeyCode::Char(c @ ('[' | ']')) if self.on_focus() => self.scrub_checkpoint(c == ']'),
+            KeyCode::Char('D') if self.screen == Screen::Dashboard => {
+                self.dashboard.classic = !self.dashboard.classic;
+                self.focus = None;
+            }
+            KeyCode::Tab | KeyCode::BackTab
+                if self.screen == Screen::Dashboard && self.dashboard.classic =>
+            {
                 self.cycle_focus(key.code == KeyCode::Tab);
             }
             KeyCode::Esc if self.focus.is_some() => self.focus = None,
@@ -594,6 +654,14 @@ impl App {
 
     /// Makes the session of the selected inbox item the one prompts go to.
     fn select_inbox_session(&mut self) {
+        if self.mission.pane == Pane::Wall {
+            if let Some(tile) = self.wall().into_iter().nth(self.mission.wall_at)
+                && let Some(at) = self.sessions.iter().position(|s| s.id == tile.session)
+            {
+                self.select_index(at);
+            }
+            return;
+        }
         let Some(session) = self.mission.selected_item().and_then(|i| i.session) else {
             return;
         };
@@ -605,12 +673,117 @@ impl App {
     /// Opens the job of the selected inbox item in Focus and marks what it
     /// left in the inbox as read.
     fn open_selected(&mut self) -> AppResult<()> {
-        let Some(job) = self.mission.selected_item().and_then(|i| i.job) else {
+        let job = if self.mission.pane == Pane::Wall {
+            let tile = self.wall().into_iter().nth(self.mission.wall_at);
+            if tile.as_ref().is_some_and(|t| t.job.is_none()) {
+                self.notice = Some("that session has not run anything yet".into());
+            }
+            tile.and_then(|t| t.job)
+        } else {
+            self.mission.selected_item().and_then(|i| i.job)
+        };
+        let Some(job) = job else {
             return Ok(());
         };
         self.view(job)?;
         self.mission.acknowledge_job(job);
         Ok(())
+    }
+
+    /// Focus is showing (not the classic panel grid).
+    fn on_focus(&self) -> bool {
+        self.screen == Screen::Dashboard && !self.dashboard.classic
+    }
+
+    /// The wall's tiles in their fixed order.
+    pub(crate) fn wall(&self) -> Vec<Tile> {
+        let held: Vec<_> = self
+            .guard
+            .approvals()
+            .iter()
+            .filter_map(|a| a.request.job_id)
+            .collect();
+        wall_tiles(
+            &self.sessions,
+            &self.mission.facts,
+            &self.mission.gates,
+            &held,
+            self.mission.usage(),
+            self.now(),
+        )
+    }
+
+    fn move_wall(&mut self, delta: isize) {
+        let last = self.sessions.len().saturating_sub(1);
+        self.mission.wall_at = self.mission.wall_at.saturating_add_signed(delta).min(last);
+        self.select_inbox_session();
+    }
+
+    /// The session of the job Focus shows.
+    fn focus_session(&self) -> Option<&Session> {
+        let job = self.current_job()?;
+        let id = self
+            .mission
+            .facts
+            .iter()
+            .find(|f| f.job_id == job.job_id)
+            .map(|f| f.session_id);
+        self.sessions
+            .iter()
+            .find(|s| Some(s.id) == id || (id.is_none() && s.name == job.session_name))
+    }
+
+    /// `t`: the session, resumed in a new terminal tab.
+    fn open_terminal(&mut self) -> AppResult<()> {
+        let Some(terminal) = self.terminal.clone() else {
+            self.notice = Some("no terminal launcher is set up".into());
+            return Ok(());
+        };
+        let Some(session) = self.focus_session().cloned() else {
+            self.notice = Some("no session to open".into());
+            return Ok(());
+        };
+        terminal.open_resume(&session.cwd, &session.id.to_string())?;
+        self.notice = Some(format!("opened {} in a new terminal tab", session.name));
+        Ok(())
+    }
+
+    /// `d`: the uncommitted changes in place of the answer, and back.
+    fn toggle_diff(&mut self) -> AppResult<()> {
+        if self.focus_state.diff.take().is_some() {
+            return Ok(());
+        }
+        let Some(cwd) = self.focus_session().map(|s| s.cwd.clone()) else {
+            return Ok(());
+        };
+        match self.jobs.working_diff(&cwd)? {
+            None => self.notice = Some("diffs need a git workspace".into()),
+            Some(d) if d.trim().is_empty() => self.notice = Some("no uncommitted changes".into()),
+            Some(d) => {
+                self.focus_state.diff =
+                    Some(d.lines().take(DIFF_LINES).map(str::to_string).collect());
+            }
+        }
+        Ok(())
+    }
+
+    /// `[` and `]`: step through the job's checkpoints.
+    fn scrub_checkpoint(&mut self, forward: bool) {
+        let Some(job) = self.current_job().map(|j| j.job_id) else {
+            return;
+        };
+        let count = Checkpoints::of(job).dots.len();
+        if count == 0 {
+            self.notice = Some("no checkpoints on this job yet".into());
+            return;
+        }
+        let at = self.focus_state.checkpoint;
+        self.focus_state.checkpoint = Some(match (at, forward) {
+            (None, true) => 0,
+            (None, false) => count - 1,
+            (Some(i), true) => (i + 1).min(count - 1),
+            (Some(i), false) => i.saturating_sub(1),
+        });
     }
 
     /// Moves the focus highlight to the next (or previous) boxed panel of
@@ -639,9 +812,13 @@ impl App {
 
     /// `y` approves, `n` denies, `a` always allows the oldest held tool call.
     fn answer_approval(&mut self, key: char) -> AppResult<()> {
-        let Some(id) = self.approval_target().map(|a| a.request.request_id) else {
+        let Some(target) = self.approval_target() else {
             return Ok(());
         };
+        let id = target.request.request_id;
+        if let Some(job) = target.request.job_id {
+            self.focus_state.note_human(job, self.now());
+        }
         match key {
             'y' => self.guard.approve(id),
             'n' => self.guard.deny(id),
@@ -702,16 +879,24 @@ impl App {
     fn view(&mut self, job: JobId) -> AppResult<()> {
         // A review job is shown as part of the job it audits.
         let mut job = self.jobs.subject_of(job);
+        let mut told = None;
         let replay = match self.jobs.progress(job) {
             Some(_) => None,
             None => {
-                if let Some(of) = self.history_service.detail(job)?.summary.review_of {
+                let mut detail = self.history_service.detail(job)?;
+                if let Some(of) = detail.summary.review_of {
                     job = of;
+                    detail = self.history_service.detail(job)?;
                 }
+                told = Some((detail.summary.prompt, detail.result.map(|r| r.text)));
                 Some(self.history_service.replay_with_review(job)?)
             }
         };
         self.dashboard.follow(job, replay);
+        if let Some((prompt, answer)) = told {
+            self.dashboard.replay_prompt = Some(prompt);
+            self.dashboard.replay_answer = answer;
+        }
         self.screen = Screen::Dashboard;
         Ok(())
     }
@@ -822,6 +1007,7 @@ impl App {
             self.prompt_service
                 .render(pending.prompt_id, pending.session_id, &pending.values)?;
         let job = self.jobs.dispatch_template(pending.session_id, &rendered)?;
+        self.focus_state.note_human(job, self.now());
         self.dashboard.follow(job, None);
         let session = self
             .sessions
@@ -870,6 +1056,7 @@ impl App {
             .cloned()
             .ok_or(AppError::SessionNotFound)?;
         let job = self.jobs.dispatch(session.id, prompt)?;
+        self.focus_state.note_human(job, self.now());
         self.dashboard.follow(job, None);
         self.refresh_sessions(Some(&session));
         Ok(())
@@ -906,8 +1093,8 @@ pub(crate) mod tests_support {
     use swarmux_application::ports::PromptRepository;
     use swarmux_application::testing::{
         FakeAdvisor, FakeAgentCatalog, FakeConsents, FakeDecisionRepo, FakeHookInbox, FakeMonitor,
-        FakeRouter, FakeRuleWriter, FakeRunner, FakeTelemetry, FakeWorkspace, FixedClock,
-        InMemoryStore,
+        FakeRouter, FakeRuleWriter, FakeRunner, FakeTelemetry, FakeTerminal, FakeWorkspace,
+        FixedClock, InMemoryStore,
     };
     use swarmux_application::{
         GuardService, HistoryService, Jev, JobService, PromptService, ReviewSettings,
@@ -930,6 +1117,8 @@ pub(crate) mod tests_support {
         pub catalog: Rc<FakeAgentCatalog>,
         /// What Mission control's telemetry strip reads.
         pub feed: Rc<FakeTelemetry>,
+        /// Records what `t` on Focus opens.
+        pub terminal: Rc<FakeTerminal>,
         /// Set by [`test_app_with_jev`].
         pub advisor: Option<Rc<FakeAdvisor>>,
     }
@@ -981,6 +1170,7 @@ pub(crate) mod tests_support {
         )
         .with_router(router.clone());
         let feed = Rc::new(FakeTelemetry::default());
+        let terminal = Rc::new(FakeTerminal::default());
         let service = TelemetryService::new(feed.clone(), store.clone(), clock.clone());
         let mut advisor = None;
         if let Some(consented) = jev {
@@ -994,18 +1184,23 @@ pub(crate) mod tests_support {
             routing = routing.with_jev(jev);
             advisor = Some(fake);
         }
+        let mut app = App::new(
+            sessions,
+            jobs,
+            prompts,
+            history,
+            guard,
+            routing,
+            "/work".into(),
+        )
+        .with_clock(clock.clone())
+        .with_terminal(terminal.clone())
+        .with_telemetry_feed(service, &TelemetrySettings::default());
+        // The panel-grid tests predate Focus; they ask for the classic view.
+        // Focus tests turn it off with `focus_view`.
+        app.dashboard.classic = true;
         TestApp {
-            app: App::new(
-                sessions,
-                jobs,
-                prompts,
-                history,
-                guard,
-                routing,
-                "/work".into(),
-            )
-            .with_clock(clock.clone())
-            .with_telemetry_feed(service, &TelemetrySettings::default()),
+            app,
             store,
             runner,
             clock,
@@ -1016,6 +1211,7 @@ pub(crate) mod tests_support {
             router,
             catalog,
             feed,
+            terminal,
             advisor,
         }
     }

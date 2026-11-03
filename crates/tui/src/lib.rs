@@ -5,6 +5,7 @@
 
 mod app;
 mod dashboard;
+mod focus;
 mod history;
 mod mission;
 mod prompts;

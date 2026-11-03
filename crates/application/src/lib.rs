@@ -20,6 +20,7 @@ mod routing;
 mod sessions;
 mod settings;
 mod telemetry;
+mod terminal;
 #[cfg(any(test, feature = "test-support"))]
 pub mod testing;
 pub mod worktree;
@@ -55,6 +56,7 @@ pub use telemetry::{
     LimitView, ProcessStat, PullRequest, StatuslineFeed, StatuslineView, SystemStats, TICKER_LEN,
     TOP_FILES, TelemetryService, TelemetrySnapshot, TruthBoard,
 };
+pub use terminal::SessionTerminal;
 pub use worktree::{
     AddWorktree, Added, GcReport, Prepared, Removed, WorktreeService, WorktreeStore, WorktreeView,
     Worktrees,

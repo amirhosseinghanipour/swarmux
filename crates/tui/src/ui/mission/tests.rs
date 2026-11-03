@@ -93,7 +93,7 @@ fn limit(window: &str, used: f64, resets_in: i64, now: i64) -> AgentEvent {
 
 /// Four sessions: one with a risky held call, one with an ordinary held
 /// call, one finished, one failed; limits, spend and machine readings.
-pub(super) fn scenario() -> TestApp {
+pub(crate) fn scenario() -> TestApp {
     let mut t = test_app();
     t.with_session("demo-shop");
     t.send("refactor the checkout flow to use the new payment client");

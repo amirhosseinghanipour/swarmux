@@ -24,7 +24,8 @@ use swarmux_application::{
 use swarmux_infrastructure::hook::{self, HookServer, Responders};
 use swarmux_infrastructure::{
     ClaudeCli, ConfigRuleWriter, FsAgentCatalog, FsGateSource, GitCli, GuardHook, HaikuRouter,
-    Paths, ProcessChecker, SqliteLedger, SqliteStore, SysinfoMonitor, SystemClock, load_settings,
+    Paths, ProcessChecker, SqliteLedger, SqliteStore, SysinfoMonitor, SystemClock, WindowsTerminal,
+    load_settings,
 };
 use swarmux_tui::{App, Launch};
 
@@ -338,6 +339,7 @@ fn run_tui(no_splash: bool) -> anyhow::Result<()> {
     .with_clock(Rc::new(SystemClock))
     .with_hook_bus(hook_bus)
     .with_gate(gate)
+    .with_terminal(Rc::new(WindowsTerminal::new(doctor::claude_bin())))
     .with_telemetry_feed(telemetry, &settings.telemetry)
     .with_look(
         &settings.ui,
