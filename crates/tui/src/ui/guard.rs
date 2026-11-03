@@ -15,6 +15,8 @@ use crate::theme::Theme;
 
 /// Height of the approval overlay, borders included.
 pub const APPROVAL_HEIGHT: u16 = 6;
+/// Below this body height the approval is one line, so the wall stays visible.
+pub const COMPACT_BELOW: u16 = 24;
 /// Height of the JEV consent overlay, borders included.
 pub const CONSENT_HEIGHT: u16 = 9;
 /// Cells in a confidence bar.
@@ -143,6 +145,50 @@ pub(crate) fn decision_line<'a>(d: &'a DecisionRecord, t: &Theme) -> Line<'a> {
             Style::new().fg(t.muted),
         ),
     ])
+}
+
+/// The held tool call as one line at the bottom of a small window:
+/// `Bash make deploy · #3 · 95 s   y n a  +1`.
+pub fn render_approval_bar(frame: &mut Frame, area: Rect, app: &App) {
+    let t = &app.look.theme;
+    let Some(first) = app.approval_target() else {
+        return;
+    };
+    let r = &first.request;
+    let more = match app.guard.pending_count() {
+        0 | 1 => String::new(),
+        n => format!(" +{}", n - 1),
+    };
+    let job = r.job_id.map_or(String::new(), |id| format!(" · #{id}"));
+    let tail = format!("{job} · {} s  ", first.secs_left);
+    let keys = format!("y n a{more}");
+    let what = if r.subject.is_empty() {
+        shorten(&r.input, 200)
+    } else {
+        shorten(&r.subject, 200)
+    };
+    let fixed =
+        1 + r.tool_name.chars().count() + 1 + tail.chars().count() + keys.chars().count() + 1;
+    let room = (area.width as usize).saturating_sub(fixed);
+    let what: String = if what.chars().count() > room {
+        let cut: String = what.chars().take(room.saturating_sub(1)).collect();
+        format!("{cut}…")
+    } else {
+        what
+    };
+    let bold = |c| Style::new().fg(c).add_modifier(Modifier::BOLD);
+    let line = Line::from(vec![
+        Span::styled(format!(" {} ", r.tool_name), bold(t.lead)),
+        Span::raw(what),
+        Span::styled(tail, Style::new().fg(t.muted)),
+        Span::styled(keys, bold(t.ok)),
+        Span::raw(" "),
+    ]);
+    frame.render_widget(Clear, area);
+    frame.render_widget(
+        Paragraph::new(line).style(Style::new().bg(t.panel_bg)),
+        area,
+    );
 }
 
 /// The oldest held tool call, its job and how long until it is denied.

@@ -842,3 +842,84 @@ fn mission_render_cost() {
         times[times.len() - 1]
     );
 }
+
+#[test]
+fn p_on_mission_prompts_the_session_of_the_selected_item() {
+    let mut t = test_app();
+    t.with_session("alpha");
+    t.send("one");
+    init(&t, 0, "sonnet");
+    finish(&t, 0, false, "all done");
+    t.with_session("beta");
+    t.app.update();
+    t.keys([KeyCode::Char('1')]);
+    let alpha = t
+        .app
+        .sessions
+        .iter()
+        .find(|s| s.name == "alpha")
+        .unwrap()
+        .id;
+    let beta = t.app.sessions.iter().find(|s| s.name == "beta").unwrap().id;
+    assert_eq!(t.app.selected_session().map(|s| s.id), Some(beta));
+    assert_eq!(
+        t.app.mission.selected_item().and_then(|i| i.session),
+        Some(alpha)
+    );
+
+    t.keys([KeyCode::Char('p')]);
+    let out = render_to_string(&t.app, 120, 30);
+    assert!(out.contains("prompt → alpha"), "{out}");
+    t.keys("two".chars().map(KeyCode::Char));
+    t.keys([KeyCode::Enter]);
+    assert_eq!(t.app.screen, Screen::Mission, "stays on mission control");
+    assert_eq!(t.runner.request(1).session_id, alpha);
+    assert_eq!(t.runner.request(1).prompt, "two");
+}
+
+#[test]
+fn capital_p_on_mission_asks_swarmux_to_route() {
+    let mut t = test_app();
+    t.with_session("alpha");
+    t.app.update();
+    t.keys([KeyCode::Char('1'), KeyCode::Char('P')]);
+    let out = render_to_string(&t.app, 120, 30);
+    assert!(out.contains("swarmux picks the session"), "{out}");
+}
+
+#[test]
+fn p_on_mission_without_sessions_says_what_to_do() {
+    let mut t = test_app();
+    t.keys([KeyCode::Char('1'), KeyCode::Char('p')]);
+    assert!(
+        t.app
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("create a session")
+    );
+}
+
+#[test]
+fn the_approval_is_one_line_at_80x24_and_the_wall_stays() {
+    let mut t = test_app();
+    t.with_session("demo");
+    t.send("hi");
+    let job = t.app.current_job().unwrap().job_id;
+    t.inbox.push(Some(job), "Bash", "make deploy");
+    t.app.update();
+    t.keys([KeyCode::Char('1')]);
+
+    let small = render_to_string(&t.app, 80, 24);
+    assert!(!small.contains("approval needed"), "{small}");
+    assert!(small.contains("Bash make deploy"), "{small}");
+    assert!(small.contains("y n a"), "{small}");
+    assert!(small.contains("1 session"), "the wall header\n{small}");
+    assert!(small.contains("demo"), "the tile\n{small}");
+    let bar = small.lines().filter(|l| l.contains("y n a")).count();
+    assert_eq!(bar, 1, "one line\n{small}");
+
+    // Roomier windows keep the full overlay.
+    let big = render_to_string(&t.app, 120, 40);
+    assert!(big.contains("approval needed"), "{big}");
+}

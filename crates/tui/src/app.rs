@@ -533,7 +533,12 @@ impl App {
                     "review off for the next jobs".into()
                 });
             }
-            KeyCode::Char(c @ ('p' | 'P')) if self.screen == Screen::Dashboard => {
+            KeyCode::Char(c @ ('p' | 'P'))
+                if matches!(self.screen, Screen::Dashboard | Screen::Mission) =>
+            {
+                if self.screen == Screen::Mission {
+                    self.select_inbox_session();
+                }
                 if self.sessions.is_empty() {
                     self.error = Some("create a session first: press 6 then n".into());
                 } else {
@@ -546,6 +551,16 @@ impl App {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Makes the session of the selected inbox item the one prompts go to.
+    fn select_inbox_session(&mut self) {
+        let Some(session) = self.mission.selected_item().and_then(|i| i.session) else {
+            return;
+        };
+        if let Some(at) = self.sessions.iter().position(|s| s.id == session) {
+            self.select_index(at);
         }
     }
 

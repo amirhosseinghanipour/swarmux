@@ -88,13 +88,22 @@ fn draw_screens(frame: &mut Frame, app: &App, t: &Theme) {
         };
         guard::render_consent(frame, overlay, app);
     } else if app.guard.pending_count() > 0 {
-        let h = guard::APPROVAL_HEIGHT.min(body.height);
+        let compact = body.height < guard::COMPACT_BELOW;
+        let h = if compact {
+            1
+        } else {
+            guard::APPROVAL_HEIGHT.min(body.height)
+        };
         let overlay = Rect {
             y: body.y + body.height - h,
             height: h,
             ..body
         };
-        guard::render_approval(frame, overlay, app);
+        if compact {
+            guard::render_approval_bar(frame, overlay, app);
+        } else {
+            guard::render_approval(frame, overlay, app);
+        }
     }
 
     let stats = stats_line(
@@ -294,7 +303,7 @@ pub(crate) fn hints(app: &App) -> &'static str {
         return " tab next field · ctrl+s save · esc cancel";
     }
     match app.screen {
-        Screen::Mission => " ↑↓ select · ⏎ open · y/n/a answer · x dismiss · 2 focus · q quit",
+        Screen::Mission => " ↑↓ select · ⏎ open · y/n/a answer · p/P prompt · x dismiss · q quit",
         Screen::Dashboard => {
             " p prompt · P route · v review · ↑↓ session · t theme · L layout · tab focus · q quit"
         }
