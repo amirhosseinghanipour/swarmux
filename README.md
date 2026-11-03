@@ -139,6 +139,49 @@ pull requests, MCP servers, system load and a 12-week activity calendar. From
 | `Enter` | open the selected item's or card's job in Focus |
 | `y` / `n` / `a` | approve, deny or always allow the selected held tool call (from any other screen they answer the oldest) |
 | `x` | dismiss an item (held tool calls stay until answered) |
+| `A` | approve every ask of the selected one's signature at once (same tool, pattern and tier) |
+| `s` | shelve the selected item for `1` 15 min, `2` 60 min or `3` until its job ends |
+| `u` | bring every shelved item back |
+| `F` | focus mode on or off |
+| `r` / `R` | take or turn down an offered rule |
+
+### The inbox as an alarm panel
+
+The inbox follows alarm-management practice, so that it stays small enough
+to act on.
+
+- **Risk.** Every held call is scored from how hard it is to undo
+  (R0 read, R1 worktree, R2 repository, R3 outside the machine, R4
+  irreversible), how far it reaches, how new the pattern is here, how the
+  agent's earlier jobs went and, when JEV is on, what it made of the call.
+  The score gives a tier: routine, elevated or destructive.
+- **Priorities.** P1 is an irreversible call or a secret on its way out;
+  P2 is anything that blocks an agent or has broken; P3 is the rest. The
+  header counts them, and `swarmux stats alarms` shows the mix against the
+  5 / 15 / 80 % target, the rate of new P1 and P2 items against one per ten
+  minutes, the busiest ten minutes and how long items took to be looked at.
+- **Irreversible calls** are never one key. `y` opens a dialog that arms
+  for 1.5 seconds, then wants the target (the branch or path) typed, or
+  picked with `Tab` and a digit from a list whose order changes every time.
+  They are never batched, never always-allowed and never shelved.
+- **Batches.** Asks with one signature (tool, pattern, tier) show `×N`;
+  `A` approves them together. Never across tiers, never P1.
+- **Floods.** Ten items inside ten minutes is a flood: items are folded by
+  cause, the first one in stays and the rest are held out of the list, with
+  a banner. P1 is never folded.
+- **Focus mode** (`F`) shows `‖ 3 waiting · next ≤1:40` instead of hiding
+  things: P1 shows at once, P2 waits for a breakpoint (a prompt sent, a diff
+  closed, Focus closed, another card, ten quiet seconds) and at most two
+  minutes, P3 until focus ends and at most 45 minutes. Nothing is
+  auto-approved.
+- **Shelving** hides a P2 or P3 item for a while. It is logged and comes
+  back by itself, and the header shows what is shelved.
+- **Rules.** After ten identical approvals with no refusal, the ask offers
+  `r make it a rule?` (an allow rule such as `Bash(cargo test:*)`).
+- **Load.** The header shows how much of the last 15 minutes you spent in
+  the inbox. Above 70 % new jobs wait, and the queue says
+  `held: you're at 78% load`; reviews keep running. Set the line with
+  `load_hold_at` in `[governor]`, or `1.0` to turn the hold off.
 
 ## Missions (screen 2)
 
@@ -652,6 +695,7 @@ horizon_minutes = 30      # how far ahead a window is forecast
 battery_concurrency = 2
 # max_job_usd = 5.0       # --max-budget-usd for every job (missions use their own budget)
 budget_line = true        # tell each job its budget
+load_hold_at = 0.70       # new jobs wait while you spend more of your time than this in the inbox
 ```
 
 ## Audit ledger
