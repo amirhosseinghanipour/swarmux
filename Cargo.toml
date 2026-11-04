@@ -42,7 +42,7 @@ zip = { version = "9.3.0", default-features = false, features = ["deflate"] }
 # The `swarmux` binary: composition root only.
 [package]
 name = "swarmux"
-description = "A prompt-first command center for Claude Code: queue, watch and gate agents from one terminal."
+description = "The operations center for one-person, agent-run companies. Built on Claude Code."
 readme = "README.md"
 homepage.workspace = true
 keywords = ["claude", "tui", "agents", "terminal", "ai"]

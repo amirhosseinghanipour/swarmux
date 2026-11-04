@@ -1,6 +1,6 @@
 {
     "version": "<VERSION>",
-    "description": "A prompt-first command center for Claude Code.",
+    "description": "The operations center for one-person, agent-run companies. Built on Claude Code.",
     "homepage": "https://github.com/amirhosseinghanipour/swarmux",
     "license": "MIT",
     "architecture": {

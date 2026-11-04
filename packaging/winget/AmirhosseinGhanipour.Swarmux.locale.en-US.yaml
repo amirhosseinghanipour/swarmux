@@ -7,7 +7,7 @@ PackageName: swarmux
 PackageUrl: https://github.com/amirhosseinghanipour/swarmux
 License: MIT
 LicenseUrl: https://github.com/amirhosseinghanipour/swarmux/blob/main/LICENSE
-ShortDescription: A prompt-first command center for Claude Code.
+ShortDescription: The operations center for one-person, agent-run companies. Built on Claude Code.
 Moniker: swarmux
 Tags:
   - claude
