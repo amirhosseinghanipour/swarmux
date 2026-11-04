@@ -78,6 +78,15 @@ impl Session {
         })
     }
 
+    /// Name for a session that does one task of this one's plan:
+    /// `"<name> <task>"`, kept within the length limit.
+    pub fn task_name(&self, task: &str) -> String {
+        let task: String = task.trim().chars().take(NAME_MAX / 2).collect();
+        let keep = NAME_MAX - task.chars().count() - 1;
+        let base: String = self.name.chars().take(keep).collect();
+        format!("{} {task}", base.trim_end())
+    }
+
     /// Name for a session forked from this one, kept within the length limit.
     pub fn fork_name(&self) -> String {
         const SUFFIX: &str = " fork";

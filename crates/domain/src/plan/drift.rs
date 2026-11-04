@@ -157,6 +157,12 @@ pub fn area_matches(area: &str, path: &str) -> bool {
     path == area || path.starts_with(&format!("{area}/"))
 }
 
+/// Whether a changed file follows from any change (a lockfile) or is
+/// swarmux's own, and so says nothing about scope.
+pub fn is_incidental(path: &str) -> bool {
+    incidental(&clean(path))
+}
+
 fn incidental(path: &str) -> bool {
     let name = path.rsplit('/').next().unwrap_or(path);
     INCIDENTAL_NAMES.contains(&name) || INCIDENTAL_DIRS.iter().any(|d| path.starts_with(d))

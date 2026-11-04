@@ -16,8 +16,9 @@ use std::fmt;
 use crate::json::{Json, quote};
 use crate::ledger::{hex, sha256};
 use crate::mission::Contract;
+use crate::taskgraph::GraphRun;
 
-pub use drift::{DEFAULT_DRIFT_THRESHOLD, DriftReport, area_matches, check_drift};
+pub use drift::{DEFAULT_DRIFT_THRESHOLD, DriftReport, area_matches, check_drift, is_incidental};
 
 /// Most tasks a plan may have.
 pub const MAX_TASKS: usize = 30;
@@ -470,6 +471,8 @@ pub struct PlanRecord {
     pub cost_usd: f64,
     /// Plan against change, once the build was checked.
     pub drift: Option<DriftReport>,
+    /// The plan built as a task graph: one job per task, merged in order.
+    pub graph: Option<GraphRun>,
 }
 
 impl PlanRecord {
@@ -483,13 +486,17 @@ impl PlanRecord {
             .drift
             .as_ref()
             .map_or_else(|| "null".to_string(), DriftReport::to_json);
+        let graph = self
+            .graph
+            .as_ref()
+            .map_or_else(|| "null".to_string(), GraphRun::to_json);
         let first = match self.plan_first {
             Some(true) => "true",
             Some(false) => "false",
             None => "null",
         };
         format!(
-            "{{\"plan_first\":{first},\"status\":{},\"plan\":{plan},\"note\":{},\"rounds\":{},\"cost_usd\":{},\"drift\":{drift}}}",
+            "{{\"plan_first\":{first},\"status\":{},\"plan\":{plan},\"note\":{},\"rounds\":{},\"cost_usd\":{},\"drift\":{drift},\"graph\":{graph}}}",
             quote(self.status.as_str()),
             quote(&self.note),
             self.rounds,
@@ -531,6 +538,10 @@ impl PlanRecord {
                 .map_or(0, |n| u32::try_from(n).unwrap_or(u32::MAX)),
             cost_usd: v.get("cost_usd").and_then(Json::as_f64).unwrap_or(0.0),
             drift,
+            graph: match v.get("graph") {
+                Some(g @ Json::Obj(_)) => GraphRun::from_json(g),
+                _ => None,
+            },
         })
     }
 
