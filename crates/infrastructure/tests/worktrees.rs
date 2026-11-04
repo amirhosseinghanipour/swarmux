@@ -418,6 +418,7 @@ fn parallel_git_adds_do_not_trip_over_each_other() {
                     path,
                     branch: format!("swarmux/par/{n}"),
                     copy: vec![".env".into()],
+                    base: None,
                 })
             })
         })

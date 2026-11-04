@@ -159,7 +159,11 @@ impl Worktrees for GitWorktrees {
         if exists {
             self.run_locked(&req.repo, &["worktree", "add", &path, &req.branch])?;
         } else {
-            self.run_locked(&req.repo, &["worktree", "add", "-b", &req.branch, &path])?;
+            let mut args = vec!["worktree", "add", "-b", &req.branch, &path];
+            if let Some(base) = &req.base {
+                args.push(base);
+            }
+            self.run_locked(&req.repo, &args)?;
         }
         let copied = copy_listed(&req.repo, &req.path, &req.copy);
         if !copied.is_empty() {
@@ -430,6 +434,7 @@ mod tests {
             path: dir.join("wt").join(format!("job-{n}")),
             branch: format!("swarmux/demo/{n}"),
             copy: copy.iter().map(|s| s.to_string()).collect(),
+            base: None,
         }
     }
 

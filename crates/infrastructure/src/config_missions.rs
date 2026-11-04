@@ -13,6 +13,7 @@ pub(crate) struct RawMissions {
     plan_first: Option<bool>,
     plan_model: Option<String>,
     drift_threshold: Option<f64>,
+    parallel: Option<bool>,
 }
 
 pub(crate) fn parse_missions(
@@ -28,6 +29,9 @@ pub(crate) fn parse_missions(
     let mut settings = PlanSettings::default();
     if let Some(on) = raw.plan_first {
         settings.plan_first = on;
+    }
+    if let Some(on) = raw.parallel {
+        settings.parallel = on;
     }
     if let Some(model) = raw.plan_model {
         let model = model.trim();
