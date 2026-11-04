@@ -174,6 +174,8 @@ pub(crate) fn ntfy_push(n: &Notification) -> Push {
         AttentionKind::Stalled => "a job looks stalled",
         AttentionKind::GateEscalated => "the done-gate gave up",
         AttentionKind::Recovery => "the watchdog could not get a job unstuck",
+        AttentionKind::PlanReady => "a plan is waiting for approval",
+        AttentionKind::Drift => "a build strayed from its plan",
     };
     let (priority, tag) = match n.priority {
         Priority::P1 => ("urgent", "rotating_light"),
