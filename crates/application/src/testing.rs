@@ -1407,3 +1407,88 @@ impl crate::watchdog::CheckpointRestore for FakeRestore {
         Ok(format!("saved{:035x}", calls.len()))
     }
 }
+
+/// Records planning requests; tests answer them with
+/// [`FakePlanner::reply`], or set an answer given at once.
+#[derive(Default)]
+pub struct FakePlanner {
+    requests: RefCell<Vec<crate::missions::PlanRequest>>,
+    sinks: RefCell<Vec<Option<crate::missions::PlanSink>>>,
+    instant: RefCell<Option<crate::missions::PlanReply>>,
+}
+
+impl FakePlanner {
+    pub fn requests(&self) -> Vec<crate::missions::PlanRequest> {
+        self.requests.borrow().clone()
+    }
+
+    /// Answers the `i`-th request (once).
+    pub fn reply(&self, i: usize, reply: crate::missions::PlanReply) {
+        if let Some(sink) = self.sinks.borrow_mut()[i].take() {
+            sink(reply);
+        }
+    }
+
+    /// Every later request gets `reply` at once.
+    pub fn answer_with(&self, reply: crate::missions::PlanReply) {
+        *self.instant.borrow_mut() = Some(reply);
+    }
+}
+
+impl crate::missions::Planner for FakePlanner {
+    fn plan(&self, request: crate::missions::PlanRequest, sink: crate::missions::PlanSink) {
+        self.requests.borrow_mut().push(request);
+        match self.instant.borrow().clone() {
+            Some(reply) => {
+                sink(reply);
+                self.sinks.borrow_mut().push(None);
+            }
+            None => self.sinks.borrow_mut().push(Some(sink)),
+        }
+    }
+}
+
+/// Plans kept in memory.
+#[derive(Default)]
+pub struct InMemoryPlans {
+    records: RefCell<Vec<(String, swarmux_domain::plan::PlanRecord)>>,
+}
+
+impl crate::missions::PlanStore for InMemoryPlans {
+    fn save(
+        &self,
+        slug: &str,
+        record: &swarmux_domain::plan::PlanRecord,
+        _at: Millis,
+    ) -> AppResult<()> {
+        let mut all = self.records.borrow_mut();
+        match all.iter_mut().find(|(s, _)| s == slug) {
+            Some(r) => r.1 = record.clone(),
+            None => all.push((slug.to_string(), record.clone())),
+        }
+        Ok(())
+    }
+
+    fn list(&self) -> AppResult<Vec<(String, swarmux_domain::plan::PlanRecord)>> {
+        Ok(self.records.borrow().clone())
+    }
+}
+
+/// Reports the files it was told changed (or fails).
+#[derive(Default)]
+pub struct FakeChanges {
+    pub files: RefCell<Vec<String>>,
+    pub broken: RefCell<Option<String>>,
+    /// The folders asked about.
+    pub asked: RefCell<Vec<PathBuf>>,
+}
+
+impl crate::missions::ChangedFiles for FakeChanges {
+    fn changed(&self, dir: &Path) -> AppResult<Vec<String>> {
+        self.asked.borrow_mut().push(dir.to_path_buf());
+        match self.broken.borrow().clone() {
+            Some(why) => Err(AppError::Workspace(why)),
+            None => Ok(self.files.borrow().clone()),
+        }
+    }
+}
