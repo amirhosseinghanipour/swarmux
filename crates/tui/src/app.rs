@@ -181,6 +181,8 @@ pub struct App {
     hooks: Option<HookBus>,
     /// The done-gate's verdicts.
     gate: Option<GateService>,
+    /// Notices stuck agents and tries to get them going again.
+    watchdog: Option<swarmux_application::Watchdog>,
     /// The file the theme comes from (pywal, base16, matugen), watched for changes.
     palette: Option<PaletteWatch>,
     /// Opens a session in a terminal tab of its own.
@@ -300,6 +302,7 @@ impl App {
             telemetry: Telemetry::default(),
             hooks: None,
             gate: None,
+            watchdog: None,
             terminal: None,
             checkpoints: None,
             focus_checkpoints: None,
@@ -398,6 +401,19 @@ impl App {
     pub fn with_hook_bus(mut self, bus: HookBus) -> App {
         self.hooks = Some(bus);
         self
+    }
+
+    /// Watches running jobs for loops, stalls, full contexts and runaway
+    /// spending, and climbs the recovery ladder for stuck ones. Its steps
+    /// show in Focus and the change log; what it can't fix goes to the inbox.
+    pub fn with_watchdog(mut self, watchdog: swarmux_application::Watchdog) -> App {
+        self.set_watchdog(watchdog);
+        self
+    }
+
+    pub(crate) fn set_watchdog(&mut self, watchdog: swarmux_application::Watchdog) {
+        self.jobs.set_event_tap(watchdog.settings().enabled);
+        self.watchdog = Some(watchdog);
     }
 
     /// Records the done-gate's verdicts and shows them on the wall.
@@ -570,14 +586,19 @@ impl App {
     pub(crate) fn refresh_mission(&mut self) {
         let now = self.now();
         let cwd = self.selected_session().map(|s| s.cwd.clone());
-        let hook_changes = self
+        let mut hook_changes = self
             .hooks
             .as_ref()
             .map(HookBus::changes)
             .unwrap_or_default();
+        let mut escalations = Vec::new();
+        if let Some(dog) = &self.watchdog {
+            hook_changes.extend(dog.changes());
+            escalations = dog.escalations();
+        }
         self.mission.refresh(
             (&self.guard, &self.jobs, self.gate.as_ref()),
-            &hook_changes,
+            (&hook_changes, escalations),
             now,
             cwd.as_deref(),
         );
@@ -653,6 +674,19 @@ impl App {
         for (job, trip) in &report.loop_trips {
             errors.extend(self.guard.record_loop(*job, trip).err());
         }
+        let mut watched = false;
+        if let Some(dog) = &mut self.watchdog {
+            let hooks = &self.hooks;
+            let compactions = |job| {
+                hooks
+                    .as_ref()
+                    .and_then(|h| h.signals(job))
+                    .map_or(0, |s| s.compactions)
+            };
+            let w = dog.pump(&mut self.jobs, &report.events, &compactions);
+            errors.extend(w.errors);
+            watched = w.changed || !w.new_sessions.is_empty();
+        }
         let guard = self.guard.pump();
         errors.extend(guard.errors);
         for job in guard.decisions.iter().filter_map(|d| d.job_id) {
@@ -669,7 +703,7 @@ impl App {
         if let Some(e) = errors.into_iter().last() {
             self.error = Some(e.to_string());
         }
-        if report.changed || !report.new_sessions.is_empty() {
+        if report.changed || !report.new_sessions.is_empty() || watched {
             // Jobs touch their sessions, which re-sorts the list.
             self.refresh_sessions(None);
         }

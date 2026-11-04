@@ -9,6 +9,8 @@ use crate::ports::{AdviceRequest, AdviceSink, Clock, ConsentStore, DecisionAdvis
 
 /// Longest text (subject or prompt summary) sent to the provider.
 pub const SUMMARY_MAX: usize = 200;
+/// Steps already tried that a recovery question names.
+const RECOVERY_TRIED_MAX: usize = 6;
 
 /// Whether JEV may be asked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -108,6 +110,9 @@ impl Jev {
             format!(
                 "· for \"let swarmux route\": the first {SUMMARY_MAX} characters of the prompt and the names of your sessions"
             ),
+            format!(
+                "· when the watchdog thinks an agent is stuck: what it saw and what it tried, one line each (at most {SUMMARY_MAX} characters)"
+            ),
             "Never file contents, diffs, folders or the rest of the prompt. Answers below the threshold still come to you.".into(),
         ]
     }
@@ -119,6 +124,24 @@ impl Jev {
             AdviceRequest::ToolCall {
                 tool: request.tool_name.clone(),
                 summary: summarize(&request.subject, SUMMARY_MAX),
+            },
+            sink,
+        );
+    }
+
+    /// Asks whether a stuck agent should carry on, change approach or stop.
+    /// Only the watchdog's own one-line notes are sent.
+    pub(crate) fn ask_recovery(&self, situation: &str, tried: &[String], sink: AdviceSink) {
+        self.advisor.advise(
+            AdviceRequest::Recovery {
+                situation: summarize(situation, SUMMARY_MAX),
+                tried: tried
+                    .iter()
+                    .rev()
+                    .take(RECOVERY_TRIED_MAX)
+                    .rev()
+                    .map(|t| summarize(t, SUMMARY_MAX))
+                    .collect(),
             },
             sink,
         );

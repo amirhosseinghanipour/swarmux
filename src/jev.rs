@@ -115,7 +115,7 @@ pub fn test(provider: Option<&str>) -> anyhow::Result<()> {
             let verdict = match advice.answer {
                 AdviceAnswer::Allow => "allow",
                 AdviceAnswer::Deny => "deny",
-                AdviceAnswer::Session(_) => "?",
+                _ => "?",
             };
             let applied = if advice.confidence >= settings.threshold {
                 "applied"

@@ -97,6 +97,18 @@ pub fn tail(ledger: &dyn Ledger, n: usize) -> AppResult<Vec<LedgerEntry>> {
 }
 
 /// Turns what swarmux stores into ledger entries.
+/// One watchdog entry, as [`LedgerService::record_watchdog`] writes it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WatchdogEntry<'a> {
+    pub job: JobId,
+    pub session: Option<SessionId>,
+    pub event: &'a str,
+    pub alarm: &'a str,
+    pub rung: Option<&'a str>,
+    pub detail: &'a str,
+    pub next_job: Option<JobId>,
+}
+
 pub struct LedgerService {
     ledger: Rc<dyn Ledger>,
     clock: Rc<dyn Clock>,
@@ -440,6 +452,26 @@ impl LedgerService {
         };
         let actor = if r.event.is_some() { "gate" } else { "cli" };
         self.append(now, LedgerKind::GateVerdict, actor, r.job, session, payload)
+    }
+
+    /// What the watchdog saw or did for `job`: an `alarm`, a `rung` taken,
+    /// a rung's `reply` (a judgement or diagnosis), work that `settled` or
+    /// was `rescued`. `next_job` is the job a new session runs as.
+    pub fn record_watchdog(&self, w: &WatchdogEntry<'_>, now: Millis) -> AppResult<()> {
+        let payload = Payload::new()
+            .str("event", w.event)
+            .str("alarm", w.alarm)
+            .opt_str("rung", w.rung)
+            .text("detail", w.detail)
+            .opt_int("next_job", w.next_job.map(|j| j.0));
+        self.append(
+            now,
+            LedgerKind::Watchdog,
+            "watchdog",
+            Some(w.job),
+            w.session,
+            payload,
+        )
     }
 
     pub fn record_decision(&self, d: &DecisionRecord) -> AppResult<()> {

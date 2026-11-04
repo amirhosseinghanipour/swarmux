@@ -47,6 +47,8 @@ pub enum AttentionKind {
     Stalled,
     /// The done-gate kept failing after its last allowed block.
     GateEscalated,
+    /// The watchdog tried its recovery rungs and the agent is still stuck.
+    Recovery,
 }
 
 impl AttentionKind {
@@ -59,6 +61,7 @@ impl AttentionKind {
             AttentionKind::ResultReady => "result",
             AttentionKind::Stalled => "stalled",
             AttentionKind::GateEscalated => "gate",
+            AttentionKind::Recovery => "recovery",
         }
     }
 
@@ -346,6 +349,27 @@ impl AttentionItem {
         )
     }
 
+    /// A job the watchdog could not get unstuck (P2): it tried what it
+    /// could and the user decides.
+    pub fn recovery_exhausted(
+        job: JobId,
+        session: SessionId,
+        title: &str,
+        detail: &str,
+        since: Millis,
+    ) -> AttentionItem {
+        AttentionItem::of_job(
+            job,
+            session,
+            AttentionKind::Recovery,
+            Priority::P2,
+            Likelihood::Likely,
+            title,
+            detail,
+            since,
+        )
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn of_job(
         job: JobId,
@@ -363,6 +387,7 @@ impl AttentionItem {
             AttentionKind::ResultReady => "result",
             AttentionKind::Stalled => "stalled",
             AttentionKind::GateEscalated => "gate",
+            AttentionKind::Recovery => "recovery",
             AttentionKind::Approval => "approval",
             AttentionKind::Question => "question",
         };

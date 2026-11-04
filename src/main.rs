@@ -24,14 +24,16 @@ use swarmux_application::ledger::{LedgerService, LedgeredDecisions, LedgeredJobs
 use swarmux_application::ports::Clock;
 use swarmux_application::{
     CombinedStatusline, GateKeeper, GateService, Governor, GuardService, HandoffBoard,
-    HistoryService, HookBus, Jev, JobService, MissionService, NotifyService, PromptService,
-    RoutingService, SessionService, SharedPolicy, StatuslineFeed, TruthBoard,
+    HistoryService, HookBus, HookMessenger, Jev, JobService, MissionService, NotifyService,
+    NudgeBoard, PromptService, RoutingService, SessionService, SharedPolicy, StatuslineFeed,
+    TruthBoard, Watchdog,
 };
 use swarmux_infrastructure::hook::{self, HookServer, Responders};
 use swarmux_infrastructure::{
-    ClaudeCli, ConfigRuleWriter, FilePalette, FsAgentCatalog, FsGateSource, GitCli, GuardHook,
-    HaikuLinter, HaikuRouter, MissionFiles, Paths, SqliteLedger, SqliteStore, SysinfoMonitor,
-    SystemClock, WindowsTerminal, build_notifier, load_settings, utc_offset_minutes,
+    ClaudeCli, ConfigRuleWriter, FilePalette, FsAgentCatalog, FsGateSource, GitCli, GitWorktrees,
+    GuardHook, HaikuDiagnoser, HaikuLinter, HaikuRouter, MissionFiles, Paths, SqliteLedger,
+    SqliteStore, SysinfoMonitor, SystemClock, WindowsTerminal, build_notifier, load_settings,
+    utc_offset_minutes,
 };
 use swarmux_tui::{App, Launch};
 
@@ -428,7 +430,11 @@ fn run_tui(no_splash: bool) -> anyhow::Result<()> {
     let (keeper, gate_records) = GateKeeper::new(Arc::new(FsGateSource::new()), checker.clone());
     let keeper = Arc::new(keeper.with_verifier(holdout::verifier(&paths, checker)));
     let guard_settings = &settings.guard;
-    let policy = SharedPolicy::new(guard_settings.policy()).with_fence(keeper.clone());
+    // Watchdog nudges reach an agent as the reason its next call is not run.
+    let nudges = NudgeBoard::new();
+    let policy = SharedPolicy::new(guard_settings.policy())
+        .with_fence(keeper.clone())
+        .with_nudges(nudges.clone());
     let pipe = hook::endpoint_for(std::process::id());
     // Handoffs reach the sessions that start after a checkpoint.
     let board = HandoffBoard::new();
@@ -481,6 +487,20 @@ fn run_tui(no_splash: bool) -> anyhow::Result<()> {
         .with_gates(Rc::new(keeper.clone()))
         .with_ledger(ledger.clone())
         .with_evidence(evidence.clone());
+    // Stuck agents: detectors on every job, and a ladder of recoveries,
+    // cheapest first, before the inbox.
+    let mut watchdog = Watchdog::new(
+        settings.watchdog.clone(),
+        Rc::new(HookMessenger(nudges)),
+        clock.clone(),
+    )
+    .with_ledger(ledger.clone())
+    .with_checkpoints(checkpoints.clone())
+    .with_restore(Rc::new(GitWorktrees::default()))
+    .with_diagnoser(Rc::new(
+        HaikuDiagnoser::new(doctor::claude_bin(), rt.handle().clone())
+            .with_bare(std::env::var_os("ANTHROPIC_API_KEY").is_some()),
+    ));
     let hook_bus = HookBus::new(server.clone(), ledger, store.clone(), clock.clone())
         .with_checkpoints(checkpoints.clone())
         .with_truth(truth.clone());
@@ -499,6 +519,7 @@ fn run_tui(no_splash: bool) -> anyhow::Result<()> {
             settings.jev.threshold,
         )?);
         guard = guard.with_jev(jev.clone());
+        watchdog = watchdog.with_jev(jev.clone());
         routing = routing.with_jev(jev);
     }
 
@@ -525,7 +546,11 @@ fn run_tui(no_splash: bool) -> anyhow::Result<()> {
     let mut jobs = JobService::new(store.clone(), jobs_log, runner, clock)
         .with_telemetry_store(store)
         .with_limits(settings.limits())
-        .with_loop_repeats(guard_settings.loop_repeats)
+        .with_loop_repeats(
+            settings
+                .watchdog
+                .breaker_repeats(guard_settings.loop_repeats),
+        )
         .with_monitor(Rc::new(SysinfoMonitor::new()))
         .with_review(workspace, &settings.review)
         .with_agent_catalog(Rc::new(FsAgentCatalog::new(Some(paths.home.clone()))))
@@ -545,6 +570,7 @@ fn run_tui(no_splash: bool) -> anyhow::Result<()> {
     .with_clock(Rc::new(SystemClock))
     .with_hook_bus(hook_bus)
     .with_gate(gate)
+    .with_watchdog(watchdog)
     .with_missions(missions)
     .with_evidence(evidence, away_since)
     .with_checkpoints(checkpoints)

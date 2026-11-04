@@ -138,7 +138,7 @@ pub fn lane(frame: &mut Frame, area: Rect, app: &App, f: &Focus) {
         Some(last) => spans.push(Span::styled(
             fit(
                 &format!(
-                    "{} stop{}: {last}",
+                    "{} step{}: {last}",
                     f.recovery.len(),
                     if f.recovery.len() == 1 { "" } else { "s" }
                 ),

@@ -234,6 +234,14 @@ pub enum AdviceRequest {
         prompt: String,
         candidates: Vec<String>,
     },
+    /// The watchdog thinks an agent is stuck: should it carry on, change
+    /// approach, or stop?
+    Recovery {
+        /// What the watchdog saw, one line.
+        situation: String,
+        /// What was already tried, one line each.
+        tried: Vec<String>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -242,6 +250,12 @@ pub enum AdviceAnswer {
     Deny,
     /// One of the candidate session names.
     Session(String),
+    /// The agent is fine: leave it alone.
+    Continue,
+    /// The agent should try another way.
+    ChangeApproach,
+    /// The attempt should end.
+    Stop,
 }
 
 /// A typed answer and how sure the model is (0 to 1).

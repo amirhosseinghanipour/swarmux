@@ -99,6 +99,8 @@ pub enum CheckpointReason {
     GatePass,
     PreCompact,
     Manual,
+    /// The watchdog handed the work to a new session.
+    Recovery,
 }
 
 impl CheckpointReason {
@@ -107,6 +109,7 @@ impl CheckpointReason {
             CheckpointReason::GatePass => "gate_pass",
             CheckpointReason::PreCompact => "pre_compact",
             CheckpointReason::Manual => "manual",
+            CheckpointReason::Recovery => "recovery",
         }
     }
 
@@ -115,6 +118,7 @@ impl CheckpointReason {
             CheckpointReason::GatePass,
             CheckpointReason::PreCompact,
             CheckpointReason::Manual,
+            CheckpointReason::Recovery,
         ]
         .into_iter()
         .find(|r| r.as_str() == s)

@@ -7,7 +7,9 @@ use std::process::Output;
 use std::thread::sleep;
 use std::time::Duration;
 
-use swarmux_application::{AddWorktree, Added, AppError, AppResult, Removed, Worktrees};
+use swarmux_application::{
+    AddWorktree, Added, AppError, AppResult, CheckpointRestore, Removed, Worktrees,
+};
 use swarmux_domain::Handoff;
 
 use crate::git::git_command;
@@ -370,6 +372,26 @@ fn copy_one(from: &Path, to: &Path, rel: &Path, copied: &mut Vec<String>) {
     }
 }
 
+/// Where the files of an attempt that was set aside stay reachable.
+const SET_ASIDE_REF: &str = "refs/swarmux/set-aside";
+
+impl CheckpointRestore for GitWorktrees {
+    fn restore(&self, worktree: &Path, commit: &str) -> AppResult<String> {
+        if commit.is_empty() || !commit.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err(AppError::Workspace(format!(
+                "not a checkpoint commit: {commit:?}"
+            )));
+        }
+        // Nothing is lost: the current files are committed and kept under a
+        // ref of their own before the worktree goes back.
+        let saved = self.snapshot(worktree, "swarmux: files of an attempt set aside")?;
+        let name = format!("{SET_ASIDE_REF}/{}", &saved[..saved.len().min(12)]);
+        self.run_locked(worktree, &["update-ref", &name, &saved])?;
+        self.run_locked(worktree, &["reset", "--hard", "--quiet", commit])?;
+        Ok(saved)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -474,6 +496,38 @@ mod tests {
         let again = git.add(&req).unwrap();
         assert!(!again.created_branch);
         assert!(req.path.join("new.txt").exists());
+    }
+
+    #[test]
+    fn restore_puts_files_back_and_keeps_the_attempt() {
+        let Some((dir, root)) = repo() else { return };
+        let git = GitWorktrees::default();
+        let req = request(&root, dir.path(), 7, &[]);
+        git.add(&req).unwrap();
+        fs::write(req.path.join("good.txt"), "good\n").unwrap();
+        let checkpoint = git.snapshot(&req.path, "checkpoint").unwrap();
+        fs::write(req.path.join("bad.txt"), "bad\n").unwrap();
+        fs::write(req.path.join("good.txt"), "broken\n").unwrap();
+        let saved = git.restore(&req.path, &checkpoint).unwrap();
+        assert_ne!(saved, checkpoint);
+        assert_eq!(git.head(&req.path).unwrap(), checkpoint);
+        // git may write line endings its own way on checkout.
+        assert_eq!(
+            fs::read_to_string(req.path.join("good.txt"))
+                .unwrap()
+                .trim(),
+            "good"
+        );
+        assert!(!req.path.join("bad.txt").exists());
+        let kept = git
+            .run(&req.path, &["show", &format!("{saved}:bad.txt")])
+            .unwrap();
+        assert_eq!(kept, "bad");
+        let refs = git
+            .run(&req.path, &["for-each-ref", "refs/swarmux/set-aside"])
+            .unwrap();
+        assert!(refs.contains(&saved), "{refs}");
+        assert!(git.restore(&req.path, "--hard").is_err());
     }
 
     #[test]

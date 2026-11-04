@@ -146,17 +146,19 @@ impl MissionState {
         self
     }
 
-    /// Re-reads everything from the services. `cwd` is the folder the git
+    /// Re-reads everything from the services. `changes` and `items` come
+    /// from elsewhere (the hooks, the watchdog). `cwd` is the folder the git
     /// and GitHub feeds should follow.
     pub fn refresh(
         &mut self,
         (guard, jobs, gate): (&GuardService, &JobService, Option<&GateService>),
-        hook_changes: &[Change],
+        (hook_changes, items): (&[Change], Vec<AttentionItem>),
         now: Millis,
         cwd: Option<&Path>,
     ) {
         self.facts = jobs.facts();
-        let escalations = gate.map(|g| g.escalations(&self.facts)).unwrap_or_default();
+        let mut escalations = gate.map(|g| g.escalations(&self.facts)).unwrap_or_default();
+        escalations.extend(items);
         self.items = self.attention.collect_with(guard, jobs, escalations, now);
         let mut extra = hook_changes.to_vec();
         if let Some(g) = gate {

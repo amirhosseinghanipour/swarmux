@@ -1338,3 +1338,72 @@ impl crate::gate::JobGates for FakeJobGates {
         }
     }
 }
+
+/// Records diagnosis requests; tests answer them with
+/// [`FakeDiagnoser::reply`], or set an answer given at once.
+#[derive(Default)]
+pub struct FakeDiagnoser {
+    requests: RefCell<Vec<crate::watchdog::DiagnosisRequest>>,
+    sinks: RefCell<Vec<Option<crate::watchdog::DiagnosisSink>>>,
+    instant: RefCell<Option<crate::watchdog::DiagnosisReply>>,
+}
+
+impl FakeDiagnoser {
+    pub fn requests(&self) -> Vec<crate::watchdog::DiagnosisRequest> {
+        self.requests.borrow().clone()
+    }
+
+    /// Answers the `i`-th request (once).
+    pub fn reply(&self, i: usize, reply: crate::watchdog::DiagnosisReply) {
+        if let Some(sink) = self.sinks.borrow_mut()[i].take() {
+            sink(reply);
+        }
+    }
+
+    /// Every later request gets `reply` at once.
+    pub fn answer_with(&self, reply: crate::watchdog::DiagnosisReply) {
+        *self.instant.borrow_mut() = Some(reply);
+    }
+}
+
+/// A diagnosis naming `suspect`, with `instruction`.
+pub fn diagnosis(suspect: &str, instruction: &str) -> crate::watchdog::DiagnosisReply {
+    crate::watchdog::DiagnosisReply {
+        result: Ok(crate::watchdog::Diagnosis {
+            suspect: suspect.into(),
+            instruction: instruction.into(),
+        }),
+        cost_usd: 0.001,
+    }
+}
+
+impl crate::watchdog::Diagnoser for FakeDiagnoser {
+    fn diagnose(
+        &self,
+        request: crate::watchdog::DiagnosisRequest,
+        sink: crate::watchdog::DiagnosisSink,
+    ) {
+        self.requests.borrow_mut().push(request);
+        match self.instant.borrow().clone() {
+            Some(reply) => {
+                sink(reply);
+                self.sinks.borrow_mut().push(None);
+            }
+            None => self.sinks.borrow_mut().push(Some(sink)),
+        }
+    }
+}
+
+/// Records restores; each returns a made-up commit keeping what was replaced.
+#[derive(Default)]
+pub struct FakeRestore {
+    pub calls: RefCell<Vec<(PathBuf, String)>>,
+}
+
+impl crate::watchdog::CheckpointRestore for FakeRestore {
+    fn restore(&self, worktree: &Path, commit: &str) -> AppResult<String> {
+        let mut calls = self.calls.borrow_mut();
+        calls.push((worktree.to_path_buf(), commit.to_string()));
+        Ok(format!("saved{:035x}", calls.len()))
+    }
+}

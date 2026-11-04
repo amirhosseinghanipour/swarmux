@@ -1,12 +1,17 @@
-//! The Guard: allow/deny rules for tool calls, and the loop breaker.
+//! The Guard: allow/deny rules for tool calls, the loop breaker, and the
+//! watchdog's detectors and recovery ladder.
 
 pub(crate) mod glob;
+mod ladder;
 mod loop_breaker;
 mod pattern;
 pub(crate) mod shell;
+mod watchdog;
 
+pub use ladder::{Ladder, LadderPolicy, NextRung, Rung, RungOptions, Taken};
 pub use loop_breaker::{LoopBreaker, LoopTrip, error_signature};
 pub use pattern::{Pattern, host_of};
+pub use watchdog::{AlarmKind, Detector, Gauges, NUDGE_MARK, WatchAlarm, WatchLimits, show_call};
 
 use shell::{has_substitution, split_commands, strip_wrappers};
 

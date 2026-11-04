@@ -70,10 +70,12 @@ pub enum LedgerKind {
     Mission,
     /// An evidence bundle was sealed.
     Evidence,
+    /// The watchdog saw trouble, took a recovery rung, or saw it settle.
+    Watchdog,
 }
 
 impl LedgerKind {
-    pub const ALL: [LedgerKind; 14] = [
+    pub const ALL: [LedgerKind; 15] = [
         LedgerKind::Genesis,
         LedgerKind::JobQueued,
         LedgerKind::JobStarted,
@@ -88,6 +90,7 @@ impl LedgerKind {
         LedgerKind::Worktree,
         LedgerKind::Mission,
         LedgerKind::Evidence,
+        LedgerKind::Watchdog,
     ];
 
     /// The stable name stored and hashed.
@@ -107,6 +110,7 @@ impl LedgerKind {
             LedgerKind::Worktree => "worktree",
             LedgerKind::Mission => "mission",
             LedgerKind::Evidence => "evidence",
+            LedgerKind::Watchdog => "watchdog",
         }
     }
 
@@ -479,6 +483,7 @@ mod tests {
                 "worktree",
                 "mission",
                 "evidence",
+                "watchdog",
             ]
         );
     }

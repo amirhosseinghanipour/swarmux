@@ -9,6 +9,7 @@ pub mod config_edit;
 mod config_governor;
 mod config_notify;
 mod config_telemetry;
+mod config_watchdog;
 mod config_worktree;
 pub mod dist;
 pub mod evidence;
@@ -31,7 +32,7 @@ pub mod terminal;
 pub mod worktree;
 
 pub use agents::FsAgentCatalog;
-pub use claude_cli::{ClaudeCli, GuardHook, HaikuLinter, HaikuRouter};
+pub use claude_cli::{ClaudeCli, GuardHook, HaikuDiagnoser, HaikuLinter, HaikuRouter};
 pub use clean_checkout::GitCleanCheckout;
 pub use clock::SystemClock;
 pub use config::{ConfigError, load_settings};
