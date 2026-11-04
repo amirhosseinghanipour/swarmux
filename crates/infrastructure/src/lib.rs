@@ -10,6 +10,7 @@ mod config_governor;
 mod config_notify;
 mod config_telemetry;
 mod config_worktree;
+pub mod demo;
 pub mod dist;
 pub mod evidence;
 pub mod gate;
