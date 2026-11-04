@@ -15,6 +15,8 @@ fn fetch(home: &Path, args: &[&str], no_color: bool) -> Output {
         .args(args)
         .env(var, home)
         .env("SWARMUX_CLAUDE_BIN", home.join("no-such-claude"))
+        // The same colour depth on every machine, CI included.
+        .env("COLORTERM", "truecolor")
         .env_remove("NO_COLOR");
     if no_color {
         cmd.env("NO_COLOR", "1");
