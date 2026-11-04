@@ -138,12 +138,25 @@ fn draw_screens(frame: &mut Frame, app: &App, t: &Theme) {
         app.guard.pending_count(),
         app.routing.in_flight(),
     );
-    let [left, right] = Layout::horizontal([
+    let tag = app.demo_label().map(|label| {
+        Line::from(Span::styled(
+            format!(" {label} "),
+            Style::new()
+                .fg(t.on_accent)
+                .bg(t.warn)
+                .add_modifier(Modifier::BOLD),
+        ))
+    });
+    let [left, middle, right] = Layout::horizontal([
         Constraint::Fill(1),
+        Constraint::Length(tag.as_ref().map_or(0, |l| l.width() as u16 + 1)),
         Constraint::Length(stats.width() as u16),
     ])
     .areas(status);
     draw_status(frame, left, app, t);
+    if let Some(tag) = tag {
+        frame.render_widget(tag, middle);
+    }
     frame.render_widget(stats, right);
 }
 
@@ -402,13 +415,11 @@ pub(crate) fn hints(app: &App) -> &'static str {
     }
 }
 
-#[cfg(test)]
 pub(crate) fn render_to_string(app: &App, w: u16, h: u16) -> String {
     buffer_to_string(&render_buffer(app, w, h))
 }
 
 /// The buffer as text, one line per row.
-#[cfg(test)]
 pub(crate) fn buffer_to_string(buf: &ratatui::buffer::Buffer) -> String {
     let area = buf.area;
     (area.y..area.bottom())
@@ -422,7 +433,6 @@ pub(crate) fn buffer_to_string(buf: &ratatui::buffer::Buffer) -> String {
 }
 
 /// Renders the app into a buffer, for colour assertions.
-#[cfg(test)]
 pub(crate) fn render_buffer(app: &App, w: u16, h: u16) -> ratatui::buffer::Buffer {
     use ratatui::{Terminal, backend::TestBackend};
     let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
