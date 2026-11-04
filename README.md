@@ -8,6 +8,14 @@ review live in one terminal.
 
 > Status: early development.
 
+<!--
+  Demo GIF (render with `vhs assets/tapes/demo.tape`, then uncomment):
+
+  ![swarmux --demo](assets/demo.gif)
+
+  Caption: scripted demo · `swarmux --demo`
+-->
+
 ## Features
 
 - **Prompt library** with `{{variables}}` and a real editor
@@ -66,9 +74,28 @@ code-signed, so SmartScreen may ask for confirmation on first run. Maintainers: 
 ## Try it
 
 ```sh
+swarmux --demo         # a scripted demo: no Claude Code, no account, nothing of yours is touched
 cargo run              # TUI: 1-6 switch screens (1 Mission control, 2 Missions), 0 Focus, p sends a prompt, q quits
 cargo run -- doctor    # checks Claude Code, the settings, the Guard hook and telemetry
 ```
+
+### The scripted demo
+
+`swarmux --demo` opens the real interface on a made-up "overnight org": five
+agents at work, a Guard denial, a run of routine approvals waiting as one row, a
+mission the done-gate sends back once before it passes, and the delivered
+mission with its evidence on the Ledger screen (`5`). It plays for about half
+a minute and then stays open so you can look around; `q` quits.
+
+It is a script, not a recording of a real run, and every number in it is made
+up. The status bar says `DEMO · scripted` the whole time. It works on a plain
+install: it does not start `claude`, and it keeps its data in a temporary
+folder that is deleted when you quit. Your `~/.swarmux` folder, your config and
+Claude Code's settings are not read or changed.
+
+`swarmux --demo --theme NAME` picks one of the built-in themes (see
+`swarmux theme list`). The GIF and theme strip in this repository come from the
+VHS tapes in `assets/tapes/`.
 
 ## Configuration
 
