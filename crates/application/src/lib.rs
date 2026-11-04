@@ -60,9 +60,9 @@ pub use hookbus::{
 pub use jev::{Jev, JevState, SUMMARY_MAX, summarize};
 pub use jobs::{JobFact, JobService, PumpReport, QueueEntry, QueueStats, Restart};
 pub use missions::{
-    Begun, ChangedFiles, LintReply, LintRequest, LintSink, MissionLinter, MissionReport,
-    MissionService, MissionStore, PlanReply, PlanRequest, PlanSettings, PlanSink, PlanStore,
-    Planner, WorkDirs,
+    Begun, ChangedFiles, Claim, LintReply, LintRequest, LintSink, MergeOutcome, MergeQueue,
+    MissionLinter, MissionReport, MissionService, MissionStore, PlanReply, PlanRequest,
+    PlanSettings, PlanSink, PlanStore, Planner, ScopeClaims, ScopeDenial, WorkDirs,
 };
 pub use notify::{
     FocusTracker, IDLE_UNFOCUSED_MS, Moment, NoNotifier, Notification, Notifier, NotifyService,

@@ -1,6 +1,8 @@
 //! Worktrees: one git worktree and branch per job, with its own block of
 //! ports, and the reclaiming of the ones nobody needs any more.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -34,6 +36,8 @@ pub struct AddWorktree {
     pub branch: String,
     /// Relative paths copied from the repository when they exist.
     pub copy: Vec<String>,
+    /// The branch a new branch starts from; the repository's HEAD when `None`.
+    pub base: Option<String>,
 }
 
 /// What creating a worktree did.
@@ -134,6 +138,8 @@ pub struct WorktreeService {
     settings: WorktreeSettings,
     ledger: Option<Rc<LedgerService>>,
     board: Option<Arc<HandoffBoard>>,
+    /// Branches new worktrees of queued jobs start from.
+    bases: RefCell<HashMap<JobId, String>>,
 }
 
 impl WorktreeService {
@@ -154,6 +160,7 @@ impl WorktreeService {
             settings: WorktreeSettings::default(),
             ledger: None,
             board: None,
+            bases: RefCell::new(HashMap::new()),
         }
     }
 
@@ -191,6 +198,11 @@ impl WorktreeService {
         }
     }
 
+    /// When `job` gets a new worktree, its branch starts from `base`.
+    pub fn set_base(&self, job: JobId, base: &str) {
+        self.bases.borrow_mut().insert(job, base.to_string());
+    }
+
     /// The worktree of `job`, if it has one that was not reclaimed.
     pub fn record_for(&self, job: JobId) -> AppResult<Option<WorktreeRecord>> {
         Ok(self.store.get(job)?.filter(|r| r.removed_at.is_none()))
@@ -207,6 +219,7 @@ impl WorktreeService {
                     path: record.path.clone(),
                     branch: record.branch.clone(),
                     copy: self.settings.copy.clone(),
+                    base: None,
                 })?;
             }
             self.publish_handoff(job);
@@ -233,6 +246,7 @@ impl WorktreeService {
             path: path.clone(),
             branch: branch.clone(),
             copy: self.settings.copy.clone(),
+            base: self.bases.borrow_mut().remove(&job),
         })?;
         let record = WorktreeRecord {
             job,

@@ -14,8 +14,9 @@ use crate::watchdog::NudgeGate;
 #[derive(Clone, Default)]
 pub struct SharedPolicy {
     policy: Arc<RwLock<GuardPolicy>>,
-    /// Refuses writes to protected paths before any rule is consulted.
-    fence: Option<Arc<dyn WriteFence>>,
+    /// Refuse writes (protected paths, a task's scope) before any rule
+    /// is consulted, in the order they were added.
+    fences: Vec<Arc<dyn WriteFence>>,
     /// Watchdog messages waiting for the agent's next tool call.
     nudges: Option<Arc<dyn NudgeGate>>,
 }
@@ -24,7 +25,7 @@ impl fmt::Debug for SharedPolicy {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SharedPolicy")
             .field("policy", &self.policy)
-            .field("fence", &self.fence.is_some())
+            .field("fences", &self.fences.len())
             .field("nudges", &self.nudges.is_some())
             .finish()
     }
@@ -34,7 +35,7 @@ impl SharedPolicy {
     pub fn new(policy: GuardPolicy) -> SharedPolicy {
         SharedPolicy {
             policy: Arc::new(RwLock::new(policy)),
-            fence: None,
+            fences: Vec::new(),
             nudges: None,
         }
     }
@@ -47,16 +48,17 @@ impl SharedPolicy {
         self
     }
 
-    /// Writes `fence` refuses are denied whatever the rules say.
+    /// Writes `fence` refuses are denied whatever the rules say. Fences
+    /// add up: the first that refuses gives the reason.
     pub fn with_fence(mut self, fence: Arc<dyn WriteFence>) -> SharedPolicy {
-        self.fence = Some(fence);
+        self.fences.push(fence);
         self
     }
 
     /// The decision for `request`, and how long it took in microseconds.
     pub fn decide(&self, request: &HookRequest) -> (Decision, u64) {
         let start = Instant::now();
-        let fenced = self.fence.as_ref().and_then(|f| {
+        let fenced = self.fences.iter().find_map(|f| {
             f.refuses(
                 request.job_id,
                 &request.tool_name,

@@ -214,7 +214,7 @@ pub struct JobService {
 }
 
 /// Where a queued job comes from, and what it may spend.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Default)]
 struct Lineage {
     wants_review: bool,
     review_of: Option<JobId>,
@@ -222,6 +222,9 @@ struct Lineage {
     inherits: Option<JobId>,
     /// `--max-budget-usd` of the job.
     cap: Option<f64>,
+    /// The branch a new worktree of the job starts from, instead of the
+    /// repository's HEAD.
+    base: Option<String>,
 }
 
 /// How often stale worktrees are looked for.
@@ -442,6 +445,69 @@ impl JobService {
         self.enqueue(session_id, prompt, None, None, false, lineage)
     }
 
+    /// Like [`JobService::dispatch_capped`], with the job's worktree
+    /// branched from `base` rather than the repository's HEAD.
+    pub fn dispatch_from(
+        &mut self,
+        session_id: SessionId,
+        prompt: &str,
+        cap: Option<f64>,
+        base: &str,
+    ) -> AppResult<JobId> {
+        let lineage = Lineage {
+            wants_review: self.review_next(),
+            cap,
+            base: Some(base.to_string()),
+            ..Lineage::default()
+        };
+        self.enqueue(session_id, prompt, None, None, false, lineage)
+    }
+
+    /// The session, as stored.
+    pub fn session(&self, id: SessionId) -> AppResult<Option<Session>> {
+        self.sessions.get(id)
+    }
+
+    /// A new session like `like` (folder, model, mode, worktree setting)
+    /// named `name`, for work that must run beside it.
+    pub fn spawn_session(&mut self, like: SessionId, name: &str) -> AppResult<Session> {
+        let original = self.sessions.get(like)?.ok_or(AppError::SessionNotFound)?;
+        let mut session = Session::new(
+            SessionId::random(),
+            name,
+            original.cwd.clone(),
+            &original.model,
+            self.clock.now(),
+        )?;
+        session.lean = original.lean;
+        session.permission_mode = original.permission_mode.clone();
+        session.worktree = original.worktree;
+        self.sessions.insert(&session)?;
+        Ok(session)
+    }
+
+    /// Sends a finished job's agent back with `prompt`: the same Claude
+    /// session, the same worktree.
+    pub fn continue_with(&mut self, id: JobId, prompt: &str) -> AppResult<JobId> {
+        let job = self.jobs.get(id)?.ok_or(AppError::JobNotFound)?;
+        if !job.status.is_finished() {
+            return Err(AppError::JobNotFinished(id));
+        }
+        let lineage = Lineage {
+            inherits: Some(id),
+            cap: self.caps.get(&id).copied(),
+            ..Lineage::default()
+        };
+        self.enqueue(
+            job.session_id,
+            prompt,
+            None,
+            Some(job.model),
+            false,
+            lineage,
+        )
+    }
+
     /// Like [`JobService::dispatch`], and records which template the job came from.
     pub fn dispatch_template(
         &mut self,
@@ -484,6 +550,7 @@ impl JobService {
             review_of: job.review_of,
             inherits: Some(id),
             cap: self.caps.get(&id).copied(),
+            base: None,
         };
         self.enqueue(
             job.session_id,
@@ -559,6 +626,7 @@ impl JobService {
             review_of: None,
             inherits: Some(id),
             cap: self.caps.get(&id).copied(),
+            base: None,
         };
         let model = restart.model.unwrap_or(job.model);
         let new = self.enqueue(
@@ -900,6 +968,7 @@ impl JobService {
             review_of: job.review_of,
             inherits: (job.status == JobStatus::Interrupted && !fork).then_some(id),
             cap: self.caps.get(&id).copied(),
+            base: None,
         };
         self.enqueue(
             job.session_id,
@@ -925,6 +994,7 @@ impl JobService {
             review_of,
             inherits,
             cap,
+            base,
         } = lineage;
         let prompt = prompt.trim();
         if prompt.is_empty() {
@@ -968,6 +1038,9 @@ impl JobService {
         // Before it can start: the job continues the other one's worktree.
         if let (Some(from), Some(worktrees)) = (inherits, &self.worktrees) {
             worktrees.rebind(from, id)?;
+        }
+        if let (Some(base), Some(worktrees)) = (base, &self.worktrees) {
+            worktrees.set_base(id, &base);
         }
         self.schedule()?;
         Ok(id)

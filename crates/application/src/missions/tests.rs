@@ -564,4 +564,5 @@ fn missions_delivered_before_bundles_existed_get_one() {
     );
 }
 
+mod graph;
 mod plan_first;

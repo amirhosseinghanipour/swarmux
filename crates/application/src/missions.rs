@@ -26,7 +26,9 @@ use crate::ledger::LedgerService;
 use crate::ports::Clock;
 use crate::{AppError, AppResult};
 
+mod graph;
 mod plan;
+pub use graph::{Claim, MergeOutcome, MergeQueue, ScopeClaims, ScopeDenial};
 pub use plan::{
     Begun, ChangedFiles, PlanReply, PlanRequest, PlanSettings, PlanSink, PlanStore, Planner,
     WorkDirs,
@@ -97,6 +99,8 @@ pub struct MissionService {
     verifying: HashSet<String>,
     /// Plan-first: planner, plans and what each build was compared with.
     plans: plan::PlanState,
+    /// Task graphs: merge queue, worktrees and scope claims.
+    graphs: graph::GraphState,
 }
 
 impl MissionService {
@@ -118,6 +122,7 @@ impl MissionService {
             tickets: 0,
             verifying: HashSet::new(),
             plans: plan::PlanState::new(),
+            graphs: graph::GraphState::default(),
         })
     }
 
@@ -416,7 +421,7 @@ impl MissionService {
         }
         report.changed |= self.pump_plans(&mut report.errors);
         for i in 0..self.missions.len() {
-            if !self.missions[i].state.in_flight() {
+            if !self.missions[i].state.in_flight() || self.graph(&self.missions[i].slug).is_some() {
                 continue;
             }
             match self.follow(i, facts, gates, &mut report.cancel) {
