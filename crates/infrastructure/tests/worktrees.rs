@@ -440,6 +440,10 @@ fn run_and_quit(env: &Env, with_checkpoint: bool) -> (JobId, SessionId, PathBuf)
     let job = svc.dispatch(s.id, "do six steps").unwrap();
     let cwd = script.seen()[0].request.cwd.clone();
     pump_until(&mut svc, "three steps", || step_files(&cwd) == 3);
+    // On a fast machine the steps can land before anything was pumped; take
+    // in the session's init event, which was sent before the first step.
+    let report = svc.pump();
+    assert!(report.errors.is_empty(), "{:?}", report.errors);
     if with_checkpoint {
         // The done-gate passed after step 3.
         app.checkpoints
