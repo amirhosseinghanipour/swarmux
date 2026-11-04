@@ -1,6 +1,7 @@
 //! Composition root: the only place that wires concrete adapters to use cases.
 
 mod audit;
+mod demo;
 mod dist;
 mod doctor;
 mod evidence;
@@ -40,13 +41,20 @@ use swarmux_tui::{App, Launch};
 /// Claude Code may run the hook this much longer than an approval can wait.
 const HOOK_GRACE_SECS: u64 = 10;
 
-/// swarmux — a prompt-first command center for Claude Code.
+/// Autonomy with receipts. The operations center for agent-run work, built on Claude Code.
 #[derive(Parser)]
 #[command(version, about)]
 struct Cli {
     /// Start without the splash screen.
     #[arg(long, global = true)]
     no_splash: bool,
+    /// Play a scripted demo in a throwaway folder: no Claude Code, no
+    /// account, and none of your data is used or changed.
+    #[arg(long)]
+    demo: bool,
+    /// A built-in theme for the demo (see `swarmux theme list`).
+    #[arg(long, requires = "demo", value_name = "NAME")]
+    theme: Option<String>,
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -303,6 +311,9 @@ enum AuditAction {
 
 fn main() -> anyhow::Result<ExitCode> {
     let cli = Cli::parse();
+    if cli.demo && cli.command.is_some() {
+        anyhow::bail!("--demo plays on its own: run `swarmux --demo` without a command");
+    }
     match cli.command {
         Some(Command::Audit {
             action: AuditAction::Verify,
@@ -357,6 +368,10 @@ fn main() -> anyhow::Result<ExitCode> {
             WorktreeAction::Checkpoints { job, n } => worktree::checkpoints(job, n),
             WorktreeAction::Mode { session, mode } => worktree::mode(&session, mode),
         },
+        None if cli.demo => demo::run(&demo::Options {
+            theme: cli.theme,
+            ..demo::Options::default()
+        }),
         None => run_tui(cli.no_splash),
         Some(Command::Doctor) => doctor::run(),
         Some(Command::Fetch { theme, color }) => fetch::run(theme.as_deref(), &color),

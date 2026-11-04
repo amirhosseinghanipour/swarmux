@@ -13,8 +13,13 @@
 
 </div>
 
-<!-- demo gif: assets/demo.gif, added with the demo kit
-     caption: replayed from a real run · `swarmux --demo` -->
+<!--
+  Demo GIF (render with `vhs assets/tapes/demo.tape`, then uncomment):
+
+  ![swarmux --demo](assets/demo.gif)
+
+  Caption: scripted demo · `swarmux --demo`
+-->
 
 - **Proves "done".** Gates swarmux runs itself, hidden checks the agent never
   sees, and evidence bundles you can re-check with `swarmux verify`.
@@ -65,12 +70,14 @@ Twelve built-in themes, plus `wal`, base16 and matugen imports. List them with
 ## Quick start
 
 ```sh
+swarmux --demo         # a scripted demo: no Claude Code, no account, nothing of yours is touched
 swarmux                # the TUI: 1-6 switch screens (1 Mission control, 2 Missions), 0 Focus, p sends a prompt, q quits
 swarmux doctor         # checks Claude Code, the settings, the Guard hook and telemetry
 swarmux fetch          # a neofetch-style card of your sessions, spend and limits
 ```
 
-From a checkout, use `cargo run` and `cargo run -- doctor`.
+From a checkout, use `cargo run` and `cargo run -- doctor`. See
+[the scripted demo](guide/install.md#the-scripted-demo) for what `--demo` shows.
 
 ## What it does
 

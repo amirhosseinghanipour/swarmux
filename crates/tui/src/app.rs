@@ -205,7 +205,14 @@ pub struct App {
     pub showcase: Showcase,
     /// When the showcase scene was last rebuilt.
     showcase_at: Option<Millis>,
+    /// Set in demo mode: the tag shown in the status bar.
+    demo: Option<String>,
+    /// Runs at the start of every update (the scripted demo's director).
+    driver: Option<Driver>,
 }
+
+/// A script the app plays: runs at the start of every update.
+type Driver = Box<dyn FnMut(&mut App)>;
 
 /// The user counts as away after this long without opening swarmux.
 const AWAY_AFTER_MS: Millis = 30 * 60_000;
@@ -313,6 +320,8 @@ impl App {
             window: FocusTracker::default(),
             showcase: Showcase::default(),
             showcase_at: None,
+            demo: None,
+            driver: None,
             focus: None,
             toast: None,
             splash: SplashInfo::default(),
@@ -667,8 +676,72 @@ impl App {
         }
     }
 
+    /// Marks the app as a scripted demo: `label` stays in the status bar so
+    /// nothing on screen can be taken for real data.
+    pub fn with_demo(mut self, label: &str) -> App {
+        self.demo = Some(label.to_string());
+        self
+    }
+
+    /// The demo tag, when this is a scripted demo.
+    pub fn demo_label(&self) -> Option<&str> {
+        self.demo.as_deref()
+    }
+
+    /// Gives the app a script to play: `driver` runs at the start of every
+    /// update and may dispatch prompts and launch missions.
+    pub fn with_driver(mut self, driver: impl FnMut(&mut App) + 'static) -> App {
+        self.driver = Some(Box::new(driver));
+        self
+    }
+
+    /// Sends `prompt` to the session called `name`, as if typed for it.
+    pub fn dispatch_to(&mut self, name: &str, prompt: &str) -> AppResult<JobId> {
+        let session = self
+            .sessions
+            .iter()
+            .find(|s| s.name == name)
+            .cloned()
+            .ok_or(AppError::SessionNotFound)?;
+        let job = self.jobs.dispatch(session.id, prompt)?;
+        self.focus_state.note_human(job, self.now());
+        self.refresh_sessions(None);
+        Ok(job)
+    }
+
+    /// Runs the mission called `slug` (it must be linted).
+    pub fn run_mission(&mut self, slug: &str) -> AppResult<JobId> {
+        let Some(service) = &mut self.missions else {
+            return Err(AppError::Mission("missions are not set up".into()));
+        };
+        let job = service.launch(slug, &mut self.jobs)?;
+        self.focus_state.note_human(job, self.now());
+        self.refresh_sessions(None);
+        Ok(job)
+    }
+
+    /// Presses a character key, as the user would.
+    pub fn press_char(&mut self, c: char) {
+        self.on_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+
+    /// The screen as text (one line per row) at the given size, for
+    /// headless runs and tests.
+    pub fn render_text(&self, width: u16, height: u16) -> String {
+        crate::ui::render_to_string(self, width, height)
+    }
+
+    /// The screen as cells with their colours, for comparing two runs.
+    pub fn render_buffer(&self, width: u16, height: u16) -> ratatui::buffer::Buffer {
+        crate::ui::render_buffer(self, width, height)
+    }
+
     /// Applies pending job updates, starts queued jobs and handles guard requests.
     pub fn update(&mut self) {
+        if let Some(mut driver) = self.driver.take() {
+            driver(self);
+            self.driver = Some(driver);
+        }
         let report = self.jobs.pump();
         let mut errors = report.errors;
         for (job, trip) in &report.loop_trips {
