@@ -20,6 +20,7 @@ pub mod ledger;
 pub mod mission;
 mod model;
 mod phase;
+pub mod plan;
 mod progress;
 mod prompt;
 mod review;

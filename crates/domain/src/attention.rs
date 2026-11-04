@@ -49,6 +49,10 @@ pub enum AttentionKind {
     GateEscalated,
     /// The watchdog tried its recovery rungs and the agent is still stuck.
     Recovery,
+    /// A plan-first mission has a plan waiting for approval.
+    PlanReady,
+    /// What a mission built strayed from the plan the user approved.
+    Drift,
 }
 
 impl AttentionKind {
@@ -62,12 +66,15 @@ impl AttentionKind {
             AttentionKind::Stalled => "stalled",
             AttentionKind::GateEscalated => "gate",
             AttentionKind::Recovery => "recovery",
+            AttentionKind::PlanReady => "plan",
+            AttentionKind::Drift => "drift",
         }
     }
 
-    /// Items the user answers with `y`/`n`/`a` rather than `x`.
+    /// Items the user answers (`y`/`n`/`a`, or the plan's keys) rather
+    /// than dismisses with `x`.
     pub fn is_decision(self) -> bool {
-        matches!(self, AttentionKind::Approval)
+        matches!(self, AttentionKind::Approval | AttentionKind::PlanReady)
     }
 }
 
@@ -217,9 +224,13 @@ impl AttentionItem {
     pub fn cause(&self) -> String {
         match (&self.signature, self.kind) {
             (Some(sig), _) => format!("approval:{}:{}", sig.key(), sig.tier.as_str()),
-            (None, AttentionKind::ResultReady | AttentionKind::ReviewConcerns) => {
-                self.id.to_string()
-            }
+            (
+                None,
+                AttentionKind::ResultReady
+                | AttentionKind::ReviewConcerns
+                | AttentionKind::PlanReady
+                | AttentionKind::Drift,
+            ) => self.id.to_string(),
             (None, kind) => kind.as_str().to_string(),
         }
     }
@@ -370,6 +381,68 @@ impl AttentionItem {
         )
     }
 
+    /// A mission's plan waits for the user's decision (P2): nothing is
+    /// built until it is approved, changed or cancelled.
+    pub fn plan_ready(
+        mission: &str,
+        session: Option<SessionId>,
+        title: &str,
+        detail: &str,
+        since: Millis,
+    ) -> AttentionItem {
+        AttentionItem::of_mission(
+            format!("plan:{mission}"),
+            (AttentionKind::PlanReady, Priority::P2, Likelihood::Certain),
+            (session, None),
+            (title, detail),
+            since,
+        )
+    }
+
+    /// A finished build strayed from its approved plan (P3).
+    pub fn plan_drift(
+        mission: &str,
+        session: Option<SessionId>,
+        job: Option<JobId>,
+        title: &str,
+        detail: &str,
+        since: Millis,
+    ) -> AttentionItem {
+        AttentionItem::of_mission(
+            format!("drift:{mission}"),
+            (AttentionKind::Drift, Priority::P3, Likelihood::Likely),
+            (session, job),
+            (title, detail),
+            since,
+        )
+    }
+
+    fn of_mission(
+        id: String,
+        (kind, priority, likelihood): (AttentionKind, Priority, Likelihood),
+        (session, job): (Option<SessionId>, Option<JobId>),
+        (title, detail): (&str, &str),
+        since: Millis,
+    ) -> AttentionItem {
+        AttentionItem {
+            id: AttentionId::new(id),
+            kind,
+            priority,
+            title: title.to_string(),
+            detail: detail.to_string(),
+            session,
+            job,
+            request: None,
+            since,
+            deadline: None,
+            likelihood,
+            risk: None,
+            signature: None,
+            batch: 1,
+            suggest: None,
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn of_job(
         job: JobId,
@@ -390,6 +463,8 @@ impl AttentionItem {
             AttentionKind::Recovery => "recovery",
             AttentionKind::Approval => "approval",
             AttentionKind::Question => "question",
+            AttentionKind::PlanReady => "plan",
+            AttentionKind::Drift => "drift",
         };
         AttentionItem {
             id: AttentionId::new(format!("job:{job}:{suffix}")),
