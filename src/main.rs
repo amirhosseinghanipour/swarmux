@@ -26,15 +26,15 @@ use swarmux_application::ports::Clock;
 use swarmux_application::{
     CombinedStatusline, GateKeeper, GateService, Governor, GuardService, HandoffBoard,
     HistoryService, HookBus, HookMessenger, Jev, JobService, MissionService, NotifyService,
-    NudgeBoard, PromptService, RoutingService, SessionService, SharedPolicy, StatuslineFeed,
-    TruthBoard, Watchdog,
+    NudgeBoard, PromptService, RoutingService, ScopeClaims, SessionService, SharedPolicy,
+    StatuslineFeed, TruthBoard, Watchdog,
 };
 use swarmux_infrastructure::hook::{self, HookServer, Responders};
 use swarmux_infrastructure::{
     ClaudeCli, ClaudePlanner, ConfigRuleWriter, FilePalette, FsAgentCatalog, FsGateSource, GitCli,
-    GitVcs, GitWorktrees, GuardHook, HaikuDiagnoser, HaikuLinter, HaikuRouter, MissionFiles, Paths,
-    SqliteLedger, SqliteStore, SysinfoMonitor, SystemClock, WindowsTerminal, build_notifier,
-    load_settings, utc_offset_minutes,
+    GitMergeQueue, GitVcs, GitWorktrees, GuardHook, HaikuDiagnoser, HaikuLinter, HaikuRouter,
+    MissionFiles, Paths, SqliteLedger, SqliteStore, SysinfoMonitor, SystemClock, WindowsTerminal,
+    build_notifier, load_settings, utc_offset_minutes,
 };
 use swarmux_tui::{App, Launch};
 
@@ -447,8 +447,11 @@ fn run_tui(no_splash: bool) -> anyhow::Result<()> {
     let guard_settings = &settings.guard;
     // Watchdog nudges reach an agent as the reason its next call is not run.
     let nudges = NudgeBoard::new();
+    // Tasks of a mission's graph write only inside the files they claim.
+    let claims = ScopeClaims::new();
     let policy = SharedPolicy::new(guard_settings.policy())
         .with_fence(keeper.clone())
+        .with_fence(claims.clone())
         .with_nudges(nudges.clone());
     let pipe = hook::endpoint_for(std::process::id());
     // Handoffs reach the sessions that start after a checkpoint.
@@ -519,7 +522,20 @@ fn run_tui(no_splash: bool) -> anyhow::Result<()> {
         .with_evidence(evidence.clone())
         .with_plan_settings(settings.missions.clone())
         .with_planner(Rc::new(planner), store.clone())?
-        .with_changes(Rc::new(GitVcs::default()), plan_dirs);
+        .with_changes(Rc::new(GitVcs::default()), plan_dirs)
+        // Plans whose tasks can run side by side run as a task graph, merged
+        // into a branch of swarmux's own.
+        .with_graph(
+            Rc::new(GitMergeQueue::under(
+                settings
+                    .worktree
+                    .root
+                    .clone()
+                    .unwrap_or_else(|| paths.data_dir.join("worktrees")),
+            )),
+            worktrees.clone(),
+            claims,
+        );
     // Stuck agents: detectors on every job, and a ladder of recoveries,
     // cheapest first, before the inbox.
     let mut watchdog = Watchdog::new(

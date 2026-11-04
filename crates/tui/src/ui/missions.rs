@@ -333,10 +333,11 @@ fn budget_bar(app: &App, m: &Mission, w: usize) -> Line<'static> {
 /// Topology, the job, open questions and the lint, or why it stopped.
 fn footer(app: &App, m: &Mission, w: usize) -> Line<'static> {
     let t = &app.look.theme;
-    let mut spans = vec![Span::styled(
-        format!("{} single session", g(app, "◇", "<>")),
-        Style::new().fg(t.label),
-    )];
+    let topology = match app.mission_plan(&m.slug).and_then(|r| r.graph.as_ref()) {
+        Some(run) => format!("{} task graph ×{}", g(app, "◇", "<>"), run.tasks.len()),
+        None => format!("{} single session", g(app, "◇", "<>")),
+    };
+    let mut spans = vec![Span::styled(topology, Style::new().fg(t.label))];
     if let Some(job) = m.job {
         let session = m
             .session
