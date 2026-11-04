@@ -28,6 +28,9 @@ tar.workspace = true
 zip.workspace = true
 uuid.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.191"
+
 [target.'cfg(windows)'.dependencies]
 tauri-winrt-notification = "0.8.1"
 windows-sys = { version = "0.61.2", features = [

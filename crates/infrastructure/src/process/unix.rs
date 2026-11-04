@@ -2,7 +2,6 @@
 
 use std::io;
 use std::os::unix::process::CommandExt;
-use std::process::{Command, Stdio};
 
 /// The group the child leads.
 pub struct Tree {
@@ -30,13 +29,14 @@ pub fn adopt_tokio(child: &mut tokio::process::Child) -> io::Result<Tree> {
 
 impl Tree {
     pub fn kill(&self) {
-        // Already gone is fine.
-        let _ = Command::new("kill")
-            .args(["-KILL", &format!("-{}", self.pgid)])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
+        let Ok(pgid) = libc::pid_t::try_from(self.pgid) else {
+            return;
+        };
+        // SAFETY: killpg only sends a signal; a group that is already gone
+        // makes it fail with ESRCH, which is fine.
+        unsafe {
+            libc::killpg(pgid, libc::SIGKILL);
+        }
     }
 }
 

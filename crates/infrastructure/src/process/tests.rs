@@ -26,10 +26,13 @@ fn descendants(root: u32) -> HashSet<u32> {
     }
 }
 
+/// Still running. A zombie has exited and only waits for its parent to
+/// reap it, so it doesn't count.
 fn alive(pid: u32) -> bool {
     let mut sys = System::new().unwrap();
     sys.refresh_processes(ProcessesToUpdate::Some(&[Pid::from_u32(pid)]), true);
-    sys.process(Pid::from_u32(pid)).is_some()
+    sys.process(Pid::from_u32(pid))
+        .is_some_and(|p| p.status() != sysinfo::ProcessStatus::Zombie)
 }
 
 /// Waits until `f` holds, for at most 30 s.
