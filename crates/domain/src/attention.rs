@@ -53,6 +53,9 @@ pub enum AttentionKind {
     PlanReady,
     /// What a mission built strayed from the plan the user approved.
     Drift,
+    /// A task of a mission could not merge: a conflict its agent could not
+    /// resolve, or files outside its scope.
+    Merge,
 }
 
 impl AttentionKind {
@@ -68,6 +71,7 @@ impl AttentionKind {
             AttentionKind::Recovery => "recovery",
             AttentionKind::PlanReady => "plan",
             AttentionKind::Drift => "drift",
+            AttentionKind::Merge => "merge",
         }
     }
 
@@ -229,7 +233,8 @@ impl AttentionItem {
                 AttentionKind::ResultReady
                 | AttentionKind::ReviewConcerns
                 | AttentionKind::PlanReady
-                | AttentionKind::Drift,
+                | AttentionKind::Drift
+                | AttentionKind::Merge,
             ) => self.id.to_string(),
             (None, kind) => kind.as_str().to_string(),
         }
@@ -417,6 +422,24 @@ impl AttentionItem {
         )
     }
 
+    /// A task of a mission's graph can't merge without the user (P2): a
+    /// second conflict, or a branch with files outside its scope.
+    pub fn merge_blocked(
+        mission: &str,
+        task: &str,
+        (session, job): (Option<SessionId>, Option<JobId>),
+        (title, detail): (&str, &str),
+        since: Millis,
+    ) -> AttentionItem {
+        AttentionItem::of_mission(
+            format!("merge:{mission}:{task}"),
+            (AttentionKind::Merge, Priority::P2, Likelihood::Certain),
+            (session, job),
+            (title, detail),
+            since,
+        )
+    }
+
     fn of_mission(
         id: String,
         (kind, priority, likelihood): (AttentionKind, Priority, Likelihood),
@@ -465,6 +488,7 @@ impl AttentionItem {
             AttentionKind::Question => "question",
             AttentionKind::PlanReady => "plan",
             AttentionKind::Drift => "drift",
+            AttentionKind::Merge => "merge",
         };
         AttentionItem {
             id: AttentionId::new(format!("job:{job}:{suffix}")),

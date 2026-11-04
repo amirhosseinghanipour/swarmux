@@ -110,6 +110,7 @@ fn a_plan_survives_its_json_and_the_record_survives_its_encoding() {
     assert_eq!(parse_plan(&p.to_json()).unwrap(), p);
     assert_eq!(p.digest(), parse_plan(&p.to_json()).unwrap().digest());
     let drift = check_drift(&p, &["zzz.rs".to_string()], DEFAULT_DRIFT_THRESHOLD);
+    let p2 = p.clone();
     let rec = PlanRecord {
         plan_first: Some(true),
         status: PlanStatus::Approved,
@@ -118,6 +119,11 @@ fn a_plan_survives_its_json_and_the_record_survives_its_encoding() {
         rounds: 2,
         cost_usd: 0.31,
         drift: Some(drift),
+        graph: Some(crate::taskgraph::GraphRun::new(
+            &p2,
+            "swarmux/m/integration",
+            7,
+        )),
     };
     assert_eq!(PlanRecord::decode(&rec.encode()).unwrap(), rec);
     let bare = PlanRecord::default();

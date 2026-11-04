@@ -27,6 +27,7 @@ mod review;
 mod schedule;
 mod session;
 mod subagent;
+pub mod taskgraph;
 pub mod telemetry;
 mod template;
 mod tokens;

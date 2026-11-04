@@ -176,6 +176,7 @@ pub(crate) fn ntfy_push(n: &Notification) -> Push {
         AttentionKind::Recovery => "the watchdog could not get a job unstuck",
         AttentionKind::PlanReady => "a plan is waiting for approval",
         AttentionKind::Drift => "a build strayed from its plan",
+        AttentionKind::Merge => "a task of a mission can't merge",
     };
     let (priority, tag) = match n.priority {
         Priority::P1 => ("urgent", "rotating_light"),

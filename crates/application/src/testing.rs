@@ -1041,6 +1041,8 @@ pub struct FakeGit {
     pub snapshots: Cell<u32>,
     pub removed: RefCell<Vec<PathBuf>>,
     pub handoffs: RefCell<Vec<(PathBuf, String)>>,
+    /// The branch each new worktree started from (`None`: HEAD).
+    pub bases: RefCell<Vec<(PathBuf, Option<String>)>>,
 }
 
 impl FakeGit {
@@ -1063,6 +1065,9 @@ impl crate::worktree::Worktrees for FakeGit {
 
     fn add(&self, req: &crate::worktree::AddWorktree) -> AppResult<crate::worktree::Added> {
         self.folders.borrow_mut().push(req.path.clone());
+        self.bases
+            .borrow_mut()
+            .push((req.path.clone(), req.base.clone()));
         Ok(crate::worktree::Added {
             created_branch: true,
             copied: req.copy.clone(),
@@ -1490,5 +1495,78 @@ impl crate::missions::ChangedFiles for FakeChanges {
             Some(why) => Err(AppError::Workspace(why)),
             None => Ok(self.files.borrow().clone()),
         }
+    }
+}
+
+/// A merge queue over branches that exist only as lists of changed files.
+#[derive(Default)]
+pub struct FakeMergeQueue {
+    /// Integration branches opened, with the repository.
+    pub opened: RefCell<Vec<(PathBuf, String)>>,
+    /// The files each branch changed; tests (and fake agents) fill it.
+    pub changes: RefCell<HashMap<String, Vec<String>>>,
+    /// Branches whose next merges conflict: how many more times, in which files.
+    pub conflicts: RefCell<HashMap<String, (u32, Vec<String>)>>,
+    /// Branches merged, in order.
+    pub merged: RefCell<Vec<String>>,
+    /// Every file that landed in the integration branch.
+    pub landed: RefCell<Vec<String>>,
+    /// Merges tried, conflicts included.
+    pub attempts: Cell<u32>,
+    /// Worktrees brought up to a branch.
+    pub forwarded: RefCell<Vec<(PathBuf, String)>>,
+}
+
+impl FakeMergeQueue {
+    /// Notes that `branch` changed `file`.
+    pub fn touch(&self, branch: &str, file: &str) {
+        self.changes
+            .borrow_mut()
+            .entry(branch.to_string())
+            .or_default()
+            .push(file.to_string());
+    }
+}
+
+impl crate::missions::MergeQueue for FakeMergeQueue {
+    fn open(&self, repo: &Path, branch: &str) -> AppResult<PathBuf> {
+        self.opened
+            .borrow_mut()
+            .push((repo.to_path_buf(), branch.to_string()));
+        Ok(PathBuf::from("/wt/integration"))
+    }
+
+    fn changed(&self, _: &Path, branch: &str) -> AppResult<Vec<String>> {
+        Ok(self
+            .changes
+            .borrow()
+            .get(branch)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    fn merge(&self, _: &Path, branch: &str, _: &str) -> AppResult<crate::missions::MergeOutcome> {
+        self.attempts.set(self.attempts.get() + 1);
+        if let Some((left, files)) = self.conflicts.borrow_mut().get_mut(branch)
+            && *left > 0
+        {
+            *left -= 1;
+            return Ok(crate::missions::MergeOutcome::Conflict {
+                files: files.clone(),
+            });
+        }
+        self.merged.borrow_mut().push(branch.to_string());
+        let files = self.changed(Path::new(""), branch)?;
+        self.landed.borrow_mut().extend(files);
+        Ok(crate::missions::MergeOutcome::Merged {
+            commit: format!("{:040x}", self.merged.borrow().len()),
+        })
+    }
+
+    fn fast_forward(&self, worktree: &Path, branch: &str) -> AppResult<()> {
+        self.forwarded
+            .borrow_mut()
+            .push((worktree.to_path_buf(), branch.to_string()));
+        Ok(())
     }
 }

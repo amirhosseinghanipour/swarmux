@@ -61,6 +61,7 @@ mod tests {
             rounds: 1,
             cost_usd: 0.1,
             drift: None,
+            graph: None,
         }
     }
 

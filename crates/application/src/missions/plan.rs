@@ -35,6 +35,9 @@ pub struct PlanSettings {
     pub model: String,
     /// Drift at or above this share (0 to 1) of the change is flagged.
     pub drift_threshold: f64,
+    /// An approved plan whose tasks can run side by side runs as one job
+    /// per task, each in its own worktree, merged in dependency order.
+    pub parallel: bool,
 }
 
 impl Default for PlanSettings {
@@ -43,6 +46,7 @@ impl Default for PlanSettings {
             plan_first: false,
             model: "sonnet".into(),
             drift_threshold: DEFAULT_DRIFT_THRESHOLD,
+            parallel: true,
         }
     }
 }
@@ -100,12 +104,12 @@ type PlanMsg = (String, u64, PlanReply);
 
 /// Everything plan-first needs, held by the mission service.
 pub(super) struct PlanState {
-    settings: PlanSettings,
+    pub(super) settings: PlanSettings,
     planner: Option<Rc<dyn Planner>>,
     store: Option<Rc<dyn PlanStore>>,
     diffs: Option<Rc<dyn ChangedFiles>>,
     workdirs: Option<WorkDirs>,
-    records: HashMap<String, PlanRecord>,
+    pub(super) records: HashMap<String, PlanRecord>,
     tx: Sender<PlanMsg>,
     rx: Receiver<PlanMsg>,
     /// The newest planning run per mission; older replies are dropped.
@@ -191,14 +195,14 @@ impl MissionService {
         self.plans.settings.drift_threshold
     }
 
-    fn save_plan(&self, slug: &str) -> AppResult<()> {
+    pub(super) fn save_plan(&self, slug: &str) -> AppResult<()> {
         let (Some(store), Some(record)) = (&self.plans.store, self.plans.records.get(slug)) else {
             return Ok(());
         };
         store.save(slug, record, self.clock.now())
     }
 
-    fn ledger_plan(
+    pub(super) fn ledger_plan(
         &self,
         slug: &str,
         event: &str,
@@ -242,7 +246,7 @@ impl MissionService {
                 .get(slug)
                 .is_some_and(|r| r.approved().is_some())
         {
-            return self.launch(slug, jobs).map(Begun::Job);
+            return self.build(slug, jobs).map(Begun::Job);
         }
         match self.plan(slug).map(|r| r.status) {
             Some(PlanStatus::Planning) => {
@@ -328,7 +332,7 @@ impl MissionService {
         let plan = record.plan.clone();
         self.save_plan(slug)?;
         self.ledger_plan(slug, "approved", "", plan.as_ref())?;
-        self.launch(slug, jobs)
+        self.build(slug, jobs)
     }
 
     /// Sends the proposed plan back with `note` and asks for a new one.
@@ -399,6 +403,7 @@ impl MissionService {
         self.plans.checked.remove(slug);
         if let Some(r) = self.plans.records.get_mut(slug) {
             r.drift = None;
+            r.graph = None;
         }
     }
 
@@ -534,6 +539,7 @@ impl MissionService {
                 ));
             }
         }
+        out.extend(self.graph_items());
         out
     }
 }

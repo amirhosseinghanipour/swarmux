@@ -1286,7 +1286,10 @@ impl App {
         let Some(service) = &mut self.missions else {
             return Vec::new();
         };
-        let report = service.pump(&self.mission.facts, &self.mission.gates);
+        let mut report = service.pump(&self.mission.facts, &self.mission.gates);
+        let graphs = service.pump_graphs(&mut self.jobs, &self.mission.facts, &self.mission.gates);
+        report.errors.extend(graphs.errors);
+        report.cancel.extend(graphs.cancel);
         if let Some(composer) = &mut self.missions_screen.composer
             && let Some(m) = composer.slug.as_deref().and_then(|s| service.get(s))
         {
@@ -1295,6 +1298,10 @@ impl App {
         let mut errors = report.errors;
         for job in report.cancel {
             errors.extend(self.jobs.cancel(job).err());
+        }
+        if graphs.changed {
+            // Task graphs start jobs in sessions of their own.
+            self.refresh_sessions(None);
         }
         errors
     }
@@ -2018,15 +2025,15 @@ pub(crate) mod tests_support {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use swarmux_application::ports::PromptRepository;
     use swarmux_application::testing::{
-        FakeAdvisor, FakeAgentCatalog, FakeConsents, FakeDecisionRepo, FakeHookInbox, FakeJobGates,
-        FakeLinter, FakeMonitor, FakePlanner, FakeRouter, FakeRuleWriter, FakeRunner,
-        FakeTelemetry, FakeTerminal, FakeUsageProbe, FakeWorkspace, FixedClock, InMemoryMissions,
-        InMemoryPlans, InMemoryStore,
+        FakeAdvisor, FakeAgentCatalog, FakeConsents, FakeDecisionRepo, FakeGit, FakeHookInbox,
+        FakeJobGates, FakeLinter, FakeMergeQueue, FakeMonitor, FakePlanner, FakeRouter,
+        FakeRuleWriter, FakeRunner, FakeTelemetry, FakeTerminal, FakeUsageProbe, FakeWorkspace,
+        FixedClock, InMemoryMissions, InMemoryPlans, InMemoryStore, InMemoryWorktrees,
     };
     use swarmux_application::{
         Governor, GovernorSettings, GuardService, HistoryService, Jev, JobService, MissionService,
-        PromptService, ReviewSettings, ReviewWhen, RoutingService, SessionService, SharedPolicy,
-        TelemetryService, TelemetrySettings,
+        PromptService, ReviewSettings, ReviewWhen, RoutingService, ScopeClaims, SessionService,
+        SharedPolicy, TelemetryService, TelemetrySettings, WorktreeService,
     };
     use swarmux_domain::{GuardPolicy, PromptDraft};
 
@@ -2059,6 +2066,8 @@ pub(crate) mod tests_support {
         pub planner: Rc<FakePlanner>,
         /// The usage windows the governor reads.
         pub usage: Rc<FakeUsageProbe>,
+        /// Set by [`test_app_with_graph`]: the merge queue task graphs use.
+        pub merge: Option<Rc<FakeMergeQueue>>,
     }
 
     /// An app wired to in-memory fakes.
@@ -2068,15 +2077,21 @@ pub(crate) mod tests_support {
 
     /// An app with JEV configured; `consented` says whether the user already agreed.
     pub(crate) fn test_app_with_jev(consented: bool) -> TestApp {
-        build(Rc::new(InMemoryStore::default()), Some(consented))
+        build(Rc::new(InMemoryStore::default()), Some(consented), false)
+    }
+
+    /// An app whose `/work` folder is a git repository with worktrees, so
+    /// approved plans can run as task graphs.
+    pub(crate) fn test_app_with_graph() -> TestApp {
+        build(Rc::new(InMemoryStore::default()), None, true)
     }
 
     /// An app over an existing store, like a restart.
     pub(crate) fn test_app_with_store(store: Rc<InMemoryStore>) -> TestApp {
-        build(store, None)
+        build(store, None, false)
     }
 
-    fn build(store: Rc<InMemoryStore>, jev: Option<bool>) -> TestApp {
+    fn build(store: Rc<InMemoryStore>, jev: Option<bool>, graph: bool) -> TestApp {
         let runner = Rc::new(FakeRunner::default());
         let clock = Rc::new(FixedClock::new(1_000));
         let monitor = Rc::new(FakeMonitor::default());
@@ -2136,12 +2151,28 @@ pub(crate) mod tests_support {
         let linter = Rc::new(FakeLinter::default());
         let job_gates = Rc::new(FakeJobGates::default());
         let planner = Rc::new(FakePlanner::default());
-        let mission_service = MissionService::new(missions.clone(), clock.clone())
+        let mut mission_service = MissionService::new(missions.clone(), clock.clone())
             .unwrap()
             .with_linter(linter.clone())
             .with_gates(job_gates.clone())
             .with_planner(planner.clone(), Rc::new(InMemoryPlans::default()))
             .unwrap();
+        let mut jobs = jobs;
+        let mut merge = None;
+        if graph {
+            let worktrees = Rc::new(WorktreeService::new(
+                Rc::new(FakeGit::with_repo("/work")),
+                Rc::new(InMemoryWorktrees::default()),
+                store.clone(),
+                clock.clone(),
+                "/wt".into(),
+            ));
+            let queue = Rc::new(FakeMergeQueue::default());
+            jobs = jobs.with_worktrees(worktrees.clone());
+            mission_service =
+                mission_service.with_graph(queue.clone(), worktrees, ScopeClaims::new());
+            merge = Some(queue);
+        }
         let mut app = App::new(
             sessions,
             jobs,
@@ -2177,6 +2208,7 @@ pub(crate) mod tests_support {
             job_gates,
             planner,
             usage,
+            merge,
         }
     }
 

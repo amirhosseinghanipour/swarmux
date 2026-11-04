@@ -764,6 +764,13 @@ api_key = \"sk-SECRET-123\"",
         assert_eq!(s.missions.model, "opus");
         assert_eq!(s.missions.drift_threshold, 0.5);
         assert!(!parse("").unwrap().missions.plan_first);
+        assert!(parse("").unwrap().missions.parallel, "parallel by default");
+        assert!(
+            !parse("[missions]\nparallel = false\n")
+                .unwrap()
+                .missions
+                .parallel
+        );
         for bad in [
             "[missions]\nplan_model = \"\"\n",
             "[missions]\ndrift_threshold = 0\n",

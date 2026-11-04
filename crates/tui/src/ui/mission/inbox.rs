@@ -205,6 +205,7 @@ fn kind_icon(kind: AttentionKind) -> Icon {
         AttentionKind::Recovery => Icon::Stalled,
         AttentionKind::PlanReady => Icon::Question,
         AttentionKind::Drift => Icon::Concerns,
+        AttentionKind::Merge => Icon::Concerns,
     }
 }
 

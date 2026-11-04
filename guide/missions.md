@@ -37,7 +37,8 @@ stop of the job was judged, swarmux runs the checks itself. A failed job, a
 gate that gave up or a spent budget escalates it; a mission nothing can check
 is refused. Each card shows that path, a chip per check, the budget split by
 phase (plan 10%, implement 60%, verify 20%, review 10%) and the topology
-(one session for now). Every change of state is in the audit ledger.
+(one session, or a task graph: see below). Every change of state is in the
+audit ledger.
 
 ## Planning first
 
@@ -87,6 +88,54 @@ plans (default `sonnet`):
 plan_first = false
 plan_model = "sonnet"
 drift_threshold = 0.3
+parallel = true
+```
+
+## Task graphs
+
+When an approved plan has tasks that can run at the same time, and the
+mission's folder is a git repository with worktrees on, the plan runs as a
+task graph: one job per task instead of one job for the whole plan. A plan
+that is a single chain (each task waits for the one before) stays one
+session, since running it in parallel would only add merges. Set
+`parallel = false` to always build in one session.
+
+- **Scheduling.** A task starts once every task it depends on has merged.
+  It runs in a session of its own (`<session> t2`) and a worktree branched
+  from the mission's integration branch, `swarmux/<mission>/integration`,
+  so it sees its producers' work. The usual concurrency limit and usage
+  governor decide how many run at once.
+- **Scope claims.** Each task claims the files and folders the plan gave
+  it. Edits, writes and the shell writes the Guard can read (`>`, `rm`,
+  `mv`, `cp`, `tee`, ...) outside the claim are refused before the call
+  runs, and the agent is told what its scope is. Two tasks whose claims
+  overlap never run at once. Claims and refused writes are on the audit
+  ledger. A branch that still changed files outside its claim is not
+  merged.
+- **Merge queue.** When a task's job ends and its gate passed, swarmux
+  commits its worktree and merges the branch into the integration branch,
+  producers before consumers. On a conflict the merge is undone and the
+  task's agent is sent back once, in the same worktree, to rebase onto the
+  integration branch. A second conflict goes to your inbox, with the
+  worktree to resolve it in.
+- **Delivery.** Once every task merged, the last task's branch is brought up
+  to the integration branch, the mission's checks run there, and the mission
+  is delivered with its evidence bundle as any other. Your own branches are
+  never written.
+
+The card shows each task's state (`waiting`, `running`, `gate`, `merging`,
+`merged`, `conflict`, `failed`), the merge queue, the claims held and how
+many writes were refused:
+
+```
+  t1 API module  ✓ merged
+  t2 Storage  ⇢ merging
+  t3 UI  ↻ conflict ×1
+└ t4 Wire it up  · waiting
+task graph
+topology    fanout ×3 · 1 waiting · 1 merging · 1 merged · 1 conflict
+merge queue t2
+claims      t2 src/db/** · t3 src/ui/**
 ```
 
 | Key | Does |

@@ -450,20 +450,26 @@ pub fn protected_write(
     subject: &str,
     cwd: &str,
 ) -> Option<String> {
+    written_paths(tool, subject)
+        .iter()
+        .find_map(|path| protected_path(globs, root, path, cwd).map(str::to_string))
+}
+
+/// The paths a tool call writes, as it names them (relative to its folder
+/// or absolute): the file of an edit, or for a shell line the redirect
+/// targets and the paths given to programs that change files. Empty for
+/// calls that write nothing this can see.
+pub fn written_paths(tool: &str, subject: &str) -> Vec<String> {
     if WRITE_TOOLS.contains(&tool) {
-        return protected_path(globs, root, subject, cwd).map(str::to_string);
+        return vec![subject.to_string()];
     }
     if !matches!(tool, "Bash" | "PowerShell") {
-        return None;
+        return Vec::new();
     }
-    let hit = |path: &str| protected_path(globs, root, path, cwd).map(str::to_string);
+    let mut out = Vec::new();
     for command in split_commands(subject) {
         let words = words_of(strip_wrappers(&command));
-        for target in redirect_targets(&words) {
-            if let Some(g) = hit(&target) {
-                return Some(g);
-            }
-        }
+        out.extend(redirect_targets(&words));
         let Some(program) = words.first().map(|w| program_name(w)) else {
             continue;
         };
@@ -488,11 +494,9 @@ pub fn protected_write(
         } else {
             Vec::new()
         };
-        if let Some(g) = targets.into_iter().find_map(|t| hit(t)) {
-            return Some(g);
-        }
+        out.extend(targets.into_iter().cloned());
     }
-    None
+    out
 }
 
 /// Words of one simple command with their quotes removed.

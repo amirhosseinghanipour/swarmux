@@ -7,7 +7,8 @@ use ratatui::{
     text::{Line, Span},
 };
 use swarmux_domain::mission::Mission;
-use swarmux_domain::plan::PlanStatus;
+use swarmux_domain::plan::{Plan, PlanStatus};
+use swarmux_domain::taskgraph::{GraphRun, TaskState, width};
 
 use super::{g, heading};
 use crate::app::App;
@@ -82,6 +83,9 @@ pub(super) fn plan_lines(app: &App, m: &Mission) -> Vec<Line<'static>> {
                 Span::styled(format!("{} ", row.id), Style::new().fg(t.title)),
                 Span::styled(row.title.clone(), Style::new().fg(t.text)),
             ];
+            if let Some(task) = r.graph.as_ref().and_then(|run| run.task(&row.id)) {
+                spans.push(task_chip(app, task.state, task.reinvoked));
+            }
             if row.after.len() > 1 {
                 spans.push(dim(t, format!(" ← {}", row.after.join(", "))));
             }
@@ -91,6 +95,9 @@ pub(super) fn plan_lines(app: &App, m: &Mission) -> Vec<Line<'static>> {
                 t,
                 format!("  {indent}{}", fit(&row.files.join(", "), FILES_MAX)),
             )));
+        }
+        if let Some(run) = &r.graph {
+            out.extend(graph_lines(app, plan, run));
         }
         if status == PlanStatus::Proposed {
             let key = |k: &str, what: &str| {
@@ -150,6 +157,14 @@ pub(super) fn card_tag(app: &App, m: &Mission) -> Option<(String, bool)> {
     if let Some(d) = r.drift.as_ref().filter(|d| d.drifted()) {
         return Some((format!(" · drift {:.0}%", d.score() * 100.0), true));
     }
+    if let Some(run) = &r.graph
+        && m.state.in_flight()
+    {
+        return Some((
+            format!(" · graph {}/{} merged", run.merged.len(), run.tasks.len()),
+            run.blocked(),
+        ));
+    }
     match r.status {
         PlanStatus::Planning => Some((" · planning…".into(), false)),
         PlanStatus::Proposed => Some((" · plan waiting: y/n/c".into(), true)),
@@ -157,4 +172,92 @@ pub(super) fn card_tag(app: &App, m: &Mission) -> Option<(String, bool)> {
         PlanStatus::Approved => Some((" · plan approved".into(), false)),
         PlanStatus::Idle => None,
     }
+}
+
+/// A task's state as a mark and a word, never by colour alone.
+fn task_chip(app: &App, state: TaskState, reinvoked: bool) -> Span<'static> {
+    let t = &app.look.theme;
+    let (mark, color) = match state {
+        TaskState::Waiting => (g(app, "·", "."), t.muted),
+        TaskState::Running => (g(app, "▸", ">"), t.builder),
+        TaskState::Gate => (g(app, "◇", "?"), t.haiku),
+        TaskState::Merging => (g(app, "⇢", "~"), t.haiku),
+        TaskState::Merged => (g(app, "✓", "+"), t.ok),
+        TaskState::Conflict => (g(app, "↻", "@"), t.warn),
+        TaskState::Failed => (g(app, "✗", "x"), t.error),
+    };
+    let again = if reinvoked && state != TaskState::Merged {
+        " ×1"
+    } else {
+        ""
+    };
+    Span::styled(
+        format!("  {mark} {}{again}", state.as_str()),
+        Style::new().fg(color),
+    )
+}
+
+/// The graph's summary, its merge queue, the claims held and what needs
+/// the user.
+fn graph_lines(app: &App, plan: &Plan, run: &GraphRun) -> Vec<Line<'static>> {
+    let t = &app.look.theme;
+    let mut out = vec![Line::default(), heading(t, "task graph")];
+    let counts: Vec<String> = run
+        .counts()
+        .into_iter()
+        .map(|(s, n)| format!("{n} {}", s.as_str()))
+        .collect();
+    out.push(Line::from(vec![
+        label(t, "topology    "),
+        Span::styled(
+            format!("{} ×{}", run.topology.as_str(), width(plan)),
+            Style::new().fg(t.text),
+        ),
+        dim(t, format!(" · {}", counts.join(" · "))),
+    ]));
+    out.push(Line::from(vec![
+        label(t, "integration "),
+        dim(t, fit(&run.integration, FILES_MAX)),
+    ]));
+    let queue = run.queue(plan);
+    out.push(Line::from(vec![
+        label(t, "merge queue "),
+        if queue.is_empty() {
+            dim(t, format!("empty · {} merged", run.merged.len()))
+        } else {
+            Span::styled(
+                queue.join(&format!(" {} ", g(app, "→", ">"))),
+                Style::new().fg(t.text),
+            )
+        },
+    ]));
+    let held: Vec<String> = plan
+        .tasks
+        .iter()
+        .filter(|p| run.task(&p.id).is_some_and(|r| r.state.holds_claim()))
+        .map(|p| format!("{} {}", p.id, p.files.join(", ")))
+        .collect();
+    if !held.is_empty() {
+        out.push(Line::from(vec![
+            label(t, "claims      "),
+            dim(t, fit(&held.join(" · "), FILES_MAX * 2)),
+        ]));
+    }
+    if run.denials > 0 {
+        let s = if run.denials == 1 { "" } else { "s" };
+        out.push(Line::from(vec![
+            label(t, "scope       "),
+            Span::styled(
+                format!("{} write{s} outside a claim refused", run.denials),
+                Style::new().fg(t.warn),
+            ),
+        ]));
+    }
+    for task in run.tasks.iter().filter(|x| x.state == TaskState::Failed) {
+        out.push(Line::from(Span::styled(
+            format!("{} {}: {}", g(app, "✗", "x"), task.id, task.note),
+            Style::new().fg(t.error),
+        )));
+    }
+    out
 }
