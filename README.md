@@ -84,7 +84,8 @@ From a checkout, use `cargo run` and `cargo run -- doctor`. See
 - **Missions**: state the outcome, the checks that prove it, what the agent
   may not touch and the budget; swarmux lints it (at most three questions),
   runs it as a job under its own gate and calls it delivered only when the
-  gate passes
+  gate passes; a mission can plan first, so you approve a task graph before
+  anything is built and see how far the build strayed from it
 - **Mission control**: what needs you, who is doing what, and whether you will
   hit a limit, on one screen
 - **Prompt library** with `{{variables}}` and a real editor

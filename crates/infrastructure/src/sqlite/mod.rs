@@ -8,6 +8,7 @@ mod governor;
 mod jobs;
 mod ledger;
 mod missions;
+mod plans;
 mod prompts;
 mod sessions;
 mod telemetry;
@@ -265,6 +266,16 @@ CREATE TABLE IF NOT EXISTS alarm_tally (
 );
 ";
 
+/// Missions' plans: the plan, its status and what the build was compared
+/// with, as one JSON record per mission.
+const SCHEMA_PLANS: &str = "
+CREATE TABLE IF NOT EXISTS mission_plans (
+    slug TEXT PRIMARY KEY,
+    record TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+";
+
 /// Migrations in order; index + 1 is the resulting `user_version`.
 const MIGRATIONS: &[&str] = &[
     SCHEMA_V1,
@@ -280,6 +291,7 @@ const MIGRATIONS: &[&str] = &[
     SCHEMA_V11,
     SCHEMA_GOVERNOR,
     SCHEMA_ALARMS,
+    SCHEMA_PLANS,
 ];
 
 /// Maps adapter errors into the application's error type.

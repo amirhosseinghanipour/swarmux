@@ -47,6 +47,7 @@ struct RawConfig {
     governor: Option<crate::config_governor::RawGovernor>,
     notify: Option<crate::config_notify::RawNotify>,
     watchdog: Option<crate::config_watchdog::RawWatchdog>,
+    missions: Option<crate::config_missions::RawMissions>,
     theme: Option<String>,
     layout: Option<String>,
     icons: Option<String>,
@@ -182,6 +183,9 @@ pub fn parse_settings(text: &str, path: &Path) -> Result<Settings, ConfigError> 
     }
     if let Some(watchdog) = raw.watchdog {
         settings.watchdog = crate::config_watchdog::parse_watchdog(watchdog, text, path)?;
+    }
+    if let Some(missions) = raw.missions {
+        settings.missions = crate::config_missions::parse_missions(missions, text, path)?;
     }
     // The watchdog calls a loop at the guard's count; the loop breaker then
     // stops the job one failure later.
@@ -748,6 +752,27 @@ api_key = \"sk-SECRET-123\"",
         assert_eq!(e.line, Some(3));
         assert!(e.message.contains("swarmux jev set-key"), "{e}");
         assert!(!e.to_string().contains("SECRET"), "{e}");
+    }
+
+    #[test]
+    fn missions_section_is_read_and_checked() {
+        let s = parse(
+            "[missions]\nplan_first = true\nplan_model = \" opus \"\ndrift_threshold = 0.5\n",
+        )
+        .unwrap();
+        assert!(s.missions.plan_first);
+        assert_eq!(s.missions.model, "opus");
+        assert_eq!(s.missions.drift_threshold, 0.5);
+        assert!(!parse("").unwrap().missions.plan_first);
+        for bad in [
+            "[missions]\nplan_model = \"\"\n",
+            "[missions]\ndrift_threshold = 0\n",
+            "[missions]\ndrift_threshold = 1.5\n",
+            "[missions]\nplan_first = \"yes\"\n",
+            "[missions]\nunknown = 1\n",
+        ] {
+            assert!(parse(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]

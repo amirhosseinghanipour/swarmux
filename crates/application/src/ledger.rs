@@ -202,6 +202,28 @@ impl LedgerService {
         self.append(now, LedgerKind::Mission, SWARMUX, m.job, m.session, payload)
     }
 
+    /// Something happened to a mission's plan: `proposed`, `approved`,
+    /// `rejected` (with the note in `detail`), `cancelled`, `failed`, or
+    /// the build compared with it (`drift`, `on_plan`). `digest` names the
+    /// plan an approval vouches for.
+    pub fn record_plan(
+        &self,
+        m: &swarmux_domain::mission::Mission,
+        event: &str,
+        detail: &str,
+        digest: Option<&str>,
+        tasks: usize,
+        now: Millis,
+    ) -> AppResult<()> {
+        let payload = Payload::new()
+            .str("mission", &m.slug)
+            .str("plan", event)
+            .text("detail", detail)
+            .opt_str("digest", digest)
+            .int("tasks", i64::try_from(tasks).unwrap_or(i64::MAX));
+        self.append(now, LedgerKind::Mission, SWARMUX, m.job, m.session, payload)
+    }
+
     /// A mission's evidence bundle was sealed; returns the entry's `seq`.
     pub fn record_evidence(
         &self,

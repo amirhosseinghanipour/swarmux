@@ -26,6 +26,12 @@ use crate::ledger::LedgerService;
 use crate::ports::Clock;
 use crate::{AppError, AppResult};
 
+mod plan;
+pub use plan::{
+    Begun, ChangedFiles, PlanReply, PlanRequest, PlanSettings, PlanSink, PlanStore, Planner,
+    WorkDirs,
+};
+
 /// Where missions are kept.
 pub trait MissionStore {
     /// Inserts the mission, or replaces the one with its slug.
@@ -89,6 +95,8 @@ pub struct MissionService {
     tickets: u64,
     /// Missions whose checks were run by hand already.
     verifying: HashSet<String>,
+    /// Plan-first: planner, plans and what each build was compared with.
+    plans: plan::PlanState,
 }
 
 impl MissionService {
@@ -109,6 +117,7 @@ impl MissionService {
             linting: HashMap::new(),
             tickets: 0,
             verifying: HashSet::new(),
+            plans: plan::PlanState::new(),
         })
     }
 
@@ -216,6 +225,7 @@ impl MissionService {
         m.contract = contract;
         self.store.save(&self.missions[i])?;
         self.record(slug, from)?;
+        self.forget_plan(slug)?;
         self.lint(slug)
     }
 
@@ -332,6 +342,10 @@ impl MissionService {
                 m.state
             )));
         }
+        if let Some(why) = self.plan_blocks(slug) {
+            return Err(AppError::Mission(why));
+        }
+        let m = &self.missions[i];
         let compiled = match compile(&m.contract) {
             Ok(c) => c,
             Err(blocking) => {
@@ -360,13 +374,19 @@ impl MissionService {
             .map(|usd| Reservation::new(usd).headroom(MissionPhase::Implement, &m.spend))
             // Nothing left still caps the job rather than freeing it.
             .map(|left| left.max(0.01));
-        let job = jobs.dispatch_capped(session, &compiled.prompt, cap)?;
+        let mut prompt = compiled.prompt;
+        if let Some(plan) = self.plan_prompt_part(slug) {
+            prompt.push_str("\n\n");
+            prompt.push_str(plan.trim_end());
+        }
+        let job = jobs.dispatch_capped(session, &prompt, cap)?;
         if let Some(gates) = &self.gates {
             gates.assign(job, compiled.gate);
         }
         let m = &mut self.missions[i];
         let from = m.apply(Signal::Queued(job), now).map_err(refused)?;
         self.verifying.remove(slug);
+        self.plan_build_started(slug);
         self.store.save(&self.missions[i])?;
         self.record(slug, from)?;
         Ok(job)
@@ -394,6 +414,7 @@ impl MissionService {
                 report.errors.push(e);
             }
         }
+        report.changed |= self.pump_plans(&mut report.errors);
         for i in 0..self.missions.len() {
             if !self.missions[i].state.in_flight() {
                 continue;
@@ -403,6 +424,7 @@ impl MissionService {
                 Err(e) => report.errors.push(e),
             }
         }
+        report.errors.append(&mut self.plans.problems);
         report
     }
 
@@ -466,6 +488,7 @@ impl MissionService {
             changed |= self.take(i, signal, now)?;
         }
         if self.missions[i].state == MissionState::Verifying {
+            changed |= self.check_plan_drift(i);
             changed |= self.verify(i, fact, gates.get(&job), now)?;
         }
         if changed {

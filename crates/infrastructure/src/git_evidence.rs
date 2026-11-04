@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::Output;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use swarmux_application::{AppError, AppResult, Checkout, Checkouts, HeadFacts, Vcs};
+use swarmux_application::{AppError, AppResult, ChangedFiles, Checkout, Checkouts, HeadFacts, Vcs};
 use swarmux_domain::evidence::DiffSummary;
 use swarmux_domain::ledger::{hex, sha256};
 
@@ -127,6 +127,43 @@ impl Vcs for GitVcs {
             deletions,
             hash,
         })
+    }
+}
+
+impl ChangedFiles for GitVcs {
+    /// What the work in `dir` changed: committed since the branch left the
+    /// main line, uncommitted, and new files, by repository-relative path.
+    fn changed(&self, dir: &Path) -> AppResult<Vec<String>> {
+        let Some(facts) = self.head(dir)? else {
+            return Err(AppError::Workspace(format!(
+                "{} is not in a git repository",
+                dir.display()
+            )));
+        };
+        let from = facts.base.unwrap_or(facts.head);
+        let mut files: Vec<String> = Vec::new();
+        for args in [
+            vec!["diff", "--name-only", "--no-renames", &from],
+            vec!["ls-files", "--others", "--exclude-standard"],
+        ] {
+            let out = self.output(dir, &args)?;
+            if !out.status.success() {
+                return Err(AppError::Workspace(format!(
+                    "git {} failed",
+                    args.first().copied().unwrap_or_default()
+                )));
+            }
+            files.extend(
+                String::from_utf8_lossy(&out.stdout)
+                    .lines()
+                    .map(str::trim)
+                    .filter(|l| !l.is_empty())
+                    .map(str::to_string),
+            );
+        }
+        files.sort();
+        files.dedup();
+        Ok(files)
     }
 }
 
@@ -257,6 +294,18 @@ mod tests {
         assert!(git(p, &["add", "."]));
         assert!(git(p, &["commit", "-q", "-m", "work"]));
         Some(dir)
+    }
+
+    #[test]
+    fn changed_files_are_committed_uncommitted_and_new() {
+        let Some(dir) = repo() else { return };
+        let p = dir.path();
+        std::fs::write(p.join("b.txt"), "b2\n").unwrap();
+        std::fs::write(p.join("new.txt"), "n\n").unwrap();
+        let files = GitVcs::default().changed(p).unwrap();
+        assert_eq!(files, ["a.txt", "b.txt", "new.txt"]);
+        let outside = tempfile::tempdir().unwrap();
+        assert!(GitVcs::default().changed(outside.path()).is_err());
     }
 
     #[test]

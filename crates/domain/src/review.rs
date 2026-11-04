@@ -272,12 +272,20 @@ pub fn review_prompt(job: JobId, prompt: &str, answer: &str, diff: &str) -> Stri
     } else {
         cap(diff, DIFF_CAP)
     };
+    // A build that was given an approved plan is also held to it.
+    let plan_note = if prompt.contains(crate::plan::PLAN_MARKER) {
+        " The task carries a plan the user approved: also report as concerns, each starting \
+         with \"drift:\", files changed outside the planned areas, planned tasks with no \
+         matching change, and work the plan never asked for."
+    } else {
+        ""
+    };
     format!(
         "swarmux review of job #{job}\n\n\
          Another agent was given the task below and reported the answer below. \
          Check the git diff (and read files if you need to) for bugs, unsafe or \
          unfinished changes, and anything that does not do what the task asked. \
-         Do not edit anything.\n\n\
+         Do not edit anything.{plan_note}\n\n\
          Task:\n<<<\n{}\n>>>\n\n\
          Answer:\n<<<\n{}\n>>>\n\n\
          git diff ({} files):\n<<<\n{diff_part}\n>>>\n\n\

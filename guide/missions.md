@@ -39,6 +39,56 @@ is refused. Each card shows that path, a chip per check, the budget split by
 phase (plan 10%, implement 60%, verify 20%, review 10%) and the topology
 (one session for now). Every change of state is in the audit ledger.
 
+## Planning first
+
+A mission can plan before it builds. Press `p` on a card to switch it (or
+set the default for every mission with `[missions] plan_first = true` in
+`config.toml`). `r` then does not start the build: it asks Claude Code, in
+plan mode with read-only tools, for a plan and a task graph. The plan comes
+back as a card section and as an item in the inbox:
+
+```
+plan
+status      waiting for you
+Index first, then queries.
+  t1 Build the index
+    src/search/index.rs
+  └ t2 Query path
+      src/search/query.rs, tests/search_*.rs
+y approve and build · n change (with a note) · c cancel
+```
+
+Each task has an id, a title, the files or folders it expects to touch, the
+tasks it waits for and how it is checked. swarmux refuses a plan whose ids
+repeat, whose dependencies don't exist or whose tasks wait on each other, and
+asks again. You answer with one key, on the Missions screen or in the inbox:
+
+| Key | Does |
+| --- | --- |
+| `y` | approve: the plan is stored, put on the audit ledger and the build starts with it in its prompt |
+| `n` | change: type what is wrong and a new plan is asked for, which sees the old one and your note |
+| `c` | cancel the plan; the mission stays as it was |
+
+Planning is paid from the mission's plan share. Changing the contract
+voids its plan.
+
+When the build finishes, swarmux compares what changed with the approved
+plan: files changed outside every planned area, and tasks none of whose areas
+saw a change. Lockfiles and swarmux's own files don't count. When 30% or more
+of the changed files are outside the plan, or 30% or more of its tasks were
+never touched, the card says so, the mission shows what strayed, and an inbox
+item asks you to look. The reviewer is told about the plan too, and reports
+what it sees as concerns starting with `drift:`. The line is
+`drift_threshold` (0 to 1, default 0.3); `plan_model` picks the model that
+plans (default `sonnet`):
+
+```toml
+[missions]
+plan_first = false
+plan_model = "sonnet"
+drift_threshold = 0.3
+```
+
 | Key | Does |
 | --- | --- |
 | `n` | new mission (for the selected session) |
@@ -46,7 +96,9 @@ phase (plan 10%, implement 60%, verify 20%, review 10%) and the topology
 | `Tab` / `Shift+Tab` | next / previous field or answer in the composer |
 | `Ctrl+S` | save and lint |
 | `Ctrl+F` / `f` | protect the oracles the lint found |
-| `Ctrl+R` / `r` | run it |
+| `Ctrl+R` / `r` | run it (or ask for its plan first) |
+| `p` | plan first on / off for the selected mission |
+| `y` / `n` / `c` | approve / change / cancel a proposed plan (also in the inbox) |
 | `l` | lint again |
 | `Enter` | open its job in Focus |
 | `Esc` | close the composer |

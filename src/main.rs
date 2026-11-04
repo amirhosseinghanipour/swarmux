@@ -31,10 +31,10 @@ use swarmux_application::{
 };
 use swarmux_infrastructure::hook::{self, HookServer, Responders};
 use swarmux_infrastructure::{
-    ClaudeCli, ConfigRuleWriter, FilePalette, FsAgentCatalog, FsGateSource, GitCli, GitWorktrees,
-    GuardHook, HaikuDiagnoser, HaikuLinter, HaikuRouter, MissionFiles, Paths, SqliteLedger,
-    SqliteStore, SysinfoMonitor, SystemClock, WindowsTerminal, build_notifier, load_settings,
-    utc_offset_minutes,
+    ClaudeCli, ClaudePlanner, ConfigRuleWriter, FilePalette, FsAgentCatalog, FsGateSource, GitCli,
+    GitVcs, GitWorktrees, GuardHook, HaikuDiagnoser, HaikuLinter, HaikuRouter, MissionFiles, Paths,
+    SqliteLedger, SqliteStore, SysinfoMonitor, SystemClock, WindowsTerminal, build_notifier,
+    load_settings, utc_offset_minutes,
 };
 use swarmux_tui::{App, Launch};
 
@@ -497,11 +497,29 @@ fn run_tui(no_splash: bool) -> anyhow::Result<()> {
         clock.clone(),
         Some(checkpoints.clone()),
     );
+    // Plan-first missions: a plan-mode run proposes, the user approves, and
+    // the finished build is compared with the plan.
+    let planner = ClaudePlanner::new(doctor::claude_bin(), rt.handle().clone())
+        .with_bare(std::env::var_os("ANTHROPIC_API_KEY").is_some());
+    let plan_dirs = {
+        let checkpoints = checkpoints.clone();
+        Rc::new(move |job, root: &std::path::Path| {
+            checkpoints
+                .worktree(job)
+                .ok()
+                .flatten()
+                .filter(|w| w.removed_at.is_none())
+                .map_or_else(|| root.to_path_buf(), |w| w.path)
+        })
+    };
     let missions = MissionService::new(Rc::new(MissionFiles::new(store.clone())), clock.clone())?
         .with_linter(Rc::new(linter))
         .with_gates(Rc::new(keeper.clone()))
         .with_ledger(ledger.clone())
-        .with_evidence(evidence.clone());
+        .with_evidence(evidence.clone())
+        .with_plan_settings(settings.missions.clone())
+        .with_planner(Rc::new(planner), store.clone())?
+        .with_changes(Rc::new(GitVcs::default()), plan_dirs);
     // Stuck agents: detectors on every job, and a ladder of recoveries,
     // cheapest first, before the inbox.
     let mut watchdog = Watchdog::new(

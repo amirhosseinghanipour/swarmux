@@ -10,7 +10,7 @@ use std::rc::Rc;
 
 use swarmux_application::ports::Clock;
 use swarmux_application::{
-    AppError, AppResult, CheckpointService, EvidenceService, FocusTracker, GateService,
+    AppError, AppResult, Begun, CheckpointService, EvidenceService, FocusTracker, GateService,
     GuardService, HistoryService, HookBus, JobService, MissionService, NotifyService,
     PaletteSource, PendingApproval, PromptService, QueueEntry, QueueStats, RoutingService,
     SessionService, SessionTerminal, TelemetryService, TelemetrySettings, UiSettings,
@@ -108,6 +108,8 @@ pub enum InputPurpose {
     RoutedPrompt,
     /// A value for the template variable `prompts.pending` is asking for.
     Variable,
+    /// The note that sends a proposed plan back for a new one.
+    PlanNote,
     /// The ledger search; applied as it is typed.
     Search,
 }
@@ -150,7 +152,7 @@ pub struct App {
     /// The Missions screen's selection and composer.
     pub missions_screen: MissionsScreen,
     /// Writes, lints and follows missions.
-    missions: Option<MissionService>,
+    pub(crate) missions: Option<MissionService>,
     /// Bundles, their verification and outcome labels.
     evidence: Option<Rc<EvidenceService>>,
     /// When the user was last here: what happened since is the digest.
@@ -605,6 +607,9 @@ impl App {
             hook_changes.extend(dog.changes());
             escalations = dog.escalations();
         }
+        if let Some(missions) = &self.missions {
+            escalations.extend(missions.plan_items(now));
+        }
         self.mission.refresh(
             (&self.guard, &self.jobs, self.gate.as_ref()),
             (&hook_changes, escalations),
@@ -1049,6 +1054,7 @@ impl App {
                         InputPurpose::Prompt => self.dispatch(&text),
                         InputPurpose::RoutedPrompt => self.route_prompt(&text),
                         InputPurpose::Variable => self.answer_variable(text),
+                        InputPurpose::PlanNote => self.submit_plan_note(&text),
                         InputPurpose::Search => Ok(()),
                     };
                     self.show(result);
@@ -1081,6 +1087,13 @@ impl App {
 
         self.error = None;
         self.notice = None;
+        if let KeyCode::Char(c @ ('y' | 'n' | 'c')) = key.code
+            && let Some(slug) = self.plan_target()
+        {
+            let result = self.plan_key(c, &slug);
+            self.show(result);
+            return;
+        }
         if let KeyCode::Char(c @ ('y' | 'n')) = key.code
             && self.guard.jev().is_some_and(|j| j.wants_consent())
         {
@@ -1331,6 +1344,11 @@ impl App {
                     self.launch_mission(&slug)?;
                 }
             }
+            KeyCode::Char('p') => {
+                if let Some(slug) = slug {
+                    self.toggle_plan_first(&slug)?;
+                }
+            }
             KeyCode::Enter => match self.selected_mission().and_then(|m| m.job) {
                 Some(job) => self.view(job)?,
                 None => self.notice = Some("that mission has not run yet: r runs it".into()),
@@ -1436,12 +1454,25 @@ impl App {
         Ok(())
     }
 
-    /// Compiles the mission into a job and follows it.
+    /// Compiles the mission into a job and follows it; a mission that
+    /// plans first is planned before anything is built.
     fn launch_mission(&mut self, slug: &str) -> AppResult<()> {
         let Some(service) = &mut self.missions else {
             return Ok(());
         };
-        let job = service.launch(slug, &mut self.jobs)?;
+        match service.begin(slug, &mut self.jobs)? {
+            Begun::Job(job) => self.followed_mission(slug, job),
+            Begun::Planning => {
+                self.notice = Some(format!(
+                    "{slug} is being planned: the plan comes back for your approval"
+                ));
+                Ok(())
+            }
+        }
+    }
+
+    /// The mission's build is out as `job`: follow it.
+    pub(crate) fn followed_mission(&mut self, slug: &str, job: JobId) -> AppResult<()> {
         self.focus_state.note_human(job, self.now());
         self.dashboard.follow(job, None);
         self.refresh_sessions(None);
@@ -1472,6 +1503,9 @@ impl App {
     /// Opens the job of the selected inbox item in Focus and marks what it
     /// left in the inbox as read.
     fn open_selected(&mut self) -> AppResult<()> {
+        if self.open_plan_item() {
+            return Ok(());
+        }
         let job = if self.mission.pane == Pane::Wall {
             let tile = self.wall().into_iter().nth(self.mission.wall_at);
             if tile.as_ref().is_some_and(|t| t.job.is_none()) {
@@ -1985,8 +2019,9 @@ pub(crate) mod tests_support {
     use swarmux_application::ports::PromptRepository;
     use swarmux_application::testing::{
         FakeAdvisor, FakeAgentCatalog, FakeConsents, FakeDecisionRepo, FakeHookInbox, FakeJobGates,
-        FakeLinter, FakeMonitor, FakeRouter, FakeRuleWriter, FakeRunner, FakeTelemetry,
-        FakeTerminal, FakeUsageProbe, FakeWorkspace, FixedClock, InMemoryMissions, InMemoryStore,
+        FakeLinter, FakeMonitor, FakePlanner, FakeRouter, FakeRuleWriter, FakeRunner,
+        FakeTelemetry, FakeTerminal, FakeUsageProbe, FakeWorkspace, FixedClock, InMemoryMissions,
+        InMemoryPlans, InMemoryStore,
     };
     use swarmux_application::{
         Governor, GovernorSettings, GuardService, HistoryService, Jev, JobService, MissionService,
@@ -2020,6 +2055,8 @@ pub(crate) mod tests_support {
         pub linter: Rc<FakeLinter>,
         /// The gates mission jobs were given.
         pub job_gates: Rc<FakeJobGates>,
+        /// Answers planning runs of plan-first missions when told to.
+        pub planner: Rc<FakePlanner>,
         /// The usage windows the governor reads.
         pub usage: Rc<FakeUsageProbe>,
     }
@@ -2098,10 +2135,13 @@ pub(crate) mod tests_support {
         let missions = Rc::new(InMemoryMissions::default());
         let linter = Rc::new(FakeLinter::default());
         let job_gates = Rc::new(FakeJobGates::default());
+        let planner = Rc::new(FakePlanner::default());
         let mission_service = MissionService::new(missions.clone(), clock.clone())
             .unwrap()
             .with_linter(linter.clone())
-            .with_gates(job_gates.clone());
+            .with_gates(job_gates.clone())
+            .with_planner(planner.clone(), Rc::new(InMemoryPlans::default()))
+            .unwrap();
         let mut app = App::new(
             sessions,
             jobs,
@@ -2135,6 +2175,7 @@ pub(crate) mod tests_support {
             missions,
             linter,
             job_gates,
+            planner,
             usage,
         }
     }

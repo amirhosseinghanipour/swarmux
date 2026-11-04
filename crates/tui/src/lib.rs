@@ -11,6 +11,7 @@ mod inbox;
 mod ledger;
 mod mission;
 mod missions;
+mod plans;
 mod prompts;
 mod queue;
 mod routing;
