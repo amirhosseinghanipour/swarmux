@@ -305,6 +305,7 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App, t: &Theme) {
                         .and_then(|p| p.asking())
                         .unwrap_or("?")
                 ),
+                InputPurpose::PlanNote => "what should the plan change?".to_string(),
                 InputPurpose::Search => "search".to_string(),
             };
             let keys = if *purpose == InputPurpose::Search {
@@ -383,7 +384,7 @@ pub(crate) fn hints(app: &App) -> &'static str {
             " ↑↓ select · ⏎ open · y/n/a answer · A batch · s shelve · F focus · tab wall · p prompt · q quit"
         }
         Screen::Missions => {
-            " n new · e edit · l lint · f protect oracles · r run · ⏎ focus · ↑↓ select · q quit"
+            " n new · e edit · l lint · f protect · p plan first · r run · y/n/c plan · ⏎ focus · q quit"
         }
         Screen::Dashboard if !app.dashboard.classic => {
             " ↑↓ scroll · d diff · t open session · p prompt · v review · D classic · q quit"

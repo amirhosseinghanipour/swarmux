@@ -11,6 +11,8 @@ pub struct MissionsScreen {
     /// The selected card, by place (cards never move).
     pub selected: usize,
     pub composer: Option<Composer>,
+    /// The mission whose proposed plan a note is being written for.
+    pub note_for: Option<String>,
 }
 
 impl MissionsScreen {

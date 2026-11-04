@@ -203,6 +203,8 @@ fn kind_icon(kind: AttentionKind) -> Icon {
         AttentionKind::Stalled => Icon::Stalled,
         AttentionKind::GateEscalated => Icon::Guard,
         AttentionKind::Recovery => Icon::Stalled,
+        AttentionKind::PlanReady => Icon::Question,
+        AttentionKind::Drift => Icon::Concerns,
     }
 }
 
@@ -314,6 +316,10 @@ pub(super) fn item_lines(
                 }
                 parts.push(vec![key("a"), txt(" always")]);
             }
+        } else if item.kind == AttentionKind::PlanReady {
+            parts.push(vec![key("y"), txt(" approve")]);
+            parts.push(vec![key("n"), txt(" change")]);
+            parts.push(vec![key("c"), txt(" cancel")]);
         } else {
             parts.push(vec![key("x"), txt(" dismiss")]);
         }

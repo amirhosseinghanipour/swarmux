@@ -21,6 +21,8 @@ use crate::ui::input::Input;
 use crate::ui::look::IconSet;
 use crate::ui::mission::{age, panel};
 
+mod plan;
+
 /// Rows of one card, borders included.
 const CARD_H: u16 = 6;
 /// From this width the contract sits beside the cards.
@@ -349,6 +351,10 @@ fn footer(app: &App, m: &Mission, w: usize) -> Line<'static> {
     if app.mission_linting(&m.slug) {
         spans.push(Span::styled(" · linting…", Style::new().fg(t.haiku)));
     }
+    if let Some((tag, loud)) = plan::card_tag(app, m) {
+        let color = if loud { t.warn } else { t.muted };
+        spans.push(Span::styled(tag, Style::new().fg(color)));
+    }
     let open = m
         .contract
         .clarifications
@@ -594,6 +600,7 @@ fn render_contract(frame: &mut Frame, area: Rect, app: &App) {
         label(t, "budget     "),
         dim(t, shares.join(" · ")),
     ]));
+    lines.extend(plan::plan_lines(app, m));
     lines.push(Line::default());
     lines.extend(lint_lines(app, m, None));
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
