@@ -30,6 +30,7 @@ mod terminal;
 #[cfg(any(test, feature = "test-support"))]
 pub mod testing;
 pub mod verifier;
+pub mod watchdog;
 pub mod worktree;
 
 pub use attention::{
@@ -57,7 +58,7 @@ pub use hookbus::{
     SessionStartContext, SessionStartInfo, StopAnswer, StopContext, StopPolicy,
 };
 pub use jev::{Jev, JevState, SUMMARY_MAX, summarize};
-pub use jobs::{JobFact, JobService, PumpReport, QueueEntry, QueueStats};
+pub use jobs::{JobFact, JobService, PumpReport, QueueEntry, QueueStats, Restart};
 pub use missions::{
     LintReply, LintRequest, LintSink, MissionLinter, MissionReport, MissionService, MissionStore,
 };
@@ -84,6 +85,11 @@ pub use telemetry::{
 };
 pub use terminal::SessionTerminal;
 pub use verifier::{CleanCheckout, CleanCopy, HoldoutStore, Verification, Verifier, VerifyRequest};
+pub use watchdog::{
+    CheckpointRestore, Diagnoser, Diagnosis, DiagnosisReply, DiagnosisRequest, DiagnosisSink,
+    HookMessenger, NoMessenger, Nudge, NudgeBoard, NudgeGate, SessionMessenger, WatchReport,
+    WatchStats, Watchdog, WatchdogSettings,
+};
 pub use worktree::{
     AddWorktree, Added, GcReport, Prepared, Removed, WorktreeService, WorktreeStore, WorktreeView,
     Worktrees,

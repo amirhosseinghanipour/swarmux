@@ -202,6 +202,7 @@ fn kind_icon(kind: AttentionKind) -> Icon {
         AttentionKind::ResultReady => Icon::Result,
         AttentionKind::Stalled => Icon::Stalled,
         AttentionKind::GateEscalated => Icon::Guard,
+        AttentionKind::Recovery => Icon::Stalled,
     }
 }
 

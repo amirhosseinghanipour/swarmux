@@ -395,7 +395,7 @@ impl GuardService {
             Ok(advice) => match advice.answer {
                 AdviceAnswer::Allow => Ok((Verdict::Allow, advice.confidence)),
                 AdviceAnswer::Deny => Ok((Verdict::Deny, advice.confidence)),
-                AdviceAnswer::Session(_) => Err("answered another question".to_string()),
+                _ => Err("answered another question".to_string()),
             },
             Err(e) => Err(e.to_string()),
         };

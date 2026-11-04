@@ -90,6 +90,7 @@ fn reason_label(reason: CheckpointReason) -> &'static str {
         CheckpointReason::GatePass => "gate pass",
         CheckpointReason::PreCompact => "before compact",
         CheckpointReason::Manual => "manual",
+        CheckpointReason::Recovery => "recovery",
     }
 }
 
@@ -259,7 +260,12 @@ impl Focus {
             sat,
             chips,
             checkpoints: Checkpoints::of(app, job.job_id),
-            recovery: job.loop_stops.clone(),
+            recovery: job
+                .loop_stops
+                .iter()
+                .chain(&job.recovery)
+                .cloned()
+                .collect(),
             timeline,
             rows,
             answer,

@@ -1034,3 +1034,97 @@ fn gate_verdicts_become_wall_chips_changes_and_an_inbox_item() {
         .count();
     assert_eq!(verdicts, 2);
 }
+
+#[test]
+fn watchdog_steps_show_in_the_change_log_focus_and_the_inbox() {
+    use std::rc::Rc;
+    use swarmux_application::ledger::LedgerService;
+    use swarmux_application::testing::InMemoryLedger;
+    use swarmux_application::{HookMessenger, NudgeBoard, Watchdog, WatchdogSettings};
+    use swarmux_domain::ledger::LedgerKind;
+    use swarmux_domain::{AttentionKind, LadderPolicy, Rung};
+
+    let mut t = test_app();
+    t.with_session("api");
+    t.send("fix the build");
+    init(&t, 0, "claude-sonnet-4-5");
+    let ledger = Rc::new(InMemoryLedger::default());
+    let settings = WatchdogSettings {
+        ladder: LadderPolicy {
+            rungs: vec![Rung::Nudge],
+            ..LadderPolicy::default()
+        },
+        ..WatchdogSettings::default()
+    };
+    t.app.set_watchdog(
+        Watchdog::new(
+            settings,
+            Rc::new(HookMessenger(NudgeBoard::new())),
+            t.clock.clone(),
+        )
+        .with_ledger(Rc::new(LedgerService::new(ledger.clone(), t.clock.clone()))),
+    );
+    // Rereads the same two files over and over: nothing new.
+    let read = |t: &TestApp, i: u32| {
+        let id = format!("r{i}");
+        emit(
+            t,
+            0,
+            AgentEvent::ToolUse {
+                id: id.clone(),
+                name: "Read".into(),
+                summary: if i.is_multiple_of(2) {
+                    "src/a.rs"
+                } else {
+                    "src/b.rs"
+                }
+                .into(),
+                actor: Actor::Lead,
+            },
+        );
+        emit(
+            t,
+            0,
+            AgentEvent::ToolResult {
+                tool_use_id: id,
+                is_error: false,
+                preview: "fn a() {}".into(),
+                actor: Actor::Lead,
+            },
+        );
+    };
+    for i in 0..17u32 {
+        read(&t, i);
+    }
+    t.app.screen = Screen::Mission;
+    t.app.update();
+    let out = render_to_string(&t.app, 240, 64);
+    assert!(out.contains("watchdog: nudge"), "{out}");
+    let job = t.app.mission.facts[0].job_id;
+    let progress = t.app.jobs.progress(job).unwrap();
+    assert_eq!(
+        progress.recovery,
+        ["nudge: waiting for the agent's next call"]
+    );
+    // Still going round once the nudge has had its time: only the inbox is left.
+    t.clock.advance(2 * 60_000);
+    read(&t, 17);
+    t.app.update();
+    let item = t
+        .app
+        .mission
+        .items
+        .iter()
+        .find(|i| i.kind == AttentionKind::Recovery)
+        .expect("an inbox item");
+    assert_eq!(item.title, "fix the build");
+    assert!(item.detail.contains("tried nudge"), "{}", item.detail);
+    let rungs = ledger
+        .entries()
+        .iter()
+        .filter(|e| {
+            e.draft.kind == LedgerKind::Watchdog && e.draft.payload_json.contains("\"rung\"")
+        })
+        .count();
+    assert!(rungs >= 2, "every rung is in the ledger");
+}

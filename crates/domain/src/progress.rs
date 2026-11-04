@@ -47,6 +47,8 @@ pub struct JobProgress {
     pub decision_marks: Vec<u32>,
     /// Why the loop breaker stopped an agent, oldest first.
     pub loop_stops: Vec<String>,
+    /// Recovery rungs the watchdog took for this job, oldest first.
+    pub recovery: Vec<String>,
     /// `None` when no review was asked for.
     pub review: Option<ReviewState>,
     /// When each phase (in [`Phase::ALL`] order) was first reached.
@@ -89,6 +91,7 @@ impl JobProgress {
             lead_tokens: TokenTally::default(),
             decision_marks: Vec::new(),
             loop_stops: Vec::new(),
+            recovery: Vec::new(),
             review: None,
             phase_ticks: [Some(0), None, None, None, None, None, None],
             command: None,
@@ -147,6 +150,12 @@ impl JobProgress {
     /// Notes that the loop breaker stopped an agent, and why.
     pub fn record_loop_stop(&mut self, reason: &str) {
         self.loop_stops.push(reason.to_string());
+    }
+
+    /// Notes a recovery rung the watchdog took, and logs it.
+    pub fn record_recovery(&mut self, text: &str) {
+        self.recovery.push(text.to_string());
+        self.note("watchdog", text);
     }
 
     pub fn set_review(&mut self, review: Option<ReviewState>, tick: u32) {

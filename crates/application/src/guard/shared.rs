@@ -8,6 +8,7 @@ use swarmux_domain::{Decision, GuardPolicy, Pattern, Verdict};
 
 use crate::gate::WriteFence;
 use crate::ports::HookRequest;
+use crate::watchdog::NudgeGate;
 
 /// One policy for the UI thread and the transport's threads.
 #[derive(Clone, Default)]
@@ -15,6 +16,8 @@ pub struct SharedPolicy {
     policy: Arc<RwLock<GuardPolicy>>,
     /// Refuses writes to protected paths before any rule is consulted.
     fence: Option<Arc<dyn WriteFence>>,
+    /// Watchdog messages waiting for the agent's next tool call.
+    nudges: Option<Arc<dyn NudgeGate>>,
 }
 
 impl fmt::Debug for SharedPolicy {
@@ -22,6 +25,7 @@ impl fmt::Debug for SharedPolicy {
         f.debug_struct("SharedPolicy")
             .field("policy", &self.policy)
             .field("fence", &self.fence.is_some())
+            .field("nudges", &self.nudges.is_some())
             .finish()
     }
 }
@@ -31,7 +35,16 @@ impl SharedPolicy {
         SharedPolicy {
             policy: Arc::new(RwLock::new(policy)),
             fence: None,
+            nudges: None,
         }
+    }
+
+    /// A job with a watchdog message waiting gets it as the reason its next
+    /// matching call is not run: the one way hooks can tell a running
+    /// agent something.
+    pub fn with_nudges(mut self, nudges: Arc<dyn NudgeGate>) -> SharedPolicy {
+        self.nudges = Some(nudges);
+        self
     }
 
     /// Writes `fence` refuses are denied whatever the rules say.
@@ -58,6 +71,15 @@ impl SharedPolicy {
                 .read()
                 .unwrap_or_else(PoisonError::into_inner)
                 .decide(&request.tool_name, &request.subject, &request.cwd),
+        };
+        // A call the rules deny anyway keeps its reason and the message waits.
+        let nudge = match (&self.nudges, request.job_id, decision.verdict) {
+            (_, _, Verdict::Deny) | (None, _, _) | (_, None, _) => None,
+            (Some(n), Some(job), _) => n.take(job, &request.tool_name, &request.subject),
+        };
+        let decision = match nudge {
+            Some(text) => Decision::new(Verdict::Deny, Some(text)),
+            None => decision,
         };
         let micros = u64::try_from(start.elapsed().as_micros()).unwrap_or(u64::MAX);
         (decision, micros)

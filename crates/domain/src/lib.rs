@@ -40,8 +40,9 @@ pub use date::{iso_date, iso_minute, parse_iso_millis};
 pub use error::DomainError;
 pub use event::{Actor, AgentEvent, SessionState};
 pub use guard::{
-    BUILTIN_ALLOW, BUILTIN_DENY, Decision, GuardPolicy, LoopBreaker, LoopTrip, Pattern, Unmatched,
-    Verdict, error_signature, host_of,
+    AlarmKind, BUILTIN_ALLOW, BUILTIN_DENY, Decision, Detector, Gauges, GuardPolicy, Ladder,
+    LadderPolicy, LoopBreaker, LoopTrip, NUDGE_MARK, NextRung, Pattern, Rung, RungOptions, Taken,
+    Unmatched, Verdict, WatchAlarm, WatchLimits, error_signature, host_of, show_call,
 };
 pub use hook::HookEvent;
 pub use job::{Job, JobId, JobResult, JobStatus};

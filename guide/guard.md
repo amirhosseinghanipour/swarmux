@@ -52,7 +52,9 @@ otherwise it lasts for this run and swarmux says so.
 
 **Loop breaker.** When an agent makes the same tool call and it fails with the
 same error `loop_repeats` times in a row, swarmux stops the job and records
-why (for example `loop guard: Bash failed the same way twice`).
+why (for example `loop guard: Bash failed the same way twice`). With the
+[watchdog](watchdog.md) on, the agent is nudged first and stopped one failure
+later.
 
 Every decision is logged in the database with its rule and latency; the
 Dashboard's green guard panel shows this run's counts and latest decisions.

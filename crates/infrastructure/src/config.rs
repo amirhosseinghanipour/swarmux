@@ -46,6 +46,7 @@ struct RawConfig {
     worktree: Option<crate::config_worktree::RawWorktree>,
     governor: Option<crate::config_governor::RawGovernor>,
     notify: Option<crate::config_notify::RawNotify>,
+    watchdog: Option<crate::config_watchdog::RawWatchdog>,
     theme: Option<String>,
     layout: Option<String>,
     icons: Option<String>,
@@ -179,6 +180,12 @@ pub fn parse_settings(text: &str, path: &Path) -> Result<Settings, ConfigError> 
     if let Some(notify) = raw.notify {
         settings.notify = crate::config_notify::parse_notify(notify, text, path)?;
     }
+    if let Some(watchdog) = raw.watchdog {
+        settings.watchdog = crate::config_watchdog::parse_watchdog(watchdog, text, path)?;
+    }
+    // The watchdog calls a loop at the guard's count; the loop breaker then
+    // stops the job one failure later.
+    settings.watchdog.limits.loop_repeats = settings.guard.loop_repeats;
     let ui = RawUi {
         theme: raw.theme,
         layout: raw.layout,
@@ -741,6 +748,79 @@ api_key = \"sk-SECRET-123\"",
         assert_eq!(e.line, Some(3));
         assert!(e.message.contains("swarmux jev set-key"), "{e}");
         assert!(!e.to_string().contains("SECRET"), "{e}");
+    }
+
+    #[test]
+    fn watchdog_section_overrides_and_is_checked() {
+        let s = parse(
+            "[guard]
+loop_repeats = 3
+
+[watchdog]
+rungs = [\"nudge\", \"fresh\", \"inbox\"]
+stall_secs = 90
+stall_tool_secs = 1200
+stall_turns = 20
+oscillation_repeats = 4
+context_high = 0.9
+compactions = 3
+burn_usd_per_min = 2.5
+nudge_cooldown_secs = 60
+restart_cooldown_secs = 300
+max_restarts = 1
+escalate_to = [\"opus\"]
+",
+        )
+        .unwrap();
+        let w = &s.watchdog;
+        assert!(w.enabled);
+        assert_eq!(
+            w.ladder.rungs,
+            [
+                swarmux_domain::Rung::Nudge,
+                swarmux_domain::Rung::Fresh,
+                swarmux_domain::Rung::Inbox
+            ]
+        );
+        assert_eq!(
+            (w.limits.stall_silent_ms, w.limits.stall_tool_ms),
+            (90_000, 1_200_000)
+        );
+        assert_eq!(
+            (w.limits.stall_turns, w.limits.oscillation_repeats),
+            (20, 4)
+        );
+        assert_eq!((w.limits.context_high, w.limits.compactions_high), (0.9, 3));
+        assert_eq!(w.limits.burn_usd_per_min, 2.5);
+        assert_eq!(w.limits.loop_repeats, 3, "follows the guard");
+        assert_eq!(
+            (w.ladder.nudge_cooldown_ms, w.ladder.restart_cooldown_ms),
+            (60_000, 300_000)
+        );
+        assert_eq!(w.ladder.max_restarts, 1);
+        assert_eq!(w.escalate_to, ["opus"]);
+        assert_eq!(
+            parse("").unwrap().watchdog,
+            swarmux_application::WatchdogSettings::default()
+        );
+        assert!(
+            !parse("[watchdog]\nenabled = false\n")
+                .unwrap()
+                .watchdog
+                .enabled
+        );
+        for (bad, why) in [
+            ("rungs = [\"pray\"]", "unknown rung"),
+            ("stall_secs = 5", "between 30 and 3600"),
+            ("context_high = 1.5", "context_high"),
+            ("burn_usd_per_min = -1.0", "burn_usd_per_min"),
+            ("max_restarts = 99", "max_restarts"),
+            ("escalate_to = [\"big model\"]", "escalate_to"),
+            ("nap = true", "unknown field"),
+        ] {
+            let e = parse(&format!("[watchdog]\n{bad}\n")).unwrap_err();
+            assert!(e.to_string().contains(why), "{bad}: {e}");
+        }
     }
 
     #[test]

@@ -8,6 +8,7 @@ use swarmux_application::ports::{Advice, AdviceAnswer, AdviceError, AdviceReques
 
 const TOOL_QUESTION: &str = "verdict";
 const SESSION_QUESTION: &str = "session";
+const RECOVERY_QUESTION: &str = "recovery";
 
 /// The request body for `request`.
 pub fn request_body(model: &str, request: &AdviceRequest) -> Value {
@@ -48,6 +49,24 @@ pub fn request_body(model: &str, request: &AdviceRequest) -> Value {
                 }),
             )
         }
+        AdviceRequest::Recovery { situation, tried } => (
+            json!({
+                "intent": "A coding agent looks stuck. Judge from these notes whether it should \
+                           carry on, change approach, or end this attempt.",
+                "situation": situation,
+                "tried": tried,
+            }),
+            RECOVERY_QUESTION,
+            json!({
+                "type": "choice",
+                "instructions": "What should the agent do now? Choose only from the supplied options.",
+                "criteria": {
+                    "continue": "It is making progress, or about to: leave it alone.",
+                    "change": "It keeps trying one approach that does not work: it should try another way.",
+                    "stop": "This attempt is going nowhere: end it.",
+                },
+            }),
+        ),
     };
     json!({ "model": model, "state": state, "questions": { id: question } })
 }
@@ -63,6 +82,7 @@ pub fn parse_reply(body: &str, request: &AdviceRequest) -> Result<Advice, Advice
     let id = match request {
         AdviceRequest::ToolCall { .. } => TOOL_QUESTION,
         AdviceRequest::Session { .. } => SESSION_QUESTION,
+        AdviceRequest::Recovery { .. } => RECOVERY_QUESTION,
     };
     let answer = answers
         .get(id)
@@ -108,6 +128,12 @@ pub fn parse_reply(body: &str, request: &AdviceRequest) -> Result<Advice, Advice
                 .ok_or_else(|| invalid("choice is not a candidate"))?;
             AdviceAnswer::Session(name)
         }
+        AdviceRequest::Recovery { .. } => match choice {
+            "continue" => AdviceAnswer::Continue,
+            "change" => AdviceAnswer::ChangeApproach,
+            "stop" => AdviceAnswer::Stop,
+            _ => return Err(invalid("choice is not continue, change or stop")),
+        },
     };
     Ok(Advice { answer, confidence })
 }
@@ -180,6 +206,37 @@ mod tests {
         let advice = parse_reply(body, &session()).unwrap();
         assert_eq!(advice.answer, AdviceAnswer::Session("web ui".into()));
         assert_eq!(advice.confidence, 0.8, "falls back to the top probability");
+    }
+
+    #[test]
+    fn recovery_asks_continue_change_or_stop() {
+        let req = AdviceRequest::Recovery {
+            situation: "loop: Bash `cargo test` failed the same way 2 times".into(),
+            tried: vec!["nudge: waiting for the agent's next call".into()],
+        };
+        let body = request_body("jev-1.14.0", &req);
+        assert_eq!(
+            body["state"]["tried"][0],
+            "nudge: waiting for the agent's next call"
+        );
+        let c = &body["questions"]["recovery"]["criteria"];
+        assert!(c["continue"].is_string() && c["change"].is_string() && c["stop"].is_string());
+        for (choice, answer) in [
+            ("continue", AdviceAnswer::Continue),
+            ("change", AdviceAnswer::ChangeApproach),
+            ("stop", AdviceAnswer::Stop),
+        ] {
+            let reply = format!(
+                r#"{{"answers":{{"recovery":{{"type":"choice","choice":"{choice}","probabilities":{{"{choice}":0.9}}}}}}}}"#
+            );
+            assert_eq!(parse_reply(&reply, &req).unwrap().answer, answer);
+        }
+        let e = parse_reply(
+            r#"{"answers":{"recovery":{"choice":"maybe","probabilities":{"maybe":1}}}}"#,
+            &req,
+        )
+        .unwrap_err();
+        assert!(e.to_string().contains("continue, change or stop"), "{e}");
     }
 
     #[test]

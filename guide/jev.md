@@ -2,11 +2,13 @@
 
 JEV is a hosted decision model from TypeSafe AI, called the way the
 open-source [jev-layer](https://github.com/typakon4/jev-layer) project calls
-it. swarmux can ask it two fuzzy questions:
+it. swarmux can ask it three fuzzy questions:
 
 - a tool call no Guard rule matches: allow or deny, with a confidence;
 - "let swarmux route": which session, with a confidence (Haiku is only asked
-  when JEV isn't sure).
+  when JEV isn't sure);
+- the [watchdog](watchdog.md) thinks an agent is stuck: carry on, change
+  approach or stop.
 
 Answers at or above `threshold` are applied and logged as `jev` with their
 confidence and latency; anything else (lower confidence, no key, a timeout,
@@ -36,7 +38,8 @@ swarmux doctor                 # shows the provider and whether a key is found
 
 **Privacy.** With JEV on, decision context goes to the chosen provider: the
 tool name and a summary of its command, path or URL (at most 200
-characters), or the first 200 characters of a prompt and your session names.
+characters), the first 200 characters of a prompt and your session names, or
+the watchdog's own one-line notes on a stuck agent.
 Never file contents, diffs or folders. The first time a provider is enabled,
 swarmux shows exactly this and the host, and uses JEV only after you press
 `y`; the answer is remembered per provider.

@@ -86,6 +86,18 @@ impl Session {
         format!("{}{SUFFIX}", base.trim_end())
     }
 
+    /// The name of a session that carries this one's work on with a clean
+    /// context: `"<name> fresh"`, said once.
+    pub fn fresh_name(&self) -> String {
+        const SUFFIX: &str = " fresh";
+        if self.name.ends_with(SUFFIX) {
+            return self.name.clone();
+        }
+        let keep = NAME_MAX - SUFFIX.len();
+        let base: String = self.name.chars().take(keep).collect();
+        format!("{}{SUFFIX}", base.trim_end())
+    }
+
     /// When the session was last active (used for ordering).
     pub fn activity(&self) -> Millis {
         self.last_used_at.unwrap_or(self.created_at)
@@ -115,6 +127,17 @@ mod tests {
         let long = make(&"x".repeat(64)).unwrap().fork_name();
         assert_eq!(long.chars().count(), 64);
         assert!(long.ends_with(" fork"));
+    }
+
+    #[test]
+    fn fresh_name_is_said_once() {
+        let fresh = make("demo").unwrap().fresh_name();
+        assert_eq!(fresh, "demo fresh");
+        assert_eq!(make(&fresh).unwrap().fresh_name(), "demo fresh");
+        assert_eq!(
+            make(&"x".repeat(64)).unwrap().fresh_name().chars().count(),
+            64
+        );
     }
 
     #[test]

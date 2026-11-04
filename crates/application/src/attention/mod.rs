@@ -35,6 +35,8 @@ pub enum ChangeKind {
     Routed,
     /// The done-gate judged a stop.
     Gate,
+    /// The watchdog saw trouble or took a recovery step.
+    Watchdog,
 }
 
 /// One row of the change log: informational, never an inbox item.

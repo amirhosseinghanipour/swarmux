@@ -25,6 +25,8 @@ pub struct Settings {
     pub worktree: WorktreeSettings,
     pub governor: GovernorSettings,
     pub notify: crate::NotifySettings,
+    /// Stuck-agent detection and recovery.
+    pub watchdog: crate::WatchdogSettings,
 }
 
 /// The `[governor]` section: when queued work waits for a usage window to
@@ -330,6 +332,7 @@ impl Default for Settings {
             ui: UiSettings::default(),
             worktree: WorktreeSettings::default(),
             governor: GovernorSettings::default(),
+            watchdog: crate::WatchdogSettings::default(),
             notify: crate::NotifySettings::default(),
         }
     }

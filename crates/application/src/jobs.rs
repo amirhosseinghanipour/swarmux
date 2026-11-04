@@ -151,6 +151,17 @@ pub struct PumpReport {
     pub changed: bool,
     /// Jobs the loop breaker stopped.
     pub loop_trips: Vec<(JobId, LoopTrip)>,
+    /// What the running agents reported, when asked for with
+    /// [`JobService::with_event_tap`].
+    pub events: Vec<(JobId, AgentEvent)>,
+}
+
+/// How a stuck job's work carries on in a new session.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Restart {
+    pub prompt: String,
+    /// A model other than the job's.
+    pub model: Option<String>,
 }
 
 /// What applying one runner message led to.
@@ -197,6 +208,9 @@ pub struct JobService {
     caps: HashMap<JobId, f64>,
     /// Last power reading and when it was taken: on battery or not.
     power: Option<(Millis, bool)>,
+    /// Hand every agent event to the pump's report.
+    tap: bool,
+    tapped: Vec<(JobId, AgentEvent)>,
 }
 
 /// Where a queued job comes from, and what it may spend.
@@ -250,7 +264,19 @@ impl JobService {
             load: None,
             caps: HashMap::new(),
             power: None,
+            tap: false,
+            tapped: Vec::new(),
         }
+    }
+
+    /// Reports every agent event in [`PumpReport::events`], for the watchdog.
+    pub fn with_event_tap(mut self) -> JobService {
+        self.set_event_tap(true);
+        self
+    }
+
+    pub fn set_event_tap(&mut self, on: bool) {
+        self.tap = on;
     }
 
     /// Admits queued jobs by usage window (holding, deferring or
@@ -501,6 +527,58 @@ impl JobService {
         Ok(())
     }
 
+    /// Stops `id` if it still runs and carries its work on in a new Claude
+    /// session (a clean context) in the same worktree. Returns the new job
+    /// and the session made for it.
+    pub fn restart(&mut self, id: JobId, restart: Restart) -> AppResult<(JobId, Session)> {
+        match self.cancel(id) {
+            Ok(()) | Err(AppError::JobFinished(_)) => {}
+            Err(e) => return Err(e),
+        }
+        let job = self.jobs.get(id)?.ok_or(AppError::JobNotFound)?;
+        let original = self
+            .sessions
+            .get(job.session_id)?
+            .ok_or(AppError::SessionNotFound)?;
+        let mut session = Session::new(
+            SessionId::random(),
+            &original.fresh_name(),
+            original.cwd.clone(),
+            &original.model,
+            self.clock.now(),
+        )?;
+        session.lean = original.lean;
+        session.permission_mode = original.permission_mode.clone();
+        session.worktree = original.worktree;
+        self.sessions.insert(&session)?;
+        if let Some(g) = &mut self.governor {
+            g.forget(id)?;
+        }
+        let lineage = Lineage {
+            wants_review: job.wants_review,
+            review_of: None,
+            inherits: Some(id),
+            cap: self.caps.get(&id).copied(),
+        };
+        let model = restart.model.unwrap_or(job.model);
+        let new = self.enqueue(
+            session.id,
+            &restart.prompt,
+            None,
+            Some(model),
+            false,
+            lineage,
+        )?;
+        Ok((new, session))
+    }
+
+    /// Notes a recovery step the watchdog took for a job (this run only).
+    pub fn record_recovery(&mut self, id: JobId, text: &str) {
+        if let Some(i) = self.find(id) {
+            self.tracked[i].progress.record_recovery(text);
+        }
+    }
+
     /// Raises (positive `delta`) or lowers a queued job's priority.
     pub fn change_priority(&mut self, id: JobId, delta: i32) -> AppResult<i32> {
         let i = self
@@ -526,6 +604,7 @@ impl JobService {
                 Err(e) => report.errors.push(e),
             }
         }
+        report.events = std::mem::take(&mut self.tapped);
         self.reclaim_worktrees(&mut report);
         self.resume_after_reset(&mut report);
         // Read even with nothing queued, so the status bar always shows it.
@@ -1134,6 +1213,9 @@ impl JobService {
 
         let finished = match msg {
             RunnerMsg::Event(ev) => {
+                if self.tap {
+                    self.tapped.push((job_id, ev.clone()));
+                }
                 if let AgentEvent::Init { session_id, .. } = &ev
                     && self.tracked[i].job.fork
                 {

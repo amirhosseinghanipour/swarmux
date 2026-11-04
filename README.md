@@ -103,6 +103,9 @@ From a checkout, use `cargo run` and `cargo run -- doctor`.
   agent event, review and guard decision
 - **JEV (optional, bring your own key)**: the hosted Jev model for fuzzy
   decisions such as unmatched tool calls and which session should take a prompt
+- **Watchdog**: notices loops, stalls, full contexts and runaway spending,
+  and tries a ladder of recoveries (nudge, fresh session, diagnosis, fork
+  from a checkpoint, stronger model, replan) before it asks you
 - **Let swarmux route**: one cheap Haiku call picks the session for a prompt
 - **Lean mode** per session: skip your user-level Claude Code settings
 
@@ -125,6 +128,7 @@ Single Rust binary. Windows, macOS, Linux. Works with Claude Code only.
 - [Independent verifier, hidden checks and review](guide/verifier.md)
 - [Worktrees and checkpoints](guide/worktrees.md)
 - [Usage governor](guide/governor.md)
+- [Watchdog and recovery ladder](guide/watchdog.md)
 - [Notifications](guide/notifications.md)
 
 ## Project
