@@ -12,6 +12,17 @@ use tokio::runtime::Handle;
 
 /// The notifier the settings ask for: every enabled channel at once.
 pub fn build_notifier(settings: &NotifySettings, rt: &Handle) -> Box<dyn Notifier> {
+    build_notifier_with(settings, rt, None)
+}
+
+/// Like [`build_notifier`], with `terminal` writing the terminal sequence
+/// instead of this process's own output (which the background service
+/// does not have).
+pub fn build_notifier_with(
+    settings: &NotifySettings,
+    rt: &Handle,
+    terminal: Option<Box<dyn Notifier>>,
+) -> Box<dyn Notifier> {
     if !settings.enabled {
         return Box::new(NoNotifier);
     }
@@ -21,7 +32,8 @@ pub fn build_notifier(settings: &NotifySettings, rt: &Handle) -> Box<dyn Notifie
         channels.push(Box::new(toast::ToastNotifier));
     }
     if settings.terminal != TerminalMode::Off {
-        channels.push(Box::new(TerminalNotifier::new(settings.terminal)));
+        channels
+            .push(terminal.unwrap_or_else(|| Box::new(TerminalNotifier::new(settings.terminal))));
     }
     if let Some(url) = &settings.ntfy
         && let Ok(ntfy) = NtfyNotifier::new(url, rt.clone())

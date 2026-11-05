@@ -9,7 +9,7 @@ pub const ENV_PIPE: &str = "SWARMUX_HOOK_PIPE";
 pub const ENV_JOB: &str = "SWARMUX_JOB_ID";
 
 /// The user name, reduced to characters safe in a pipe or file name.
-fn user() -> String {
+pub(crate) fn user() -> String {
     let raw = std::env::var(if cfg!(windows) { "USERNAME" } else { "USER" }).unwrap_or_default();
     let safe: String = raw
         .chars()
