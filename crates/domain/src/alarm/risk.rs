@@ -256,6 +256,9 @@ pub fn reversibility(tool: &str, subject: &str, cwd: &str) -> Reversibility {
         | "ToolSearch" | "NotebookRead" => Reversibility::R0,
         "Edit" | "Write" | "MultiEdit" | "NotebookEdit" => Reversibility::R1,
         "WebFetch" | "WebSearch" => Reversibility::R3,
+        "mcp__swarmux-board__read" => Reversibility::R0,
+        // Writes to swarmux's own board; the entry can be closed.
+        t if t.starts_with("mcp__swarmux-board__") => Reversibility::R1,
         t if t.starts_with("mcp__") => Reversibility::R3,
         _ => Reversibility::R2,
     }
@@ -350,6 +353,8 @@ mod tests {
         assert_eq!(r("Bash", "curl -X POST https://x.test"), Reversibility::R3);
         assert_eq!(r("Bash", "npm publish"), Reversibility::R3);
         assert_eq!(r("mcp__slack__post", "hi"), Reversibility::R3);
+        assert_eq!(r("mcp__swarmux-board__claim", ""), Reversibility::R1);
+        assert_eq!(r("mcp__swarmux-board__read", ""), Reversibility::R0);
         assert_eq!(r("Bash", "git push origin main"), Reversibility::R4);
         assert_eq!(r("Bash", "cargo build && rm -r build"), Reversibility::R4);
     }

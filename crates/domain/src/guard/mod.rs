@@ -26,7 +26,7 @@ pub const BUILTIN_DENY: [&str; 6] = [
 ];
 
 /// Read-only and bookkeeping tools allowed unless a deny rule says otherwise.
-pub const BUILTIN_ALLOW: [&str; 10] = [
+pub const BUILTIN_ALLOW: [&str; 17] = [
     "Read(**)",
     "Glob",
     "Grep",
@@ -37,6 +37,14 @@ pub const BUILTIN_ALLOW: [&str; 10] = [
     "TaskOutput",
     "ToolSearch",
     "NotebookRead",
+    // The Board's tools: local, reversible, and written to swarmux's own store.
+    "mcp__swarmux-board__claim",
+    "mcp__swarmux-board__report",
+    "mcp__swarmux-board__fact",
+    "mcp__swarmux-board__decision",
+    "mcp__swarmux-board__ask_human",
+    "mcp__swarmux-board__schedule_followup",
+    "mcp__swarmux-board__read",
 ];
 
 /// What happens to a tool call.

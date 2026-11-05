@@ -5,6 +5,7 @@
 
 pub mod alarm;
 mod attention;
+pub mod board;
 pub mod budget;
 mod date;
 pub mod dist;
@@ -59,7 +60,7 @@ pub use schedule::{Limits, plan, run_order};
 pub use session::{DEFAULT_MODEL, DEFAULT_PERMISSION_MODE, Session, SessionId};
 pub use subagent::{Subagent, SubagentStatus, ToolOutcome};
 pub use template::{render, variables};
-pub use tokens::TokenTally;
+pub use tokens::{TokenTally, estimate_tokens};
 pub use worktree::{
     Checkpoint, CheckpointReason, Handoff, PortPlan, WorktreeRecord, branch_name, slug,
 };
