@@ -126,6 +126,7 @@ Single Rust binary. Windows, macOS, Linux. Works with Claude Code only.
 - [Telemetry sources](guide/telemetry.md)
 - [Mission control](guide/mission-control.md) and the [inbox](guide/mission-control.md#the-inbox-as-an-alarm-panel)
 - [Missions](guide/missions.md)
+- [The Board: shared state between a mission's agents](guide/board.md)
 - [Ledger and evidence bundles](guide/ledger-and-evidence.md)
 - [Focus and the classic dashboard](guide/focus.md)
 - [Themes and layouts](guide/themes.md)

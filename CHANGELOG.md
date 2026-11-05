@@ -19,6 +19,12 @@ follows [Semantic Versioning](https://semver.org/).
   (writes elsewhere are refused). Finished tasks merge into a swarmux branch in
   dependency order; a conflict sends the agent back once to rebase, then asks
   you (`[missions] parallel`).
+- The Board: the agents of a mission share typed state (claims, facts,
+  decisions, questions) through a per-job `swarmux-board` MCP server. A claim
+  that overlaps another live job's is refused naming the holder, new sessions
+  start with a digest of at most 1500 tokens, and a question to you lands in the
+  inbox. Board text is treated as untrusted: cleaned, capped and always shown
+  quoted with its job and time (`[board]`, screen `7`).
 - Done-gate: swarmux runs the repository's checks itself when an agent says it
   is finished, and sends the agent back with the failure until they pass.
   Tests and other protected files cannot be edited to get past it.
