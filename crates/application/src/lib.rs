@@ -6,8 +6,10 @@
 pub mod attention;
 pub mod board;
 pub mod checkpoint;
+pub mod daemon;
 mod decision;
 pub mod dist;
+pub mod engine;
 mod error;
 pub mod evidence;
 pub mod gate;
@@ -44,6 +46,7 @@ pub use board::{
 };
 pub use checkpoint::{CheckpointService, HandoffBoard, Notes};
 pub use decision::{DecisionRecord, Outcome, Source};
+pub use engine::{Engine, EngineReport, MissionsPump};
 pub use error::{AppError, AppResult};
 pub use evidence::{
     Checkout, Checkouts, EvidenceService, EvidenceStore, HashSigner, HeadFacts, OutcomeProbe,

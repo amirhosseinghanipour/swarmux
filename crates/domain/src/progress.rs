@@ -301,6 +301,12 @@ impl JobProgress {
         self.end(JobStatus::Cancelled, "cancelled", None, tick)
     }
 
+    /// Ends the job as interrupted: swarmux stopped it to stop itself, and
+    /// it can be resumed. Returns the result to save.
+    pub fn interrupt(&mut self, reason: &str, tick: u32) -> Option<JobResult> {
+        self.end(JobStatus::Interrupted, "interrupted", Some(reason), tick)
+    }
+
     /// Ends the job as cancelled by swarmux itself, with `reason` as its error.
     pub fn stop(&mut self, reason: &str, tick: u32) -> Option<JobResult> {
         self.end(JobStatus::Cancelled, "cancelled", Some(reason), tick)

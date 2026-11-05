@@ -37,6 +37,9 @@ pub enum AppError {
     /// The mission can't take that step now.
     #[error("{0}")]
     Mission(String),
+    /// The background service could not be reached, or went away.
+    #[error("background service: {0}")]
+    Service(String),
 }
 
 pub type AppResult<T> = Result<T, AppError>;
