@@ -32,6 +32,7 @@ fn request(cwd: PathBuf, prompt: &str) -> RunRequest {
         review: false,
         env: Vec::new(),
         max_budget_usd: None,
+        board: false,
     }
 }
 
@@ -268,6 +269,7 @@ fn review_runs_read_only_and_answer_with_a_verdict() {
         review: true,
         env: Vec::new(),
         max_budget_usd: None,
+        board: false,
         model: "haiku".into(),
         ..request(dir.path().into(), "swarmux review of job #1")
     };

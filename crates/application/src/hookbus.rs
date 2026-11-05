@@ -135,6 +135,7 @@ pub struct HookBus {
     changes: VecDeque<Change>,
     checkpoints: Option<Rc<CheckpointService>>,
     truth: Option<Rc<TruthBoard>>,
+    board: Option<Rc<crate::BoardService>>,
 }
 
 impl HookBus {
@@ -153,12 +154,19 @@ impl HookBus {
             changes: VecDeque::new(),
             checkpoints: None,
             truth: None,
+            board: None,
         }
     }
 
     /// Keeps the instruction files sessions load on `board`.
     pub fn with_truth(mut self, board: Rc<TruthBoard>) -> HookBus {
         self.truth = Some(board);
+        self
+    }
+
+    /// Mirrors Claude Code's task events onto the mission's board.
+    pub fn with_board(mut self, board: Rc<crate::BoardService>) -> HookBus {
+        self.board = Some(board);
         self
     }
 
@@ -191,6 +199,9 @@ impl HookBus {
             None => None,
         };
         self.record(notice, session, now)?;
+        if let Some(board) = &self.board {
+            board.observe(notice)?;
+        }
         self.checkpoint_before_compaction(notice)
     }
 

@@ -24,17 +24,17 @@ use clap::{Parser, Subcommand};
 use swarmux_application::ledger::{LedgerService, LedgeredDecisions, LedgeredJobs};
 use swarmux_application::ports::Clock;
 use swarmux_application::{
-    CombinedStatusline, GateKeeper, GateService, Governor, GuardService, HandoffBoard,
-    HistoryService, HookBus, HookMessenger, Jev, JobService, MissionService, NotifyService,
-    NudgeBoard, PromptService, RoutingService, ScopeClaims, SessionService, SharedPolicy,
-    StatuslineFeed, TruthBoard, Watchdog,
+    Board, BoardDigest, BoardService, CombinedStatusline, GateKeeper, GateService, Governor,
+    GuardService, HandoffBoard, HistoryService, HookBus, HookMessenger, Jev, JobService,
+    MissionService, NotifyService, NudgeBoard, PromptService, RoutingService, ScopeClaims,
+    SessionService, SharedPolicy, StatuslineFeed, TruthBoard, Watchdog,
 };
 use swarmux_infrastructure::hook::{self, HookServer, Responders};
 use swarmux_infrastructure::{
-    ClaudeCli, ClaudePlanner, ConfigRuleWriter, FilePalette, FsAgentCatalog, FsGateSource, GitCli,
-    GitMergeQueue, GitVcs, GitWorktrees, GuardHook, HaikuDiagnoser, HaikuLinter, HaikuRouter,
-    MissionFiles, Paths, SqliteLedger, SqliteStore, SysinfoMonitor, SystemClock, WindowsTerminal,
-    build_notifier, load_settings, utc_offset_minutes,
+    BoardMcp, ClaudeCli, ClaudePlanner, ConfigRuleWriter, FilePalette, FsAgentCatalog,
+    FsGateSource, GitCli, GitMergeQueue, GitVcs, GitWorktrees, GuardHook, HaikuDiagnoser,
+    HaikuLinter, HaikuRouter, MissionFiles, Paths, SqliteLedger, SqliteStore, SysinfoMonitor,
+    SystemClock, WindowsTerminal, build_notifier, load_settings, utc_offset_minutes,
 };
 use swarmux_tui::{App, Launch};
 
@@ -172,6 +172,14 @@ enum Command {
         /// (latest.txt plus the archives and their .minisig files).
         #[arg(long, value_name = "DIR")]
         from: Option<PathBuf>,
+    },
+    /// The MCP server a mission job talks to the board through (not for
+    /// direct use).
+    #[command(hide = true)]
+    BoardMcp {
+        /// The swarmux job the agent runs as.
+        #[arg(long)]
+        job: Option<i64>,
     },
     /// Hooks Claude Code runs inside swarmux jobs (not for direct use).
     #[command(hide = true)]
@@ -408,6 +416,10 @@ fn main() -> anyhow::Result<ExitCode> {
         }) => dist::install(dir, no_path, statusline),
         Some(Command::Uninstall { purge, no_path }) => dist::uninstall(purge, no_path),
         Some(Command::SelfUpdate { check, from }) => dist::self_update(check, from),
+        Some(Command::BoardMcp { job }) => {
+            swarmux_infrastructure::board::board_mcp_main(job).context("board-mcp failed")?;
+            Ok(())
+        }
         Some(Command::Hook { event }) => {
             hook::hook_main(&event);
             Ok(())
@@ -471,21 +483,35 @@ fn run_tui(no_splash: bool) -> anyhow::Result<()> {
     let pipe = hook::endpoint_for(std::process::id());
     // Handoffs reach the sessions that start after a checkpoint.
     let board = HandoffBoard::new();
+    // The Board: what the agents of a mission tell each other. Sessions that
+    // start are given its digest after their handoff.
+    let board_hub = settings.board.enabled.then(Board::new);
+    let session_start: Arc<dyn swarmux_application::SessionStartContext> = match &board_hub {
+        Some(hub) => Arc::new(BoardDigest::new(hub.clone(), Some(board.clone()))),
+        None => board.clone(),
+    };
     let responders = Responders {
         stop: keeper.clone(),
-        session_start: board.clone(),
+        session_start,
     };
     let server = Rc::new(
         HookServer::start_with(rt.handle(), &pipe, policy.clone(), responders)
             .with_context(|| format!("cannot listen on {pipe}"))?,
     );
+    let board_mcp = BoardMcp {
+        exe: std::env::current_exe().context("cannot find the swarmux executable")?,
+        pipe: pipe.clone(),
+    };
     let guard_hook = GuardHook {
         exe: std::env::current_exe().context("cannot find the swarmux executable")?,
         pipe,
         timeout_secs: guard_settings.approval_timeout_secs + HOOK_GRACE_SECS,
     };
-    let runner =
-        Rc::new(ClaudeCli::new(doctor::claude_bin(), rt.handle().clone()).with_guard(guard_hook));
+    let mut cli = ClaudeCli::new(doctor::claude_bin(), rt.handle().clone()).with_guard(guard_hook);
+    if board_hub.is_some() {
+        cli = cli.with_board(board_mcp);
+    }
+    let runner = Rc::new(cli);
     let worktree::Services {
         worktrees,
         checkpoints,
@@ -549,8 +575,19 @@ fn run_tui(no_splash: bool) -> anyhow::Result<()> {
                     .unwrap_or_else(|| paths.data_dir.join("worktrees")),
             )),
             worktrees.clone(),
-            claims,
+            claims.clone(),
         );
+    let missions = match &board_hub {
+        Some(hub) => missions.with_board(hub.clone()),
+        None => missions,
+    };
+    let board_service = board_hub
+        .as_ref()
+        .map(|hub| {
+            BoardService::new(store.clone(), hub.clone(), store.clone(), clock.clone())
+                .map(|s| Rc::new(s.with_claims(claims.clone())))
+        })
+        .transpose()?;
     // Stuck agents: detectors on every job, and a ladder of recoveries,
     // cheapest first, before the inbox.
     let mut watchdog = Watchdog::new(
@@ -568,6 +605,11 @@ fn run_tui(no_splash: bool) -> anyhow::Result<()> {
     let hook_bus = HookBus::new(server.clone(), ledger, store.clone(), clock.clone())
         .with_checkpoints(checkpoints.clone())
         .with_truth(truth.clone());
+    let hook_bus = match &board_service {
+        Some(service) => hook_bus.with_board(service.clone()),
+        None => hook_bus,
+    };
+    let board_inbox: Rc<dyn swarmux_application::BoardInbox> = server.clone();
     let mut guard = GuardService::new(policy, server, decisions.clone(), clock.clone())
         .with_timeout_secs(guard_settings.approval_timeout_secs)
         .with_rule_writer(Rc::new(ConfigRuleWriter::new(paths.config.clone())));
@@ -621,6 +663,9 @@ fn run_tui(no_splash: bool) -> anyhow::Result<()> {
         .with_execution_log(Rc::new(keeper))
         .with_worktrees(worktrees)
         .with_governor(governor);
+    if let Some(hub) = &board_hub {
+        jobs = jobs.with_board(hub.clone());
+    }
     jobs.recover()?;
     let app = App::new(
         sessions,
@@ -632,6 +677,7 @@ fn run_tui(no_splash: bool) -> anyhow::Result<()> {
         std::env::current_dir()?,
     )
     .with_clock(Rc::new(SystemClock))
+    .with_board(board_service.zip(Some(board_inbox)))
     .with_hook_bus(hook_bus)
     .with_gate(gate)
     .with_watchdog(watchdog)

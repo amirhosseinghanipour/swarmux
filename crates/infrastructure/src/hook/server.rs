@@ -12,8 +12,9 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use swarmux_application::ports::{HookInbox, InboxItem};
 use swarmux_application::{
-    AllowStop, HookFeed, HookNotice, NoSessionContext, SessionStartContext, SessionStartInfo,
-    SharedPolicy, StatuslineFeed, StopAnswer, StopContext, StopPolicy,
+    AllowStop, BoardCall, BoardInbox, BoardReply, HookFeed, HookNotice, NoSessionContext,
+    SessionStartContext, SessionStartInfo, SharedPolicy, StatuslineFeed, StopAnswer, StopContext,
+    StopPolicy,
 };
 use swarmux_domain::telemetry::Statusline;
 use swarmux_domain::{Decision, HookEvent, JobId, Verdict};
@@ -54,6 +55,8 @@ struct Shared {
     items: Mutex<Sender<InboxItem>>,
     notices: Mutex<Sender<HookNotice>>,
     statuslines: Mutex<Sender<Statusline>>,
+    calls: Mutex<Sender<BoardCall>>,
+    board_waiting: Mutex<HashMap<u64, oneshot::Sender<BoardReply>>>,
     responders: Responders,
     waiting: Waiting,
     next_id: AtomicU64,
@@ -70,6 +73,7 @@ pub struct HookServer {
     items: Mutex<Receiver<InboxItem>>,
     notices: Mutex<Receiver<HookNotice>>,
     statuslines: Mutex<Receiver<Statusline>>,
+    calls: Mutex<Receiver<BoardCall>>,
     task: AbortHandle,
 }
 
@@ -90,11 +94,14 @@ impl HookServer {
         let (tx, rx) = channel();
         let (ntx, nrx) = channel();
         let (stx, srx) = channel();
+        let (ctx, crx) = channel();
         let shared = Arc::new(Shared {
             policy,
             items: Mutex::new(tx),
             notices: Mutex::new(ntx),
             statuslines: Mutex::new(stx),
+            calls: Mutex::new(ctx),
+            board_waiting: Mutex::default(),
             responders,
             waiting: Mutex::default(),
             next_id: AtomicU64::new(1),
@@ -107,6 +114,7 @@ impl HookServer {
             items: Mutex::new(rx),
             notices: Mutex::new(nrx),
             statuslines: Mutex::new(srx),
+            calls: Mutex::new(crx),
             task,
         })
     }
@@ -134,6 +142,18 @@ impl HookFeed for HookServer {
 impl StatuslineFeed for HookServer {
     fn poll_statuslines(&self) -> Vec<Statusline> {
         lock(&self.statuslines).try_iter().collect()
+    }
+}
+
+impl BoardInbox for HookServer {
+    fn poll(&self) -> Vec<BoardCall> {
+        lock(&self.calls).try_iter().collect()
+    }
+
+    fn respond(&self, call: u64, reply: BoardReply) {
+        if let Some(waiter) = lock(&self.shared.board_waiting).remove(&call) {
+            let _ = waiter.send(reply);
+        }
     }
 }
 
@@ -221,6 +241,7 @@ async fn serve<S: AsyncRead + AsyncWrite>(conn: S, shared: Arc<Shared>) {
                 }
                 WireReply::pass()
             }
+            Ok(wire) if wire.is_board() => WireReply::board(&board(wire, &shared).await),
             Ok(wire) => match wire.hook_event() {
                 Some(HookEvent::PreToolUse) => {
                     WireReply::from_decision(&decide(wire, &shared).await)
@@ -240,6 +261,36 @@ async fn serve<S: AsyncRead + AsyncWrite>(conn: S, shared: Arc<Shared>) {
     let _ = write.write_all(out.as_bytes()).await;
     let _ = write.flush().await;
     let _ = write.shutdown().await;
+}
+
+/// How long an agent's board call waits for the app to answer it.
+const BOARD_WAIT: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// Hands a board call to the app and waits for its answer.
+async fn board(wire: WireRequest, shared: &Shared) -> BoardReply {
+    let request = match crate::board::parse_request(&wire.tool_name, &wire.tool_input) {
+        Ok(request) => request,
+        Err(why) => return BoardReply::failed(format!("invalid arguments: {why}")),
+    };
+    let id = shared.next_id.fetch_add(1, Ordering::Relaxed);
+    let (tx, rx) = oneshot::channel();
+    lock(&shared.board_waiting).insert(id, tx);
+    let call = BoardCall {
+        id,
+        job: wire.job_id.map(JobId),
+        request,
+    };
+    if lock(&shared.calls).send(call).is_err() {
+        lock(&shared.board_waiting).remove(&id);
+        return BoardReply::failed("swarmux is shutting down");
+    }
+    match tokio::time::timeout(BOARD_WAIT, rx).await {
+        Ok(Ok(reply)) => reply,
+        _ => {
+            lock(&shared.board_waiting).remove(&id);
+            BoardReply::failed("swarmux did not answer in time; try again")
+        }
+    }
 }
 
 async fn decide(wire: WireRequest, shared: &Shared) -> Decision {

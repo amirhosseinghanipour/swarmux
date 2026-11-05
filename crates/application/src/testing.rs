@@ -1570,3 +1570,70 @@ impl crate::missions::MergeQueue for FakeMergeQueue {
         Ok(())
     }
 }
+
+/// Board entries kept in memory.
+#[derive(Default)]
+pub struct InMemoryBoard {
+    rows: RefCell<Vec<swarmux_domain::board::BoardEntry>>,
+}
+
+impl crate::board::BoardStore for InMemoryBoard {
+    fn append(&self, entry: &swarmux_domain::board::BoardEntry) -> AppResult<i64> {
+        let mut rows = self.rows.borrow_mut();
+        let mut e = entry.clone();
+        e.id = rows.len() as i64 + 1;
+        let id = e.id;
+        rows.push(e);
+        Ok(id)
+    }
+
+    fn recent(&self, limit: usize) -> AppResult<Vec<swarmux_domain::board::BoardEntry>> {
+        let rows = self.rows.borrow();
+        Ok(rows[rows.len().saturating_sub(limit)..].to_vec())
+    }
+
+    fn update(&self, entry: &swarmux_domain::board::BoardEntry) -> AppResult<()> {
+        if let Some(r) = self.rows.borrow_mut().iter_mut().find(|r| r.id == entry.id) {
+            *r = entry.clone();
+        }
+        Ok(())
+    }
+}
+
+/// Board calls queued by a test, and the replies they got.
+#[derive(Default)]
+pub struct FakeBoardInbox {
+    queue: RefCell<Vec<crate::board::BoardCall>>,
+    replies: RefCell<Vec<(u64, crate::board::BoardReply)>>,
+    next: Cell<u64>,
+}
+
+impl FakeBoardInbox {
+    /// Queues a call; returns its id.
+    pub fn push(&self, job: Option<JobId>, request: crate::board::BoardRequest) -> u64 {
+        let id = self.next.get() + 1;
+        self.next.set(id);
+        self.queue
+            .borrow_mut()
+            .push(crate::board::BoardCall { id, job, request });
+        id
+    }
+
+    pub fn reply(&self, call: u64) -> Option<crate::board::BoardReply> {
+        self.replies
+            .borrow()
+            .iter()
+            .find(|(id, _)| *id == call)
+            .map(|(_, r)| r.clone())
+    }
+}
+
+impl crate::board::BoardInbox for FakeBoardInbox {
+    fn poll(&self) -> Vec<crate::board::BoardCall> {
+        std::mem::take(&mut *self.queue.borrow_mut())
+    }
+
+    fn respond(&self, call: u64, reply: crate::board::BoardReply) {
+        self.replies.borrow_mut().push((call, reply));
+    }
+}

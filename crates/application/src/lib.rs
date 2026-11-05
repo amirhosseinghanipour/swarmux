@@ -4,6 +4,7 @@
 //! live in other crates and plug in through the traits in [`ports`].
 
 pub mod attention;
+pub mod board;
 pub mod checkpoint;
 mod decision;
 pub mod dist;
@@ -36,6 +37,10 @@ pub mod worktree;
 pub use attention::{
     AlarmEvent, AlarmKind, AlarmStore, AttentionService, Change, ChangeKind, HeldBack, ShelveFor,
     ShelvedItem, Suggestion, TallyRow, alarm_report,
+};
+pub use board::{
+    Board, BoardCall, BoardDigest, BoardInbox, BoardReply, BoardRequest, BoardService, BoardStore,
+    Member,
 };
 pub use checkpoint::{CheckpointService, HandoffBoard, Notes};
 pub use decision::{DecisionRecord, Outcome, Source};
@@ -75,9 +80,9 @@ pub use prompts::{BUILTIN_VARIABLES, PromptService, RenderedPrompt};
 pub use routing::{ROUTE_PROMPT_MAX, RouteReport, Routed, RoutingService};
 pub use sessions::SessionService;
 pub use settings::{
-    GovernorSettings, GuardSettings, JevProvider, JevSettings, LayoutSettings, MotionSetting,
-    ReviewSettings, ReviewWhen, RowSettings, Settings, TelemetrySettings, UiSettings,
-    WorktreeSettings,
+    BoardSettings, GovernorSettings, GuardSettings, JevProvider, JevSettings, LayoutSettings,
+    MotionSetting, ReviewSettings, ReviewWhen, RowSettings, Settings, TelemetrySettings,
+    UiSettings, WorktreeSettings,
 };
 pub use telemetry::{
     ActivityView, AgentsPoll, Battery, CacheView, CiRun, Collected, CombinedStatusline, Commit,

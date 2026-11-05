@@ -1,5 +1,11 @@
 //! Token counts per actor, summed from usage reports.
 
+/// A rough token count of `text`: one token per four characters, rounded up.
+/// Good enough to keep injected text under a budget; never used for billing.
+pub fn estimate_tokens(text: &str) -> usize {
+    text.chars().count().div_ceil(4)
+}
+
 /// Usage of one actor (the lead, a subagent or the reviewer).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TokenTally {

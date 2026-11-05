@@ -206,6 +206,7 @@ fn kind_icon(kind: AttentionKind) -> Icon {
         AttentionKind::PlanReady => Icon::Question,
         AttentionKind::Drift => Icon::Concerns,
         AttentionKind::Merge => Icon::Concerns,
+        AttentionKind::BoardQuestion => Icon::Question,
     }
 }
 
@@ -321,6 +322,9 @@ pub(super) fn item_lines(
             parts.push(vec![key("y"), txt(" approve")]);
             parts.push(vec![key("n"), txt(" change")]);
             parts.push(vec![key("c"), txt(" cancel")]);
+        } else if item.kind == AttentionKind::BoardQuestion {
+            parts.push(vec![key("r"), txt(" answer")]);
+            parts.push(vec![key("x"), txt(" dismiss")]);
         } else {
             parts.push(vec![key("x"), txt(" dismiss")]);
         }

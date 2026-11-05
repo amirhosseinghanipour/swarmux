@@ -59,6 +59,9 @@ fn input(event: HookEvent) -> String {
         HookEvent::InstructionsLoaded => serde_json::json!({
             "file_path": "/w/CLAUDE.md", "memory_type": "Project",
             "load_reason": "session_start"}),
+        HookEvent::TaskCreated | HookEvent::TaskCompleted => serde_json::json!({
+            "task_id": "task-001", "task_subject": "Write the migration",
+            "task_description": "add the v15 table"}),
     };
     v.as_object_mut()
         .unwrap()
@@ -124,6 +127,8 @@ fn every_lifecycle_event_round_trips() {
     assert_eq!(by(HookEvent::PreCompact).detail, "auto");
     assert_eq!(by(HookEvent::Notification).detail, "agent_needs_input");
     assert_eq!(by(HookEvent::Stop).summary, "All done.");
+    assert_eq!(by(HookEvent::TaskCreated).summary, "Write the migration");
+    assert_eq!(by(HookEvent::TaskCompleted).detail, "add the v15 table");
     assert_eq!(by(HookEvent::InstructionsLoaded).summary, "/w/CLAUDE.md");
     assert_eq!(
         by(HookEvent::InstructionsLoaded).detail,

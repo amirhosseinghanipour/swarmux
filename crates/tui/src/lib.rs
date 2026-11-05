@@ -4,6 +4,7 @@
 //! SQLite, processes or the `claude` CLI.
 
 mod app;
+mod board;
 mod dashboard;
 pub mod fetch;
 mod focus;

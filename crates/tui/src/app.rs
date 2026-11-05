@@ -57,10 +57,12 @@ pub enum Screen {
     Sessions,
     /// The followed job in detail (the dashboard's panels).
     Dashboard,
+    /// What the agents of each mission wrote to each other.
+    Board,
 }
 
 impl Screen {
-    pub const ALL: [Screen; 7] = [
+    pub const ALL: [Screen; 8] = [
         Screen::Mission,
         Screen::Missions,
         Screen::Prompts,
@@ -68,6 +70,7 @@ impl Screen {
         Screen::Ledger,
         Screen::Sessions,
         Screen::Dashboard,
+        Screen::Board,
     ];
 
     pub fn title(self) -> &'static str {
@@ -79,6 +82,7 @@ impl Screen {
             Screen::Queue => "queue",
             Screen::Ledger => "ledger",
             Screen::Sessions => "sessions",
+            Screen::Board => "board",
         }
     }
 
@@ -92,6 +96,7 @@ impl Screen {
             Screen::Ledger => '5',
             Screen::Sessions => '6',
             Screen::Dashboard => '0',
+            Screen::Board => '7',
         }
     }
 
@@ -110,6 +115,8 @@ pub enum InputPurpose {
     Variable,
     /// The note that sends a proposed plan back for a new one.
     PlanNote,
+    /// The answer to a question an agent put on the board.
+    BoardAnswer,
     /// The ledger search; applied as it is typed.
     Search,
 }
@@ -151,6 +158,13 @@ pub struct App {
     pub mission: MissionState,
     /// The Missions screen's selection and composer.
     pub missions_screen: MissionsScreen,
+    /// The Board screen's selection.
+    pub board_screen: crate::board::BoardScreen,
+    /// The mission boards' service and where agents' calls arrive.
+    pub(crate) board: Option<(
+        Rc<swarmux_application::BoardService>,
+        Rc<dyn swarmux_application::BoardInbox>,
+    )>,
     /// Writes, lints and follows missions.
     pub(crate) missions: Option<MissionService>,
     /// Bundles, their verification and outcome labels.
@@ -294,6 +308,8 @@ impl App {
             focus_state: FocusState::default(),
             mission: MissionState::default(),
             missions_screen: MissionsScreen::default(),
+            board_screen: Default::default(),
+            board: None,
             missions: None,
             evidence: None,
             away_since: None,
@@ -610,6 +626,7 @@ impl App {
         if let Some(missions) = &self.missions {
             escalations.extend(missions.plan_items(now));
         }
+        escalations.extend(self.board_items());
         self.mission.refresh(
             (&self.guard, &self.jobs, self.gate.as_ref()),
             (&hook_changes, escalations),
@@ -778,6 +795,7 @@ impl App {
             errors.extend(gate_errors);
         }
         errors.extend(self.pump_routes());
+        errors.extend(self.pump_board());
         if let Some(e) = errors.into_iter().last() {
             self.error = Some(e.to_string());
         }
@@ -1055,6 +1073,7 @@ impl App {
                         InputPurpose::RoutedPrompt => self.route_prompt(&text),
                         InputPurpose::Variable => self.answer_variable(text),
                         InputPurpose::PlanNote => self.submit_plan_note(&text),
+                        InputPurpose::BoardAnswer => self.submit_board_answer(&text),
                         InputPurpose::Search => Ok(()),
                     };
                     self.show(result);
@@ -1109,6 +1128,9 @@ impl App {
             return;
         }
         if self.showcase_key(key.code) {
+            return;
+        }
+        if self.board_key(key.code) {
             return;
         }
         let confirming_delete = std::mem::take(&mut self.prompts.confirm_delete);
@@ -1646,7 +1668,7 @@ impl App {
         };
     }
 
-    fn show(&mut self, result: AppResult<()>) {
+    pub(crate) fn show(&mut self, result: AppResult<()>) {
         if let Err(e) = result {
             self.error = Some(e.to_string());
         }
@@ -2290,7 +2312,7 @@ mod tests {
         assert_eq!(t.app.screen, Screen::Missions);
         press(&mut t.app, KeyCode::Char('0'));
         assert_eq!(t.app.screen, Screen::Dashboard);
-        press(&mut t.app, KeyCode::Char('7'));
+        press(&mut t.app, KeyCode::Char('8'));
         assert_eq!(t.app.screen, Screen::Dashboard, "no such screen");
         press(&mut t.app, KeyCode::Char('1'));
         assert_eq!(t.app.screen, Screen::Mission);

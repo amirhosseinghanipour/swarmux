@@ -56,6 +56,8 @@ pub enum AttentionKind {
     /// A task of a mission could not merge: a conflict its agent could not
     /// resolve, or files outside its scope.
     Merge,
+    /// An agent asked the user a question through the Board.
+    BoardQuestion,
 }
 
 impl AttentionKind {
@@ -72,6 +74,7 @@ impl AttentionKind {
             AttentionKind::PlanReady => "plan",
             AttentionKind::Drift => "drift",
             AttentionKind::Merge => "merge",
+            AttentionKind::BoardQuestion => "ask",
         }
     }
 
@@ -234,7 +237,8 @@ impl AttentionItem {
                 | AttentionKind::ReviewConcerns
                 | AttentionKind::PlanReady
                 | AttentionKind::Drift
-                | AttentionKind::Merge,
+                | AttentionKind::Merge
+                | AttentionKind::BoardQuestion,
             ) => self.id.to_string(),
             (None, kind) => kind.as_str().to_string(),
         }
@@ -440,6 +444,29 @@ impl AttentionItem {
         )
     }
 
+    /// An agent asked the user a question through the Board (P2): the job
+    /// goes on without the answer, so it is not urgent, but it is blocking
+    /// whatever depends on it.
+    pub fn board_question(
+        entry: i64,
+        job: JobId,
+        title: &str,
+        detail: &str,
+        since: Millis,
+    ) -> AttentionItem {
+        AttentionItem::of_mission(
+            format!("ask:{entry}"),
+            (
+                AttentionKind::BoardQuestion,
+                Priority::P2,
+                Likelihood::Certain,
+            ),
+            (None, Some(job)),
+            (title, detail),
+            since,
+        )
+    }
+
     fn of_mission(
         id: String,
         (kind, priority, likelihood): (AttentionKind, Priority, Likelihood),
@@ -489,6 +516,7 @@ impl AttentionItem {
             AttentionKind::PlanReady => "plan",
             AttentionKind::Drift => "drift",
             AttentionKind::Merge => "merge",
+            AttentionKind::BoardQuestion => "ask",
         };
         AttentionItem {
             id: AttentionId::new(format!("job:{job}:{suffix}")),
