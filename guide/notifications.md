@@ -9,6 +9,9 @@ held back by deferral are not sent until they are due.
 
 Focus comes from the terminal's focus reports. A terminal that sends none
 counts as unfocused after 30 seconds without a key.
+While no window is attached to the [background service](daemon.md) you
+count as away, and the terminal sequences go to the windows attached (none
+are written when there are none); the toast and ntfy are sent as usual.
 
 ```toml
 [notify]

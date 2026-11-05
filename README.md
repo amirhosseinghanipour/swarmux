@@ -71,7 +71,8 @@ Twelve built-in themes, plus `wal`, base16 and matugen imports. List them with
 
 ```sh
 swarmux --demo         # a scripted demo: no Claude Code, no account, nothing of yours is touched
-swarmux                # the TUI: 1-7 switch screens (1 Mission control, 2 Missions, 7 Board), 0 Focus, p sends a prompt, q quits
+swarmux                # the TUI: 1-7 switch screens (1 Mission control, 2 Missions, 7 Board), 0 Focus, p sends a prompt, q detaches
+swarmux daemon status  # the background service that keeps the work going with no window open
 swarmux doctor         # checks Claude Code, the settings, the Guard hook and telemetry
 swarmux fetch          # a neofetch-style card of your sessions, spend and limits
 ```
@@ -88,6 +89,9 @@ From a checkout, use `cargo run` and `cargo run -- doctor`. See
   anything is built and see how far the build strayed from it
 - **Mission control**: what needs you, who is doing what, and whether you will
   hit a limit, on one screen
+- **Background service**: close the window and the work goes on; `swarmux`
+  attaches again from any terminal, several windows at once, and a restart
+  picks missions and jobs up where they were
 - **Prompt library** with `{{variables}}` and a real editor
 - **Queue & dispatch** across sessions with a concurrency cap, priorities and a RAM guard
 - **Live dashboard**: the lead, its subagents (model, context, activity), the
@@ -139,6 +143,7 @@ Single Rust binary. Windows, macOS, Linux. Works with Claude Code only.
 - [Usage governor](guide/governor.md)
 - [Watchdog and recovery ladder](guide/watchdog.md)
 - [Notifications](guide/notifications.md)
+- [The background service](guide/daemon.md)
 
 ## Project
 

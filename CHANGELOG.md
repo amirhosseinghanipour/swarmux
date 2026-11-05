@@ -19,6 +19,17 @@ follows [Semantic Versioning](https://semver.org/).
   (writes elsewhere are refused). Finished tasks merge into a swarmux branch in
   dependency order; a conflict sends the agent back once to rebase, then asks
   you (`[missions] parallel`).
+- The background service: jobs, approvals, missions, the watchdog, the
+  governor, the Board and notifications keep going with no window open.
+  `swarmux` attaches to it (starting it when needed) and `q` detaches;
+  several windows can attach at once and all show the same screen.
+  `swarmux daemon start|stop [--wait]|status|run`; one service per data
+  folder, a local pipe or socket only your user can open, a size-capped log,
+  and a version check between window and service. `swarmux --no-daemon`
+  runs everything in the window as before, and `swarmux doctor` reports the
+  service.
+- Jobs the service stopped on `swarmux daemon stop` resume by themselves,
+  in their own Claude session, when it starts again.
 - Missions carry on after a restart: a task graph picks up where it was
   (merged tasks stay merged, cut-off tasks continue in their worktree and
   Claude session, nothing merges twice), and single-job missions, their
