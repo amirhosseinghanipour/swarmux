@@ -53,6 +53,7 @@ fn denied_bash_command_is_blocked_by_the_hook() {
             review: false,
             env: Vec::new(),
             max_budget_usd: None,
+            board: false,
         },
         Box::new(move |m| {
             let _ = tx.send(m);
