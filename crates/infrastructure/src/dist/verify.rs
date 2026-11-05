@@ -84,4 +84,9 @@ mod tests {
     fn the_unset_embedded_key_is_reported() {
         assert!(MinisignVerifier::new("untrusted comment: x\nnope").is_err());
     }
+
+    #[test]
+    fn the_release_key_is_built_in() {
+        assert!(MinisignVerifier::embedded().is_ok());
+    }
 }
