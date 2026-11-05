@@ -434,6 +434,53 @@ impl JobService {
         Ok(interrupted)
     }
 
+    /// The job as stored, whether or not this run follows it.
+    pub fn stored(&self, id: JobId) -> AppResult<Option<Job>> {
+        self.jobs.get(id)
+    }
+
+    /// Whether Claude Code created the job's session, so a new job can
+    /// pick up its conversation with `--resume`.
+    pub fn has_started(&self, id: JobId) -> AppResult<bool> {
+        let job = self.jobs.get(id)?.ok_or(AppError::JobNotFound)?;
+        self.sessions.has_started(job.session_id)
+    }
+
+    /// Follows a job that finished in an earlier run, so it has a
+    /// [`JobFact`] with its stored outcome. Jobs already followed, and
+    /// jobs that have not finished, are left alone.
+    pub fn adopt(&mut self, id: JobId) -> AppResult<()> {
+        if self.find(id).is_some() {
+            return Ok(());
+        }
+        let Some(job) = self.jobs.get(id)? else {
+            return Err(AppError::JobNotFound);
+        };
+        if !job.status.is_finished() {
+            return Ok(());
+        }
+        let name = self
+            .sessions
+            .get(job.session_id)?
+            .map_or_else(|| "?".to_string(), |s| s.name);
+        let result = self.jobs.result(id)?;
+        let status = job.status;
+        self.track(job, &name);
+        let Some(i) = self.find(id) else {
+            return Ok(());
+        };
+        let t = &mut self.tracked[i];
+        t.progress.status = status;
+        if let Some(r) = result {
+            t.progress.cost_usd = r.cost_usd;
+            t.outcome = Some(JobOutcome {
+                error: r.error,
+                text: r.text,
+            });
+        }
+        Ok(())
+    }
+
     /// Queues `prompt` for the session; it starts as soon as it is allowed to.
     pub fn dispatch(&mut self, session_id: SessionId, prompt: &str) -> AppResult<JobId> {
         self.dispatch_capped(session_id, prompt, None)

@@ -19,6 +19,10 @@ follows [Semantic Versioning](https://semver.org/).
   (writes elsewhere are refused). Finished tasks merge into a swarmux branch in
   dependency order; a conflict sends the agent back once to rebase, then asks
   you (`[missions] parallel`).
+- Missions carry on after a restart: a task graph picks up where it was
+  (merged tasks stay merged, cut-off tasks continue in their worktree and
+  Claude session, nothing merges twice), and single-job missions, their
+  verification and plans being drafted continue too.
 - The Board: the agents of a mission share typed state (claims, facts,
   decisions, questions) through a per-job `swarmux-board` MCP server. A claim
   that overlaps another live job's is refused naming the holder, new sessions

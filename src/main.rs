@@ -577,7 +577,7 @@ fn run_tui(no_splash: bool) -> anyhow::Result<()> {
             worktrees.clone(),
             claims.clone(),
         );
-    let missions = match &board_hub {
+    let mut missions = match &board_hub {
         Some(hub) => missions.with_board(hub.clone()),
         None => missions,
     };
@@ -667,7 +667,9 @@ fn run_tui(no_splash: bool) -> anyhow::Result<()> {
         jobs = jobs.with_board(hub.clone());
     }
     jobs.recover()?;
-    let app = App::new(
+    // Missions in flight when swarmux last stopped carry on where they were.
+    let recovered = missions.recover(&mut jobs);
+    let mut app = App::new(
         sessions,
         jobs,
         prompts,
@@ -692,6 +694,9 @@ fn run_tui(no_splash: bool) -> anyhow::Result<()> {
         utc_offset_minutes,
     ))
     .with_telemetry_feed(telemetry, &settings.telemetry);
+    if let Some(e) = recovered.errors.into_iter().last() {
+        app.error = Some(format!("picking missions up again: {e}"));
+    }
     // `theme = "wal"` and friends: a file the theme is read from and watched.
     let app = match FilePalette::from_spec(&settings.ui.theme, &paths.home) {
         Some(palette) => app.with_palette_source(Box::new(palette)),

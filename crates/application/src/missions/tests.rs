@@ -406,6 +406,50 @@ fn a_failed_job_escalates() {
 }
 
 #[test]
+fn a_mission_job_interrupted_by_a_restart_carries_on() {
+    let mut f = fixture();
+    let slug = f.create(contract(&["cargo test"], &["tests/**"]));
+    let job = f.svc.launch(&slug, &mut f.jobs).unwrap();
+    f.pump();
+    f.runner.emit(
+        0,
+        RunnerMsg::Event(AgentEvent::Init {
+            session_id: "s".into(),
+            model: "sonnet".into(),
+            cwd: "/repo".into(),
+            permission_mode: "default".into(),
+        }),
+    );
+    f.pump();
+    assert_eq!(f.state(&slug), MissionState::Running);
+
+    // swarmux stops; a new run over the same stores starts.
+    let runner = Rc::new(FakeRunner::default());
+    let mut jobs = JobService::new(f.db.clone(), f.db.clone(), runner.clone(), f.clock.clone());
+    jobs.recover().unwrap();
+    let gates = Rc::new(FakeJobGates::default());
+    let mut svc = MissionService::new(f.store.clone(), f.clock.clone())
+        .unwrap()
+        .with_gates(gates.clone())
+        .with_ledger(f.ledger_service.clone());
+    let report = svc.recover(&mut jobs);
+    assert!(report.errors.is_empty(), "{:?}", report.errors);
+    let again = svc.get(&slug).unwrap().job.unwrap();
+    assert_ne!(again, job);
+    assert!(runner.request(0).resume, "the same Claude session");
+    assert_eq!(gates.assigned.borrow()[0].0, again);
+    // A second recovery in the same run changes nothing.
+    assert!(!svc.recover(&mut jobs).changed);
+    assert_eq!(runner.started(), 1);
+    f.svc = svc;
+    f.jobs = jobs;
+    f.runner = runner;
+    f.finish(0, 0.1, 0);
+    f.pump_with(again, GateOutcome::Pass, f.clock.now() + 1);
+    assert_eq!(f.state(&slug), MissionState::Delivered);
+}
+
+#[test]
 fn running_out_of_budget_escalates_and_stops_the_job() {
     let mut f = fixture();
     let slug = f.create(contract(&["cargo test"], &["tests/**"]));

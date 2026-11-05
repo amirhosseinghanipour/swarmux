@@ -289,11 +289,6 @@ impl MissionService {
             )));
         }
         let previous = self.plan(slug).and_then(|r| r.plan.clone());
-        let request = PlanRequest {
-            root: PathBuf::from(&m.root),
-            prompt: plan_prompt(&m.contract, previous.as_ref(), note),
-            model: self.plans.settings.model.clone(),
-        };
         let record = self.plans.records.entry(slug.to_string()).or_default();
         record.status = PlanStatus::Planning;
         record.rounds += 1;
@@ -302,19 +297,54 @@ impl MissionService {
         if !note.trim().is_empty() {
             self.ledger_plan(slug, "rejected", note.trim(), previous.as_ref())?;
         }
+        self.send_plan(i, &planner);
+        Ok(())
+    }
+
+    /// Sends the planner the request for mission `i` as its record has
+    /// it: the plan being revised and the note on it.
+    fn send_plan(&mut self, i: usize, planner: &Rc<dyn Planner>) {
+        let m = &self.missions[i];
+        let slug = m.slug.clone();
+        let record = self.plans.records.get(&slug);
+        let previous = record.and_then(|r| r.plan.as_ref());
+        let note = record.map_or("", |r| r.note.as_str());
+        let request = PlanRequest {
+            root: PathBuf::from(&m.root),
+            prompt: plan_prompt(&m.contract, previous, note),
+            model: self.plans.settings.model.clone(),
+        };
         self.plans.tickets += 1;
         let ticket = self.plans.tickets;
-        self.plans.out.insert(slug.to_string(), ticket);
+        self.plans.out.insert(slug.clone(), ticket);
         let tx = self.plans.tx.clone();
-        let key = slug.to_string();
         planner.plan(
             request,
             Box::new(move |reply| {
                 // Nobody listening (the app is closing): nothing to keep.
-                let _ = tx.send((key, ticket, reply));
+                let _ = tx.send((slug, ticket, reply));
             }),
         );
-        Ok(())
+    }
+
+    /// After a restart: a planning run that was out when swarmux stopped
+    /// will never answer, so it is asked for again.
+    pub(super) fn recover_planning(&mut self) {
+        let Some(planner) = self.plans.planner.clone() else {
+            return;
+        };
+        for i in 0..self.missions.len() {
+            let slug = &self.missions[i].slug;
+            let lost = self
+                .plans
+                .records
+                .get(slug)
+                .is_some_and(|r| r.status == PlanStatus::Planning)
+                && !self.plans.out.contains_key(slug);
+            if lost {
+                self.send_plan(i, &planner);
+            }
+        }
     }
 
     /// Approves the proposed plan, keeps it on the ledger and launches the

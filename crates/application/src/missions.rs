@@ -29,7 +29,7 @@ use crate::{AppError, AppResult};
 
 mod graph;
 mod plan;
-pub use graph::{Claim, MergeOutcome, MergeQueue, ScopeClaims, ScopeDenial};
+pub use graph::{Claim, MAX_RESUMES, MergeOutcome, MergeQueue, ScopeClaims, ScopeDenial};
 pub use plan::{
     Begun, ChangedFiles, PlanReply, PlanRequest, PlanSettings, PlanSink, PlanStore, Planner,
     WorkDirs,
@@ -444,6 +444,64 @@ impl MissionService {
         }
         report.errors.append(&mut self.plans.problems);
         report
+    }
+
+    /// Picks every mission in flight up where it was after swarmux
+    /// restarted. Call it once, after [`JobService::recover`] marked the
+    /// jobs the earlier run left running as interrupted.
+    ///
+    /// Task graphs carry on task by task (see `recover_graphs`). A
+    /// single job that was interrupted continues in its worktree and its
+    /// Claude session, or starts again when its session never began; its
+    /// gate, which only lived in memory, is given back, and a mission
+    /// being verified is checked again. A planning run that was out is
+    /// asked for again.
+    pub fn recover(&mut self, jobs: &mut JobService) -> MissionReport {
+        let mut report = MissionReport::default();
+        self.recover_graphs(jobs, &mut report);
+        for i in 0..self.missions.len() {
+            match self.recover_single(i, jobs) {
+                Ok(changed) => report.changed |= changed,
+                Err(e) => report.errors.push(e),
+            }
+        }
+        self.recover_planning();
+        report
+    }
+
+    fn recover_single(&mut self, i: usize, jobs: &mut JobService) -> AppResult<bool> {
+        let m = &self.missions[i];
+        if !m.state.in_flight() || self.graph(&m.slug).is_some() {
+            return Ok(false);
+        }
+        let Some(mut job) = m.job else {
+            return Ok(false);
+        };
+        let slug = m.slug.clone();
+        let building = matches!(m.state, MissionState::Queued | MissionState::Running);
+        let mut changed = false;
+        if building && jobs.stored(job)?.map(|j| j.status) == Some(JobStatus::Interrupted) {
+            let again = if jobs.has_started(job)? {
+                jobs.resume(job)?
+            } else {
+                jobs.retry(job)?
+            };
+            let m = &mut self.missions[i];
+            m.job = Some(again);
+            m.updated_at = self.clock.now();
+            self.store.save(&self.missions[i])?;
+            self.ledger_plan(&slug, "resumed", &format!("job {job} as job {again}"), None)?;
+            job = again;
+            changed = true;
+        }
+        jobs.adopt(job)?;
+        if let (Some(gates), Ok(compiled)) = (&self.gates, compile(&self.missions[i].contract)) {
+            gates.assign(job, compiled.gate);
+        }
+        if let Some(board) = &self.board {
+            board.join(job, &slug, None);
+        }
+        Ok(changed)
     }
 
     fn take_lint(&mut self, slug: &str, reply: LintReply) -> AppResult<()> {

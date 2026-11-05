@@ -38,6 +38,10 @@ use crate::jobs::{JobFact, JobService};
 use crate::worktree::WorktreeService;
 use crate::{AppError, AppResult};
 
+/// Times a task's job is picked up again after restarts before the task
+/// goes to the user.
+pub const MAX_RESUMES: u32 = 3;
+
 /// What merging a branch did.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MergeOutcome {
@@ -60,6 +64,10 @@ pub trait MergeQueue {
     /// Merges `branch` into the branch checked out at `workdir`. A
     /// conflict is undone before this returns.
     fn merge(&self, workdir: &Path, branch: &str, message: &str) -> AppResult<MergeOutcome>;
+    /// Whether everything on `branch` is already in the branch checked out
+    /// at `workdir`: a merge that landed before swarmux stopped, or a
+    /// branch with nothing new.
+    fn contains(&self, workdir: &Path, branch: &str) -> AppResult<bool>;
     /// Moves the branch checked out at `worktree` forward to `branch`;
     /// fails unless that is a fast-forward.
     fn fast_forward(&self, worktree: &Path, branch: &str) -> AppResult<()>;
@@ -603,6 +611,131 @@ impl MissionService {
         Ok(step)
     }
 
+    /// After a restart: every graph still in flight carries on where it
+    /// was. Merged tasks stay merged and waiting ones wait; a task whose
+    /// job a stop or a crash interrupted continues in its worktree and
+    /// its Claude session (at most [`MAX_RESUMES`] times), or starts again
+    /// once when its session never began. Claims, task gates and board
+    /// seats, which only lived in memory, are put back, and a graph that
+    /// was being verified is checked again.
+    pub(super) fn recover_graphs(&mut self, jobs: &mut JobService, report: &mut MissionReport) {
+        let Some(deps) = self.deps() else {
+            return;
+        };
+        for i in 0..self.missions.len() {
+            if !self.missions[i].state.in_flight() {
+                continue;
+            }
+            let slug = self.missions[i].slug.clone();
+            let Some(plan) = self.plan(&slug).and_then(PlanRecord::approved).cloned() else {
+                continue;
+            };
+            let Some(mut run) = self
+                .plans
+                .records
+                .get_mut(&slug)
+                .and_then(|r| r.graph.take())
+            else {
+                continue;
+            };
+            let before = run.clone();
+            let recovered = self.recover_graph(i, &plan, &mut run, jobs, &deps);
+            report.changed |= run != before;
+            if run != before {
+                self.put_graph(&slug, run);
+            } else if let Some(r) = self.plans.records.get_mut(&slug) {
+                r.graph = Some(run);
+            }
+            if let Err(e) = recovered {
+                report.errors.push(e);
+            }
+        }
+        report.errors.append(&mut self.plans.problems);
+    }
+
+    fn recover_graph(
+        &mut self,
+        i: usize,
+        plan: &Plan,
+        run: &mut GraphRun,
+        jobs: &mut JobService,
+        deps: &Deps,
+    ) -> AppResult<()> {
+        let slug = self.missions[i].slug.clone();
+        for t in run.tasks.iter_mut().filter(|t| t.state.holds_claim()) {
+            let Some(mut job) = t.job else { continue };
+            let status = jobs.stored(job)?.map(|j| j.status);
+            if status == Some(JobStatus::Interrupted) && t.resumes < MAX_RESUMES {
+                let again = if jobs.has_started(job)? {
+                    Some(jobs.resume(job)?)
+                } else if t.resumes == 0 {
+                    // Nothing to pick up: the task starts once more.
+                    Some(jobs.retry(job)?)
+                } else {
+                    None
+                };
+                if let Some(again) = again {
+                    t.resumes += 1;
+                    t.job = Some(again);
+                    t.note = format!("picked up again after a restart (job {job})");
+                    self.ledger_plan(
+                        &slug,
+                        "resumed",
+                        &format!("{} (job {job}) as job {again}", t.id),
+                        None,
+                    )?;
+                    job = again;
+                }
+            }
+            // A job that ended in the earlier run is judged from what was
+            // stored; one still queued is followed already.
+            jobs.adopt(job)?;
+            let areas = plan
+                .tasks
+                .iter()
+                .find(|p| p.id == t.id)
+                .map(|p| p.files.clone())
+                .unwrap_or_default();
+            deps.claims.claim(
+                job,
+                Claim {
+                    mission: slug.clone(),
+                    task: t.id.clone(),
+                    areas,
+                    root: None,
+                },
+            );
+            if let Some(rec) = deps.worktrees.record_for(job)? {
+                deps.claims.set_root(job, &rec.path.display().to_string());
+            }
+            self.assign_task_gate(i, job);
+            if let Some(board) = &self.board {
+                board.join(job, &slug, Some(&t.id));
+            }
+        }
+        // The verdict on the integrated result was lost with the run that
+        // asked for it: the checks run again.
+        if let (MissionState::Verifying, Some(job)) = (self.missions[i].state, run.final_job) {
+            let rec = deps.worktrees.record_for(job)?.ok_or_else(|| {
+                AppError::Mission(format!("{slug}: the last task's worktree is gone"))
+            })?;
+            if let (Some(gates), Ok(compiled)) = (&self.gates, compile(&self.missions[i].contract))
+            {
+                gates.assign(job, compiled.gate);
+            }
+            run.verify_from = Some(self.clock.now());
+            if let Some(gates) = &self.gates
+                && let Err(why) = gates.verify(job, &rec.path)
+            {
+                let now = self.clock.now();
+                self.take(i, Signal::Gate(GateOutcome::Escalate), now)?;
+                self.missions[i].note = Some(why);
+                self.store.save(&self.missions[i])?;
+            }
+        }
+        Ok(())
+    }
+
     /// A task's job is judged by the repository's gate with the mission's
     /// protected paths; the mission's own checks wait for the integrated
     /// result.
@@ -690,6 +823,21 @@ impl MissionService {
             deps.claims.release(job);
             let detail = format!("{id} (job {job}): {}", outside.join(", "));
             return self.ledger_plan(&slug, "scope_blocked", &detail, None);
+        }
+        // Merged before swarmux stopped, with the news lost: never twice.
+        if deps.merge.contains(&workdir, &rec.branch)? {
+            t.state = TaskState::Merged;
+            t.note.clear();
+            deps.claims.release(job);
+            if !run.merged.iter().any(|m| m == id) {
+                run.merged.push(id.to_string());
+            }
+            return self.ledger_plan(
+                &slug,
+                "merged",
+                &format!("{id}: already in {integration}"),
+                None,
+            );
         }
         let message = format!("swarmux: merge task {id} ({}) of {slug}", task.title);
         let outcome = deps.merge.merge(&workdir, &rec.branch, &message);

@@ -17,6 +17,8 @@ use swarmux_domain::plan::{Plan, PlanTask};
 use swarmux_domain::taskgraph::{TaskState, Topology};
 use swarmux_domain::{AgentEvent, AttentionKind, GuardPolicy, Limits, Priority, Verdict};
 
+mod restart;
+
 const MIN: Millis = 60_000;
 
 struct G {
@@ -33,6 +35,9 @@ struct G {
     verdicts: HashMap<JobId, GateState>,
     /// Runner requests already finished.
     finished: Vec<usize>,
+    /// Where missions and plans outlive a restart.
+    missions_store: Rc<InMemoryMissions>,
+    plans_store: Rc<InMemoryPlans>,
 }
 
 fn task(id: &str, files: &[&str], deps: &[&str]) -> PlanTask {
@@ -77,11 +82,13 @@ fn rig(max_concurrent: usize) -> G {
     let merge = Rc::new(FakeMergeQueue::default());
     let claims = ScopeClaims::new();
     let gates = Rc::new(FakeJobGates::default());
-    let svc = MissionService::new(Rc::new(InMemoryMissions::default()), rig.clock.clone())
+    let missions_store = Rc::new(InMemoryMissions::default());
+    let plans_store = Rc::new(InMemoryPlans::default());
+    let svc = MissionService::new(missions_store.clone(), rig.clock.clone())
         .unwrap()
         .with_gates(gates.clone())
         .with_ledger(rig.ledger_service.clone())
-        .with_planner(planner.clone(), Rc::new(InMemoryPlans::default()))
+        .with_planner(planner.clone(), plans_store.clone())
         .unwrap()
         .with_plan_settings(PlanSettings {
             plan_first: true,
@@ -101,6 +108,8 @@ fn rig(max_concurrent: usize) -> G {
         policy,
         verdicts: HashMap::new(),
         finished: Vec::new(),
+        missions_store,
+        plans_store,
     }
 }
 
@@ -245,6 +254,70 @@ impl G {
             self.merge.touch(&self.branch_of(job), file);
         }
         !refused
+    }
+
+    /// swarmux stops and starts again: processes, the runner and every
+    /// service's memory are gone; the store, the worktrees, the plans and
+    /// git stay. Returns what the recovery reported.
+    fn restart(&mut self) -> MissionReport {
+        let runner = Rc::new(FakeRunner::default());
+        let mut jobs = JobService::new(
+            self.rig.store.clone(),
+            self.rig.store.clone(),
+            runner.clone(),
+            self.rig.clock.clone(),
+        )
+        .with_limits(Limits {
+            max_concurrent: 4,
+            min_free_ram: 0,
+        })
+        .with_worktrees(self.rig.worktrees.clone());
+        jobs.recover().unwrap();
+        let claims = ScopeClaims::new();
+        let gates = Rc::new(FakeJobGates::default());
+        let planner = Rc::new(FakePlanner::default());
+        let mut svc = MissionService::new(self.missions_store.clone(), self.rig.clock.clone())
+            .unwrap()
+            .with_gates(gates.clone())
+            .with_ledger(self.rig.ledger_service.clone())
+            .with_planner(planner.clone(), self.plans_store.clone())
+            .unwrap()
+            .with_plan_settings(PlanSettings {
+                plan_first: true,
+                ..PlanSettings::default()
+            })
+            .with_graph(
+                self.merge.clone(),
+                self.rig.worktrees.clone(),
+                claims.clone(),
+            );
+        let report = svc.recover(&mut jobs);
+        assert!(report.errors.is_empty(), "{:?}", report.errors);
+        self.policy = SharedPolicy::new(GuardPolicy::default()).with_fence(claims.clone());
+        self.svc = svc;
+        self.jobs = jobs;
+        self.runner = runner;
+        self.claims = claims;
+        self.gates = gates;
+        self.planner = planner;
+        self.verdicts.clear();
+        self.finished.clear();
+        report
+    }
+
+    /// The job's agent reports its session: it has begun and can be resumed.
+    fn begins(&mut self, job: JobId) {
+        let i = self.index_of(job);
+        self.runner.emit(
+            i,
+            RunnerMsg::Event(AgentEvent::Init {
+                session_id: "claude-session".into(),
+                model: "sonnet".into(),
+                cwd: String::new(),
+                permission_mode: "default".into(),
+            }),
+        );
+        self.jobs.pump();
     }
 
     /// Hands the final job a passing verdict on the integrated result.

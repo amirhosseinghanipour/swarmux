@@ -1563,6 +1563,10 @@ impl crate::missions::MergeQueue for FakeMergeQueue {
         })
     }
 
+    fn contains(&self, _: &Path, branch: &str) -> AppResult<bool> {
+        Ok(self.merged.borrow().iter().any(|b| b == branch))
+    }
+
     fn fast_forward(&self, worktree: &Path, branch: &str) -> AppResult<()> {
         self.forwarded
             .borrow_mut()
