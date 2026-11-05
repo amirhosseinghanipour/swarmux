@@ -71,7 +71,7 @@ Twelve built-in themes, plus `wal`, base16 and matugen imports. List them with
 
 ```sh
 swarmux --demo         # a scripted demo: no Claude Code, no account, nothing of yours is touched
-swarmux                # the TUI: 1-6 switch screens (1 Mission control, 2 Missions), 0 Focus, p sends a prompt, q quits
+swarmux                # the TUI: 1-7 switch screens (1 Mission control, 2 Missions, 7 Board), 0 Focus, p sends a prompt, q quits
 swarmux doctor         # checks Claude Code, the settings, the Guard hook and telemetry
 swarmux fetch          # a neofetch-style card of your sessions, spend and limits
 ```
