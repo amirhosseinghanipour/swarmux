@@ -36,9 +36,31 @@ pub struct ClaudeCli {
     bin: PathBuf,
     env: Vec<(String, String)>,
     guard: Option<GuardHook>,
+    board: Option<BoardMcp>,
     rt: Handle,
     running: Running,
     stagger: Arc<Stagger>,
+}
+
+/// The Board's MCP server, added to the jobs on a mission's board.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BoardMcp {
+    /// The `swarmux` executable that runs `board-mcp`.
+    pub exe: PathBuf,
+    /// The socket the app listens on.
+    pub pipe: String,
+}
+
+impl BoardMcp {
+    /// `--mcp-config` and `--allowedTools` for `job`.
+    fn args(&self, job: JobId) -> [String; 4] {
+        [
+            "--mcp-config".into(),
+            crate::board::mcp_config(&self.exe, &self.pipe, job.0),
+            "--allowedTools".into(),
+            crate::board::SERVER_NAME_PREFIX.into(),
+        ]
+    }
 }
 
 /// The guard's PreToolUse hook, added to every job.
@@ -73,6 +95,7 @@ impl ClaudeCli {
             bin,
             env: Vec::new(),
             guard: None,
+            board: None,
             rt,
             running: Running::default(),
             stagger: Stagger::shared(),
@@ -87,6 +110,12 @@ impl ClaudeCli {
     /// Routes every job's tool calls through the guard's hook.
     pub fn with_guard(mut self, guard: GuardHook) -> ClaudeCli {
         self.guard = Some(guard);
+        self
+    }
+
+    /// Registers the board's MCP server for the jobs that are on a board.
+    pub fn with_board(mut self, board: BoardMcp) -> ClaudeCli {
+        self.board = Some(board);
         self
     }
 
@@ -116,6 +145,9 @@ impl AgentRunner for ClaudeCli {
             env.push((ENV_PIPE.into(), guard.pipe.clone()));
             env.push((ENV_JOB.into(), job.to_string()));
         }
+        if let (Some(board), true) = (&self.board, request.board) {
+            extra_args.extend(board.args(job));
+        }
         let running = self.running.clone();
         let stagger = self.stagger.clone();
         // Held until the handle is stored, so a job that ends at once still
@@ -138,6 +170,9 @@ impl AgentRunner for ClaudeCli {
         let mut args = build_args(request);
         if let Some(guard) = &self.guard {
             args.extend(guard.args());
+        }
+        if let (Some(board), true) = (&self.board, request.board) {
+            args.extend(board.args(request.job_id));
         }
         Some(display(&args))
     }

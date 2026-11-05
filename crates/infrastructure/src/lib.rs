@@ -1,10 +1,12 @@
 //! swarmux infrastructure: adapters that implement the application's ports.
 
 pub mod agents;
+pub mod board;
 pub mod claude_cli;
 pub mod clean_checkout;
 mod clock;
 pub mod config;
+mod config_board;
 pub mod config_edit;
 mod config_governor;
 mod config_missions;
@@ -36,7 +38,7 @@ pub mod worktree;
 
 pub use agents::FsAgentCatalog;
 pub use claude_cli::{
-    ClaudeCli, ClaudePlanner, GuardHook, HaikuDiagnoser, HaikuLinter, HaikuRouter,
+    BoardMcp, ClaudeCli, ClaudePlanner, GuardHook, HaikuDiagnoser, HaikuLinter, HaikuRouter,
 };
 pub use clean_checkout::GitCleanCheckout;
 pub use clock::SystemClock;

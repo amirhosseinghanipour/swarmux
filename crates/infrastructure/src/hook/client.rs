@@ -76,6 +76,12 @@ pub(super) fn send(request: &WireRequest, pipe: &str) -> bool {
     conn.write_all(line.as_bytes()).is_ok() && conn.flush().is_ok()
 }
 
+/// Sends a board call and reads the app's reply. `None` when the app can't be
+/// reached or doesn't answer.
+pub fn board_call(request: &WireRequest, pipe: &str) -> Option<WireReply> {
+    exchange(request, pipe, true)
+}
+
 /// Sends `request`; with `wait`, also reads the app's reply.
 fn exchange(request: &WireRequest, pipe: &str, wait: bool) -> Option<WireReply> {
     let mut line = serde_json::to_string(request).ok()?;

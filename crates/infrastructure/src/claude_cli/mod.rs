@@ -13,4 +13,4 @@ pub use diagnose::HaikuDiagnoser;
 pub use linter::HaikuLinter;
 pub use planner::ClaudePlanner;
 pub use router::HaikuRouter;
-pub use runner::{ClaudeCli, GuardHook};
+pub use runner::{BoardMcp, ClaudeCli, GuardHook};

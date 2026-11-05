@@ -1,6 +1,7 @@
 //! SQLite adapter for the storage ports.
 
 mod alarms;
+mod board;
 mod consents;
 mod decisions;
 mod evidence;
@@ -276,6 +277,26 @@ CREATE TABLE IF NOT EXISTS mission_plans (
 );
 ";
 
+/// The Board: what the agents of a mission wrote to each other.
+const SCHEMA_BOARD: &str = "
+CREATE TABLE IF NOT EXISTS board_entries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    mission TEXT NOT NULL,
+    job INTEGER NOT NULL,
+    session TEXT NOT NULL DEFAULT '',
+    task TEXT,
+    kind TEXT NOT NULL,
+    text TEXT NOT NULL,
+    detail TEXT NOT NULL DEFAULT '',
+    areas TEXT NOT NULL DEFAULT '[]',
+    at INTEGER NOT NULL,
+    answer TEXT,
+    after_minutes INTEGER,
+    closed INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS board_entries_mission ON board_entries (mission, id);
+";
+
 /// Migrations in order; index + 1 is the resulting `user_version`.
 const MIGRATIONS: &[&str] = &[
     SCHEMA_V1,
@@ -292,6 +313,7 @@ const MIGRATIONS: &[&str] = &[
     SCHEMA_GOVERNOR,
     SCHEMA_ALARMS,
     SCHEMA_PLANS,
+    SCHEMA_BOARD,
 ];
 
 /// Maps adapter errors into the application's error type.

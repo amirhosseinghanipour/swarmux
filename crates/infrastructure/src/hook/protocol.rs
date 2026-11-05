@@ -5,8 +5,8 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use swarmux_application::HookNotice;
 use swarmux_application::ports::HookRequest;
+use swarmux_application::{BoardReply, HookNotice};
 use swarmux_domain::ledger::{hex, sha256};
 use swarmux_domain::telemetry::InstructionFile;
 use swarmux_domain::{Decision, HookEvent, JobId, Verdict};
@@ -22,6 +22,10 @@ const DETAIL_MAX: usize = 4000;
 
 /// The `event` of a request that carries a status line payload.
 pub const STATUSLINE_EVENT: &str = "Statusline";
+
+/// The `event` of a request that carries a board tool call: `tool_name` is
+/// the tool and `tool_input` its arguments.
+pub const BOARD_EVENT: &str = "Board";
 
 /// Hook client → app.
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -134,6 +138,9 @@ impl WireRequest {
                 str_at(&v, "file_path"),
                 InstructionFile::detail(&str_at(&v, "load_reason"), &str_at(&v, "memory_type")),
             ),
+            HookEvent::TaskCreated | HookEvent::TaskCompleted => {
+                (str_at(&v, "task_subject"), str_at(&v, "task_description"))
+            }
             HookEvent::PreToolUse => (with_subject(&tool), String::new()),
         };
         let mut raw = stdin.to_string();
@@ -167,6 +174,21 @@ impl WireRequest {
             raw: payload.to_string(),
             ..WireRequest::default()
         }
+    }
+
+    /// A call of one of the board's MCP tools.
+    pub fn board(tool: &str, arguments: Value, job_id: Option<i64>) -> WireRequest {
+        WireRequest {
+            job_id,
+            tool_name: tool.to_string(),
+            tool_input: arguments,
+            event: Some(BOARD_EVENT.to_string()),
+            ..WireRequest::default()
+        }
+    }
+
+    pub fn is_board(&self) -> bool {
+        self.event.as_deref() == Some(BOARD_EVENT)
     }
 
     /// The request carries a status line payload.
@@ -235,6 +257,23 @@ impl WireReply {
             decision: decision.into(),
             reason,
             output: None,
+        }
+    }
+
+    /// The answer to a board call.
+    pub fn board(reply: &BoardReply) -> WireReply {
+        WireReply {
+            decision: if reply.error { "error" } else { "ok" }.into(),
+            reason: String::new(),
+            output: Some(reply.text.clone()),
+        }
+    }
+
+    /// Reads the answer to a board call.
+    pub fn into_board(self) -> BoardReply {
+        BoardReply {
+            text: self.output.unwrap_or_default(),
+            error: self.decision != "ok",
         }
     }
 

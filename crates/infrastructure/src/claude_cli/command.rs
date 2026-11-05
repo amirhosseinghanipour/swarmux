@@ -132,6 +132,7 @@ mod tests {
             review: false,
             env: Vec::new(),
             max_budget_usd: None,
+            board: false,
         }
     }
 
@@ -183,6 +184,7 @@ mod tests {
         assert!(!build_args(&req(false, false)).contains(&"--max-budget-usd".to_string()));
         let capped = RunRequest {
             max_budget_usd: Some(2.4),
+            board: false,
             ..req(false, false)
         };
         assert!(has_pair(&build_args(&capped), "--max-budget-usd", "2.40"));
@@ -194,6 +196,7 @@ mod tests {
         for bad in [0.0, -1.0, f64::NAN] {
             let none = RunRequest {
                 max_budget_usd: Some(bad),
+                board: false,
                 ..req(false, false)
             };
             assert!(!build_args(&none).contains(&"--max-budget-usd".to_string()));

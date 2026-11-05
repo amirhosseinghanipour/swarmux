@@ -15,8 +15,8 @@ use std::path::Path;
 
 use swarmux_domain::HookEvent;
 
-pub use client::{hook_main, pre_tool, pre_tool_main, run_hook};
-pub use protocol::{WireReply, WireRequest, subject_of};
+pub use client::{board_call, hook_main, pre_tool, pre_tool_main, run_hook};
+pub use protocol::{BOARD_EVENT, WireReply, WireRequest, subject_of};
 pub use server::{HookServer, Responders};
 pub use statusline::{SpoolFeed, run_statusline, spool_dir, statusline_main};
 

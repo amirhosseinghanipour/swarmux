@@ -48,6 +48,7 @@ struct RawConfig {
     notify: Option<crate::config_notify::RawNotify>,
     watchdog: Option<crate::config_watchdog::RawWatchdog>,
     missions: Option<crate::config_missions::RawMissions>,
+    board: Option<crate::config_board::RawBoard>,
     theme: Option<String>,
     layout: Option<String>,
     icons: Option<String>,
@@ -183,6 +184,9 @@ pub fn parse_settings(text: &str, path: &Path) -> Result<Settings, ConfigError> 
     }
     if let Some(watchdog) = raw.watchdog {
         settings.watchdog = crate::config_watchdog::parse_watchdog(watchdog, text, path)?;
+    }
+    if let Some(board) = raw.board {
+        settings.board = crate::config_board::parse_board(board);
     }
     if let Some(missions) = raw.missions {
         settings.missions = crate::config_missions::parse_missions(missions, text, path)?;
@@ -752,6 +756,47 @@ api_key = \"sk-SECRET-123\"",
         assert_eq!(e.line, Some(3));
         assert!(e.message.contains("swarmux jev set-key"), "{e}");
         assert!(!e.to_string().contains("SECRET"), "{e}");
+    }
+
+    #[test]
+    fn board_section_is_read_and_on_by_default() {
+        assert!(parse("").unwrap().board.enabled);
+        assert!(
+            !parse(
+                "[board]
+enabled = false
+"
+            )
+            .unwrap()
+            .board
+            .enabled
+        );
+        assert!(
+            parse(
+                "[board]
+enabled = true
+"
+            )
+            .unwrap()
+            .board
+            .enabled
+        );
+        assert!(
+            parse(
+                "[board]
+enabled = \"yes\"
+"
+            )
+            .is_err()
+        );
+        assert!(
+            parse(
+                "[board]
+unknown = 1
+"
+            )
+            .is_err()
+        );
     }
 
     #[test]
