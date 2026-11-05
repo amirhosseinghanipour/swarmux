@@ -63,6 +63,7 @@ pub fn run() -> anyhow::Result<()> {
         Err(e) => println!("fail config {e}"),
     }
     hook_checks();
+    println!("{}", crate::daemon::doctor_line(&paths));
     match SysinfoMonitor::new().free_memory_bytes() {
         Some(free) => println!("ok   free memory {:.1} GB", free as f64 / GB),
         None => println!("warn free memory unknown: the RAM guard is off"),

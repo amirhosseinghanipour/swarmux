@@ -1,6 +1,7 @@
 //! Composition root: the only place that wires concrete adapters to use cases.
 
 mod audit;
+mod daemon;
 mod demo;
 mod dist;
 mod doctor;
@@ -34,7 +35,7 @@ use swarmux_infrastructure::{
     BoardMcp, ClaudeCli, ClaudePlanner, ConfigRuleWriter, FilePalette, FsAgentCatalog,
     FsGateSource, GitCli, GitMergeQueue, GitVcs, GitWorktrees, GuardHook, HaikuDiagnoser,
     HaikuLinter, HaikuRouter, MissionFiles, Paths, SqliteLedger, SqliteStore, SysinfoMonitor,
-    SystemClock, WindowsTerminal, build_notifier, load_settings, utc_offset_minutes,
+    SystemClock, WindowsTerminal, build_notifier_with, load_settings, utc_offset_minutes,
 };
 use swarmux_tui::{App, Launch};
 
@@ -55,6 +56,10 @@ struct Cli {
     /// A built-in theme for the demo (see `swarmux theme list`).
     #[arg(long, requires = "demo", value_name = "NAME")]
     theme: Option<String>,
+    /// Run the engine in this window instead of the background service:
+    /// quitting stops its jobs.
+    #[arg(long, conflicts_with = "demo")]
+    no_daemon: bool,
     /// Write the demo's key moments as JSON frames into DIR instead of
     /// playing it (for the website and README images).
     #[arg(long, requires = "demo", value_name = "DIR")]
@@ -65,6 +70,12 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// The background service: jobs, approvals and missions go on with no
+    /// window open. `swarmux` attaches to it, starting it when needed.
+    Daemon {
+        #[command(subcommand)]
+        action: daemon::Action,
+    },
     /// Check that Claude Code is installed and swarmux's data is healthy.
     Doctor,
     /// JEV, the optional hosted decision model (bring your own key).
@@ -395,7 +406,9 @@ fn main() -> anyhow::Result<ExitCode> {
                 None => demo::run(&options),
             }
         }
-        None => run_tui(cli.no_splash),
+        None if cli.no_daemon => run_tui(cli.no_splash),
+        None => return daemon::attach(cli.no_splash),
+        Some(Command::Daemon { action }) => return daemon::run(action),
         Some(Command::Doctor) => doctor::run(),
         Some(Command::Fetch { theme, color }) => fetch::run(theme.as_deref(), &color),
         Some(Command::Theme { action }) => match action {
@@ -443,12 +456,39 @@ fn statusline(print_settings: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// The engine and the interface in this window, without the background
+/// service: quitting stops the jobs.
 fn run_tui(no_splash: bool) -> anyhow::Result<()> {
     // Everything that can fail with a readable message happens before the
     // terminal switches into full-screen mode.
     let paths = Paths::default_home()?;
     std::fs::create_dir_all(&paths.data_dir)
         .with_context(|| format!("cannot create {}", paths.data_dir.display()))?;
+    // One engine per data folder: not beside a background service.
+    let _lock = daemon::engine_lock(&paths)?;
+    let rt = runtime()?;
+    let app = build_app(&rt, &paths, no_splash, None)?;
+    Ok(swarmux_tui::run(app)?)
+}
+
+/// The runtime the engine's adapters run their I/O on.
+fn runtime() -> anyhow::Result<tokio::runtime::Runtime> {
+    Ok(tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()?)
+}
+
+/// Builds the app: the engine with every adapter wired, and the interface
+/// over it. `windows` is the background service's endpoint, when the app
+/// runs there: terminal notifications then go to the windows attached.
+fn build_app(
+    rt: &tokio::runtime::Runtime,
+    paths: &Paths,
+    no_splash: bool,
+    windows: Option<Arc<swarmux_infrastructure::daemon::WindowServer>>,
+) -> anyhow::Result<App> {
+    let paths = paths.clone();
     let settings = load_settings(&paths.config)?;
     let store = Rc::new(SqliteStore::open(&paths.db)?);
     let clock = Rc::new(SystemClock);
@@ -461,10 +501,6 @@ fn run_tui(no_splash: bool) -> anyhow::Result<()> {
     let away_since = ledger.ledger().head()?.map(|e| e.draft.ts);
     let jobs_log = Rc::new(LedgeredJobs::new(store.clone(), ledger.clone()));
     let decisions = Rc::new(LedgeredDecisions::new(store.clone(), ledger.clone()));
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
-        .enable_all()
-        .build()?;
 
     // The done-gate judges every stop and fences protected paths. Its
     // checks run in clean copies, followed by the hidden ones.
@@ -689,7 +725,16 @@ fn run_tui(no_splash: bool) -> anyhow::Result<()> {
     .with_alarms(alarm_store)
     .with_terminal(Rc::new(WindowsTerminal::new(doctor::claude_bin())))
     .with_notifier(NotifyService::new(
-        build_notifier(&settings.notify, rt.handle()),
+        build_notifier_with(
+            &settings.notify,
+            rt.handle(),
+            windows.map(|w| {
+                Box::new(swarmux_infrastructure::daemon::WindowNotifier::new(
+                    w,
+                    settings.notify.terminal,
+                )) as Box<dyn swarmux_application::Notifier>
+            }),
+        ),
         settings.notify.clone(),
         utc_offset_minutes,
     ))
@@ -710,5 +755,5 @@ fn run_tui(no_splash: bool) -> anyhow::Result<()> {
             now_ms: SystemClock.now(),
         },
     );
-    Ok(swarmux_tui::run(app)?)
+    Ok(app)
 }
