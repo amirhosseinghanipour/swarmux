@@ -119,6 +119,8 @@ pub struct RunRequest {
     pub env: Vec<(String, String)>,
     /// Stop once the run has spent this many dollars (`--max-budget-usd`).
     pub max_budget_usd: Option<f64>,
+    /// Register the `swarmux-board` MCP server for the run.
+    pub board: bool,
 }
 
 /// What a running job reports back.

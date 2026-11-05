@@ -3,6 +3,7 @@ mod review;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
 use swarmux_domain::budget::{Admission, JobClass, is_limit_error};
@@ -211,6 +212,8 @@ pub struct JobService {
     /// Hand every agent event to the pump's report.
     tap: bool,
     tapped: Vec<(JobId, AgentEvent)>,
+    /// Who is on a mission's board: those jobs get its MCP server.
+    board: Option<Arc<crate::Board>>,
 }
 
 /// Where a queued job comes from, and what it may spend.
@@ -269,6 +272,7 @@ impl JobService {
             power: None,
             tap: false,
             tapped: Vec::new(),
+            board: None,
         }
     }
 
@@ -285,6 +289,12 @@ impl JobService {
     /// Admits queued jobs by usage window (holding, deferring or
     /// downgrading them), caps their spend, runs fewer on battery and
     /// resumes jobs a usage limit stopped once the window resets.
+    /// Gives the jobs on `board` its MCP server.
+    pub fn with_board(mut self, board: Arc<crate::Board>) -> JobService {
+        self.board = Some(board);
+        self
+    }
+
     pub fn with_governor(mut self, governor: Governor) -> JobService {
         self.governor = Some(governor);
         self
@@ -1240,6 +1250,7 @@ impl JobService {
             review: t.job.review_of.is_some(),
             env,
             max_budget_usd: cap,
+            board: self.board.as_ref().is_some_and(|b| b.is_member(id)),
         };
         t.progress.command = self.runner.command_line(&request);
         let tx = self.tx.clone();

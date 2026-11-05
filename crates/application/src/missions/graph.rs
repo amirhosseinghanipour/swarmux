@@ -352,6 +352,9 @@ impl MissionService {
             let session = jobs.spawn_session(parent, &base.task_name(&id))?;
             let prompt = task_brief(&contract, plan, task);
             let job = jobs.dispatch_from(session.id, &prompt, cap, &run.integration)?;
+            if let Some(board) = &self.board {
+                board.join(job, &slug, Some(&id));
+            }
             self.assign_task_gate(i, job);
             deps.claims.claim(
                 job,
@@ -484,6 +487,9 @@ impl MissionService {
                     deps.claims.claim(rec.job, c);
                 }
                 self.assign_task_gate(i, rec.job);
+                if let Some(board) = &self.board {
+                    board.join(rec.job, &self.missions[i].slug, Some(&t.id));
+                }
                 t.job = Some(rec.job);
             }
             deps.claims
@@ -709,6 +715,9 @@ impl MissionService {
                 let brief = conflict_brief(task, &integration, &files);
                 let again = jobs.continue_with(job, &brief)?;
                 self.assign_task_gate(i, again);
+                if let Some(board) = &self.board {
+                    board.join(again, &slug, Some(&t.id));
+                }
                 if let Some(c) = deps.claims.release(job) {
                     deps.claims.claim(again, c);
                 }

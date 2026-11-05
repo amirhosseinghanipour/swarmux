@@ -29,6 +29,22 @@ pub struct Settings {
     pub watchdog: crate::WatchdogSettings,
     /// Plan-first missions: the default, the planner and the drift line.
     pub missions: crate::PlanSettings,
+    /// The Board: typed shared state between the agents of a mission.
+    pub board: BoardSettings,
+}
+
+/// The `[board]` section.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BoardSettings {
+    /// Mission jobs get the `swarmux-board` MCP server and a digest of the
+    /// board when their session starts.
+    pub enabled: bool,
+}
+
+impl Default for BoardSettings {
+    fn default() -> BoardSettings {
+        BoardSettings { enabled: true }
+    }
 }
 
 /// The `[governor]` section: when queued work waits for a usage window to
@@ -337,6 +353,7 @@ impl Default for Settings {
             watchdog: crate::WatchdogSettings::default(),
             notify: crate::NotifySettings::default(),
             missions: crate::PlanSettings::default(),
+            board: BoardSettings::default(),
         }
     }
 }

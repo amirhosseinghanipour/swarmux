@@ -9,6 +9,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
 use swarmux_domain::budget::Reservation;
@@ -101,6 +102,8 @@ pub struct MissionService {
     plans: plan::PlanState,
     /// Task graphs: merge queue, worktrees and scope claims.
     graphs: graph::GraphState,
+    /// The board the mission's jobs are put on.
+    board: Option<Arc<crate::Board>>,
 }
 
 impl MissionService {
@@ -123,7 +126,14 @@ impl MissionService {
             verifying: HashSet::new(),
             plans: plan::PlanState::new(),
             graphs: graph::GraphState::default(),
+            board: None,
         })
+    }
+
+    /// Puts every job a mission starts on the mission's board.
+    pub fn with_board(mut self, board: Arc<crate::Board>) -> MissionService {
+        self.board = Some(board);
+        self
     }
 
     /// Asks `linter` for clarifying questions after every lint.
@@ -385,6 +395,9 @@ impl MissionService {
             prompt.push_str(plan.trim_end());
         }
         let job = jobs.dispatch_capped(session, &prompt, cap)?;
+        if let Some(board) = &self.board {
+            board.join(job, slug, None);
+        }
         if let Some(gates) = &self.gates {
             gates.assign(job, compiled.gate);
         }
