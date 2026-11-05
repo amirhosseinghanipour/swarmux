@@ -240,6 +240,8 @@ pub struct TaskRun {
     /// It failed at the merge (a second conflict, or files outside its
     /// scope): the user is asked.
     pub merge_blocked: bool,
+    /// Times its job was picked up again after swarmux restarted.
+    pub resumes: u32,
     /// Why it needs the user, or the last thing that happened.
     pub note: String,
     pub started_at: Option<Millis>,
@@ -402,13 +404,14 @@ impl GraphRun {
             .iter()
             .map(|t| {
                 format!(
-                    "{{\"id\":{},\"state\":{},\"job\":{},\"branch\":{},\"reinvoked\":{},\"merge_blocked\":{},\"note\":{},\"started_at\":{},\"ended_at\":{}}}",
+                    "{{\"id\":{},\"state\":{},\"job\":{},\"branch\":{},\"reinvoked\":{},\"merge_blocked\":{},\"resumes\":{},\"note\":{},\"started_at\":{},\"ended_at\":{}}}",
                     quote(&t.id),
                     quote(t.state.as_str()),
                     opt_job(t.job),
                     quote(&t.branch),
                     t.reinvoked,
                     t.merge_blocked,
+                    t.resumes,
                     quote(&t.note),
                     opt_ms(t.started_at),
                     opt_ms(t.ended_at),
@@ -463,6 +466,10 @@ impl GraphRun {
                         .get("merge_blocked")
                         .and_then(Json::as_bool)
                         .unwrap_or(false),
+                    resumes: t
+                        .get("resumes")
+                        .and_then(Json::as_u64)
+                        .map_or(0, |n| u32::try_from(n).unwrap_or(u32::MAX)),
                     note: text(t, "note"),
                     started_at: int(t, "started_at"),
                     ended_at: int(t, "ended_at"),

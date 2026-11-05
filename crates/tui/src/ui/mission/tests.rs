@@ -572,7 +572,7 @@ fn y_answers_the_selected_approval_not_the_oldest() {
     assert!(t.inbox.answer_to(ids[1]).is_some());
     assert!(t.inbox.answer_to(ids[0]).is_none(), "the other stays held");
     t.app.update();
-    assert_eq!(t.app.guard.pending_count(), 1);
+    assert_eq!(t.app.engine.guard.pending_count(), 1);
     assert_eq!(
         t.app
             .mission
@@ -1101,7 +1101,7 @@ fn watchdog_steps_show_in_the_change_log_focus_and_the_inbox() {
     let out = render_to_string(&t.app, 240, 64);
     assert!(out.contains("watchdog: nudge"), "{out}");
     let job = t.app.mission.facts[0].job_id;
-    let progress = t.app.jobs.progress(job).unwrap();
+    let progress = t.app.engine.jobs.progress(job).unwrap();
     assert_eq!(
         progress.recovery,
         ["nudge: waiting for the agent's next call"]

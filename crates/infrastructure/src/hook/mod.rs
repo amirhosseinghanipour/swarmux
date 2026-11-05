@@ -26,6 +26,7 @@ pub fn statusline_settings(exe: &Path) -> String {
     serde_json::json!({ "statusLine": { "type": "command", "command": statusline_command(exe) } })
         .to_string()
 }
+pub(crate) use transport::user as user_name;
 pub use transport::{ENV_JOB, ENV_PIPE, connect, endpoint_for};
 
 /// Claude Code kills a lifecycle hook after this long. They answer at once.

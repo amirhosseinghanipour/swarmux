@@ -99,7 +99,7 @@ fn draw_screens(frame: &mut Frame, app: &App, t: &Theme) {
         Screen::Sessions => sessions::render(frame, body, app),
         Screen::Board => board::render(frame, body, app),
     }
-    if app.guard.jev().is_some_and(|j| j.wants_consent()) {
+    if app.engine.guard.jev().is_some_and(|j| j.wants_consent()) {
         let h = guard::CONSENT_HEIGHT.min(body.height);
         let overlay = Rect {
             y: body.y + body.height - h,
@@ -115,7 +115,7 @@ fn draw_screens(frame: &mut Frame, app: &App, t: &Theme) {
             ..body
         };
         confirm::render(frame, overlay, app, c);
-    } else if app.guard.pending_count() > 0 {
+    } else if app.engine.guard.pending_count() > 0 {
         let compact = body.height < guard::COMPACT_BELOW;
         let h = if compact {
             1
@@ -137,7 +137,7 @@ fn draw_screens(frame: &mut Frame, app: &App, t: &Theme) {
     let stats = stats_line(
         t,
         app.stats(),
-        app.guard.pending_count(),
+        app.engine.guard.pending_count(),
         app.routing.in_flight(),
     );
     let tag = app.demo_label().map(|label| {
@@ -165,9 +165,9 @@ fn draw_screens(frame: &mut Frame, app: &App, t: &Theme) {
 /// Rows the approval or consent overlay takes at the bottom of a body
 /// `body_height` rows tall.
 pub(crate) fn overlay_rows(app: &App, body_height: u16) -> u16 {
-    if app.guard.jev().is_some_and(|j| j.wants_consent()) {
+    if app.engine.guard.jev().is_some_and(|j| j.wants_consent()) {
         guard::CONSENT_HEIGHT.min(body_height)
-    } else if app.guard.pending_count() > 0 {
+    } else if app.engine.guard.pending_count() > 0 {
         if body_height < guard::COMPACT_BELOW {
             1
         } else {
@@ -385,10 +385,21 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App, t: &Theme) {
             _ if app.screen == Screen::Dashboard && app.dashboard.classic => {
                 dashboard::status::line(app, &dashboard::View::of(app), t)
             }
-            _ => Line::from(Span::styled(hints(app), Style::new().fg(t.muted))),
+            _ => Line::from(Span::styled(hint_line(app), Style::new().fg(t.muted))),
         },
     };
     frame.render_widget(line, area);
+}
+
+/// The hints, with `q` letting the window go when the background service
+/// runs the app.
+fn hint_line(app: &App) -> String {
+    let hints = hints(app);
+    if app.in_service() {
+        hints.replace("q quit", "q detach")
+    } else {
+        hints.to_string()
+    }
 }
 
 pub(crate) fn hints(app: &App) -> &'static str {

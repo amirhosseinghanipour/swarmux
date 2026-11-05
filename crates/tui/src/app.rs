@@ -10,8 +10,8 @@ use std::rc::Rc;
 
 use swarmux_application::ports::Clock;
 use swarmux_application::{
-    AppError, AppResult, Begun, CheckpointService, EvidenceService, FocusTracker, GateService,
-    GuardService, HistoryService, HookBus, JobService, MissionService, NotifyService,
+    AppError, AppResult, Begun, CheckpointService, Engine, EvidenceService, FocusTracker,
+    GateService, GuardService, HistoryService, HookBus, JobService, MissionService, NotifyService,
     PaletteSource, PendingApproval, PromptService, QueueEntry, QueueStats, RoutingService,
     SessionService, SessionTerminal, TelemetryService, TelemetrySettings, UiSettings,
 };
@@ -160,23 +160,17 @@ pub struct App {
     pub missions_screen: MissionsScreen,
     /// The Board screen's selection.
     pub board_screen: crate::board::BoardScreen,
-    /// The mission boards' service and where agents' calls arrive.
-    pub(crate) board: Option<(
-        Rc<swarmux_application::BoardService>,
-        Rc<dyn swarmux_application::BoardInbox>,
-    )>,
-    /// Writes, lints and follows missions.
-    pub(crate) missions: Option<MissionService>,
+    /// Jobs, the Guard, hooks, the gate, the watchdog, missions and the
+    /// board: the services that keep the work going.
+    pub(crate) engine: Engine,
     /// Bundles, their verification and outcome labels.
     evidence: Option<Rc<EvidenceService>>,
     /// When the user was last here: what happened since is the digest.
     away_since: Option<Millis>,
     clock: Option<Rc<dyn Clock>>,
     pub(crate) session_service: SessionService,
-    pub(crate) jobs: JobService,
     pub(crate) prompt_service: PromptService,
     history_service: HistoryService,
-    pub guard: GuardService,
     pub routing: RoutingService,
     /// Prompts being routed, by ticket.
     pub(crate) routes: HashMap<u64, RoutePayload>,
@@ -193,12 +187,6 @@ pub struct App {
     toast: Option<(String, u64)>,
     /// What the splash screen shows.
     pub splash: SplashInfo,
-    /// Lifecycle events reported by the agents' hooks.
-    hooks: Option<HookBus>,
-    /// The done-gate's verdicts.
-    gate: Option<GateService>,
-    /// Notices stuck agents and tries to get them going again.
-    watchdog: Option<swarmux_application::Watchdog>,
     /// The file the theme comes from (pywal, base16, matugen), watched for changes.
     palette: Option<PaletteWatch>,
     /// Opens a session in a terminal tab of its own.
@@ -223,6 +211,12 @@ pub struct App {
     showcase_at: Option<Millis>,
     /// Set in demo mode: the tag shown in the status bar.
     demo: Option<String>,
+    /// Run by the background service: `q` lets the window go.
+    service: bool,
+    /// The splash is on in the settings and not turned off at start.
+    splash_on: bool,
+    /// `icons` and `font` as configured, for windows that bring their own hints.
+    glyph_setting: (String, String),
     /// Runs at the start of every update (the scripted demo's director).
     driver: Option<Driver>,
 }
@@ -309,25 +303,19 @@ impl App {
             mission: MissionState::default(),
             missions_screen: MissionsScreen::default(),
             board_screen: Default::default(),
-            board: None,
-            missions: None,
+            engine: Engine::new(jobs, guard),
             evidence: None,
             away_since: None,
             clock: None,
             session_service,
-            jobs,
             prompt_service,
             history_service,
-            guard,
             routing,
             routes: HashMap::new(),
             cwd,
             look: Look::default(),
             anim: RefCell::new(Anim::default()),
             telemetry: Telemetry::default(),
-            hooks: None,
-            gate: None,
-            watchdog: None,
             terminal: None,
             checkpoints: None,
             focus_checkpoints: None,
@@ -339,6 +327,9 @@ impl App {
             showcase: Showcase::default(),
             showcase_at: None,
             demo: None,
+            service: false,
+            splash_on: false,
+            glyph_setting: (String::new(), String::new()),
             driver: None,
             focus: None,
             toast: None,
@@ -377,6 +368,8 @@ impl App {
             sessions: self.sessions.len(),
             jobs_today,
         };
+        self.splash_on = ui.splash && !launch.no_splash;
+        self.glyph_setting = (ui.icons.clone(), ui.font.clone());
         if ui.splash && !launch.no_splash {
             self.look.splash_until = Some(self.frame + self.look.frames(SPLASH_MS));
         }
@@ -426,7 +419,7 @@ impl App {
 
     /// Records the agents' lifecycle events and shows what they say.
     pub fn with_hook_bus(mut self, bus: HookBus) -> App {
-        self.hooks = Some(bus);
+        self.engine.hooks = Some(bus);
         self
     }
 
@@ -439,8 +432,7 @@ impl App {
     }
 
     pub(crate) fn set_watchdog(&mut self, watchdog: swarmux_application::Watchdog) {
-        self.jobs.set_event_tap(watchdog.settings().enabled);
-        self.watchdog = Some(watchdog);
+        self.engine.set_watchdog(watchdog);
     }
 
     /// Records the done-gate's verdicts and shows them on the wall.
@@ -450,7 +442,7 @@ impl App {
     }
 
     pub(crate) fn set_gate(&mut self, gate: GateService) {
-        self.gate = Some(gate);
+        self.engine.gate = Some(gate);
     }
 
     /// Lets `t` on Focus open the session in a new terminal tab.
@@ -464,7 +456,7 @@ impl App {
         if let Some(evidence) = &self.evidence {
             missions.set_evidence(evidence.clone());
         }
-        self.missions = Some(missions);
+        self.engine.missions = Some(missions);
         self
     }
 
@@ -485,7 +477,7 @@ impl App {
         evidence: Rc<EvidenceService>,
         away_since: Option<Millis>,
     ) {
-        if let Some(missions) = &mut self.missions {
+        if let Some(missions) = &mut self.engine.missions {
             missions.set_evidence(evidence.clone());
         }
         self.evidence = Some(evidence);
@@ -499,18 +491,27 @@ impl App {
 
     /// Every mission, oldest first.
     pub fn missions(&self) -> &[swarmux_domain::mission::Mission] {
-        self.missions.as_ref().map_or(&[], MissionService::missions)
+        self.engine
+            .missions
+            .as_ref()
+            .map_or(&[], MissionService::missions)
     }
 
     /// The mission service, for tests that set missions up directly.
     #[cfg(test)]
     pub(crate) fn mission_service(&mut self) -> &mut MissionService {
-        self.missions.as_mut().expect("the test app has missions")
+        self.engine
+            .missions
+            .as_mut()
+            .expect("the test app has missions")
     }
 
     /// A lint is out for the mission.
     pub fn mission_linting(&self, slug: &str) -> bool {
-        self.missions.as_ref().is_some_and(|m| m.linting(slug))
+        self.engine
+            .missions
+            .as_ref()
+            .is_some_and(|m| m.linting(slug))
     }
 
     /// Lets Focus show the job's branch, worktree and checkpoints.
@@ -597,7 +598,7 @@ impl App {
     /// The held tool call `y`/`n`/`a` answer: the selected one on Mission
     /// control, else the oldest.
     pub fn approval_target(&self) -> Option<PendingApproval> {
-        let approvals = self.guard.approvals();
+        let approvals = self.engine.guard.approvals();
         if self.screen == Screen::Mission
             && let Some(item) = self.mission.selected_item()
             && item.kind == AttentionKind::Approval
@@ -614,21 +615,26 @@ impl App {
         let now = self.now();
         let cwd = self.selected_session().map(|s| s.cwd.clone());
         let mut hook_changes = self
+            .engine
             .hooks
             .as_ref()
             .map(HookBus::changes)
             .unwrap_or_default();
         let mut escalations = Vec::new();
-        if let Some(dog) = &self.watchdog {
+        if let Some(dog) = &self.engine.watchdog {
             hook_changes.extend(dog.changes());
             escalations = dog.escalations();
         }
-        if let Some(missions) = &self.missions {
+        if let Some(missions) = &self.engine.missions {
             escalations.extend(missions.plan_items(now));
         }
         escalations.extend(self.board_items());
         self.mission.refresh(
-            (&self.guard, &self.jobs, self.gate.as_ref()),
+            (
+                &self.engine.guard,
+                &self.engine.jobs,
+                self.engine.gate.as_ref(),
+            ),
             (&hook_changes, escalations),
             now,
             cwd.as_deref(),
@@ -705,6 +711,58 @@ impl App {
         self
     }
 
+    /// Marks the app as run by the background service: windows attach to
+    /// it and `q` lets the window go while the work goes on.
+    pub fn set_service(&mut self, on: bool) {
+        self.service = on;
+    }
+
+    /// Run by the background service.
+    pub fn in_service(&self) -> bool {
+        self.service
+    }
+
+    /// Whether `q` (or Ctrl+C) was pressed since the last call.
+    pub fn take_quit(&mut self) -> bool {
+        std::mem::take(&mut self.quit)
+    }
+
+    /// Shows the splash again (a window attached), when it is on.
+    pub fn splash_again(&mut self) {
+        if self.splash_on {
+            self.look.splash_until = Some(self.frame + self.look.frames(SPLASH_MS));
+        }
+    }
+
+    /// The folder new sessions start in.
+    pub fn set_cwd(&mut self, cwd: PathBuf) {
+        self.cwd = cwd;
+    }
+
+    /// Draws glyphs as a window's terminal wants them, for `icons = "auto"`.
+    pub fn set_glyphs(&mut self, hints: &swarmux_application::daemon::GlyphHints) {
+        let (icons, font) = &self.glyph_setting;
+        let hints = crate::ui::look::IconHints {
+            icons: hints.icons.clone(),
+            nerd_font: hints.nerd_font.clone(),
+            font: if font.trim().is_empty() {
+                hints.font.clone().unwrap_or_default()
+            } else {
+                font.clone()
+            },
+        };
+        self.look.icons = crate::ui::look::IconSet::resolve(icons, &hints);
+    }
+
+    /// The services that keep the work going.
+    pub fn engine(&self) -> &Engine {
+        &self.engine
+    }
+
+    pub fn engine_mut(&mut self) -> &mut Engine {
+        &mut self.engine
+    }
+
     /// The demo tag, when this is a scripted demo.
     pub fn demo_label(&self) -> Option<&str> {
         self.demo.as_deref()
@@ -725,7 +783,7 @@ impl App {
             .find(|s| s.name == name)
             .cloned()
             .ok_or(AppError::SessionNotFound)?;
-        let job = self.jobs.dispatch(session.id, prompt)?;
+        let job = self.engine.jobs.dispatch(session.id, prompt)?;
         self.focus_state.note_human(job, self.now());
         self.refresh_sessions(None);
         Ok(job)
@@ -733,10 +791,10 @@ impl App {
 
     /// Runs the mission called `slug` (it must be linted).
     pub fn run_mission(&mut self, slug: &str) -> AppResult<JobId> {
-        let Some(service) = &mut self.missions else {
+        let Some(service) = &mut self.engine.missions else {
             return Err(AppError::Mission("missions are not set up".into()));
         };
-        let job = service.launch(slug, &mut self.jobs)?;
+        let job = service.launch(slug, &mut self.engine.jobs)?;
         self.focus_state.note_human(job, self.now());
         self.refresh_sessions(None);
         Ok(job)
@@ -764,47 +822,18 @@ impl App {
             driver(self);
             self.driver = Some(driver);
         }
-        let report = self.jobs.pump();
+        let report = self.engine.pump();
         let mut errors = report.errors;
-        for (job, trip) in &report.loop_trips {
-            errors.extend(self.guard.record_loop(*job, trip).err());
-        }
-        let mut watched = false;
-        if let Some(dog) = &mut self.watchdog {
-            let hooks = &self.hooks;
-            let compactions = |job| {
-                hooks
-                    .as_ref()
-                    .and_then(|h| h.signals(job))
-                    .map_or(0, |s| s.compactions)
-            };
-            let w = dog.pump(&mut self.jobs, &report.events, &compactions);
-            errors.extend(w.errors);
-            watched = w.changed || !w.new_sessions.is_empty();
-        }
-        let guard = self.guard.pump();
-        errors.extend(guard.errors);
-        for job in guard.decisions.iter().filter_map(|d| d.job_id) {
-            self.jobs.observe_decision(job);
-        }
-        if let Some(hooks) = &mut self.hooks {
-            errors.extend(hooks.pump());
-        }
-        if let Some(gate) = &mut self.gate {
-            let (_, gate_errors) = gate.pump();
-            errors.extend(gate_errors);
-        }
         errors.extend(self.pump_routes());
-        errors.extend(self.pump_board());
         if let Some(e) = errors.into_iter().last() {
             self.error = Some(e.to_string());
         }
-        if report.changed || !report.new_sessions.is_empty() || watched {
+        if report.sessions_changed {
             // Jobs touch their sessions, which re-sorts the list.
             self.refresh_sessions(None);
         }
         let evidence_changed = self.pump_evidence();
-        if (report.changed || evidence_changed) && self.screen == Screen::Ledger {
+        if (report.jobs_changed || evidence_changed) && self.screen == Screen::Ledger {
             self.refresh_ledger();
         }
         self.pump_palette();
@@ -886,7 +915,7 @@ impl App {
             self.wall()
                 .into_iter()
                 .map(|tile| {
-                    let activity = tile.job.and_then(|j| self.jobs.job_activity(j));
+                    let activity = tile.job.and_then(|j| self.engine.jobs.job_activity(j));
                     let tool_ages_ms = activity.map_or_else(Vec::new, |a| {
                         a.tools
                             .ticker(8)
@@ -964,11 +993,11 @@ impl App {
     /// The job the dashboard follows, else the most recent one.
     pub fn current_job(&self) -> Option<&JobProgress> {
         if let Some(id) = self.dashboard.followed
-            && let Some(p) = self.jobs.progress(id).or(self.dashboard.replayed())
+            && let Some(p) = self.engine.jobs.progress(id).or(self.dashboard.replayed())
         {
             return Some(p);
         }
-        self.jobs.latest()
+        self.engine.jobs.latest()
     }
 
     /// The review run of the current job, if there is one.
@@ -979,7 +1008,7 @@ impl App {
         {
             return Some(r);
         }
-        self.jobs.review_progress(job.job_id)
+        self.engine.jobs.review_progress(job.job_id)
     }
 
     /// Where the current job's timeline ends (now, while anything runs).
@@ -987,8 +1016,8 @@ impl App {
         let Some(job) = self.current_job() else {
             return 0;
         };
-        match self.jobs.progress(job.job_id) {
-            Some(_) => self.jobs.timeline_end(job.job_id),
+        match self.engine.jobs.progress(job.job_id) {
+            Some(_) => self.engine.jobs.timeline_end(job.job_id),
             None => self
                 .review_run()
                 .map_or(0, |r| r.log_offset + r.last_tick)
@@ -998,32 +1027,35 @@ impl App {
 
     /// Whether the next prompts get a review.
     pub fn review_next(&self) -> bool {
-        self.jobs.review_next()
+        self.engine.jobs.review_next()
     }
 
     /// The reviewer's model.
     pub fn review_model(&self) -> &str {
-        self.jobs.review_model()
+        self.engine.jobs.review_model()
     }
 
     /// Running, queued and recently finished jobs.
     pub fn queue_rows(&self) -> Vec<QueueEntry> {
-        self.jobs.queue()
+        self.engine.jobs.queue()
     }
 
     pub fn stats(&self) -> QueueStats {
-        self.jobs.stats()
+        self.engine.jobs.stats()
     }
 
     /// The session a job belongs to, if the job is from this run.
     pub fn session_of(&self, job: JobId) -> Option<&str> {
-        self.jobs.progress(job).map(|p| p.session_name.as_str())
+        self.engine
+            .jobs
+            .progress(job)
+            .map(|p| p.session_name.as_str())
     }
 
     /// The timeline's "now" for the current job.
     pub fn now_tick(&self) -> u32 {
         self.current_job()
-            .map_or(0, |j| self.jobs.tick_now(j.job_id).max(j.last_tick))
+            .map_or(0, |j| self.engine.jobs.tick_now(j.job_id).max(j.last_tick))
     }
 
     pub fn on_key(&mut self, key: KeyEvent) {
@@ -1114,14 +1146,14 @@ impl App {
             return;
         }
         if let KeyCode::Char(c @ ('y' | 'n')) = key.code
-            && self.guard.jev().is_some_and(|j| j.wants_consent())
+            && self.engine.guard.jev().is_some_and(|j| j.wants_consent())
         {
             let result = self.answer_consent(c == 'y');
             self.show(result);
             return;
         }
         if let KeyCode::Char(c @ ('y' | 'n' | 'a')) = key.code
-            && self.guard.pending_count() > 0
+            && self.engine.guard.pending_count() > 0
         {
             let result = self.answer_approval(c);
             self.show(result);
@@ -1269,11 +1301,11 @@ impl App {
                 self.show(result);
             }
             KeyCode::Char('v') if self.screen == Screen::Dashboard => {
-                let on = !self.jobs.review_next();
-                self.notice = Some(if self.jobs.set_review_next(on) {
+                let on = !self.engine.jobs.review_next();
+                self.notice = Some(if self.engine.jobs.set_review_next(on) {
                     format!(
                         "review on: the next jobs are audited by {} when they finish",
-                        self.jobs.review_model()
+                        self.engine.jobs.review_model()
                     )
                 } else if on {
                     "review is not available: no git workspace configured".into()
@@ -1305,23 +1337,17 @@ impl App {
     /// Takes the linter's replies, follows the missions' jobs and stops
     /// the jobs of missions out of budget.
     fn pump_missions(&mut self) -> Vec<AppError> {
-        let Some(service) = &mut self.missions else {
-            return Vec::new();
-        };
-        let mut report = service.pump(&self.mission.facts, &self.mission.gates);
-        let graphs = service.pump_graphs(&mut self.jobs, &self.mission.facts, &self.mission.gates);
-        report.errors.extend(graphs.errors);
-        report.cancel.extend(graphs.cancel);
-        if let Some(composer) = &mut self.missions_screen.composer
+        let pumped = self
+            .engine
+            .pump_missions(&self.mission.facts, &self.mission.gates);
+        if let (Some(composer), Some(service)) =
+            (&mut self.missions_screen.composer, &self.engine.missions)
             && let Some(m) = composer.slug.as_deref().and_then(|s| service.get(s))
         {
             composer.sync(m);
         }
-        let mut errors = report.errors;
-        for job in report.cancel {
-            errors.extend(self.jobs.cancel(job).err());
-        }
-        if graphs.changed {
+        let errors = pumped.errors;
+        if pumped.graphs_changed {
             // Task graphs start jobs in sessions of their own.
             self.refresh_sessions(None);
         }
@@ -1340,7 +1366,7 @@ impl App {
             KeyCode::Up | KeyCode::Char('k') => self.missions_screen.move_by(-1, count),
             KeyCode::Down | KeyCode::Char('j') => self.missions_screen.move_by(1, count),
             KeyCode::Char('n') => {
-                if self.missions.is_none() {
+                if self.engine.missions.is_none() {
                     self.notice = Some("missions are not set up in this run".into());
                 } else if self.sessions.is_empty() {
                     self.error = Some("create a session first: press 6 then n".into());
@@ -1359,7 +1385,7 @@ impl App {
                 }
             }
             KeyCode::Char('l') => {
-                if let (Some(service), Some(slug)) = (&mut self.missions, slug) {
+                if let (Some(service), Some(slug)) = (&mut self.engine.missions, slug) {
                     service.lint(&slug)?;
                 }
             }
@@ -1399,7 +1425,7 @@ impl App {
                 let slug = self.save_composer()?;
                 self.fix_mission(&slug)?;
                 if let (Some(service), Some(composer)) =
-                    (&self.missions, &mut self.missions_screen.composer)
+                    (&self.engine.missions, &mut self.missions_screen.composer)
                     && let Some(m) = service.get(&slug)
                 {
                     *composer = Composer::edit(m);
@@ -1419,9 +1445,10 @@ impl App {
     /// again), or only new answers. Returns its slug.
     fn save_composer(&mut self) -> AppResult<String> {
         let session = self.selected_session().cloned();
-        let (Some(service), Some(composer)) =
-            (&mut self.missions, &mut self.missions_screen.composer)
-        else {
+        let (Some(service), Some(composer)) = (
+            &mut self.engine.missions,
+            &mut self.missions_screen.composer,
+        ) else {
             return Err(AppError::Mission("nothing to save".into()));
         };
         let current = composer
@@ -1471,7 +1498,7 @@ impl App {
     }
 
     fn fix_mission(&mut self, slug: &str) -> AppResult<()> {
-        let Some(service) = &mut self.missions else {
+        let Some(service) = &mut self.engine.missions else {
             return Ok(());
         };
         let n = service.fix(slug)?;
@@ -1486,10 +1513,10 @@ impl App {
     /// Compiles the mission into a job and follows it; a mission that
     /// plans first is planned before anything is built.
     fn launch_mission(&mut self, slug: &str) -> AppResult<()> {
-        let Some(service) = &mut self.missions else {
+        let Some(service) = &mut self.engine.missions else {
             return Ok(());
         };
-        match service.begin(slug, &mut self.jobs)? {
+        match service.begin(slug, &mut self.engine.jobs)? {
             Begun::Job(job) => self.followed_mission(slug, job),
             Begun::Planning => {
                 self.notice = Some(format!(
@@ -1560,6 +1587,7 @@ impl App {
     /// The wall's tiles in their fixed order.
     pub(crate) fn wall(&self) -> Vec<Tile> {
         let held: Vec<_> = self
+            .engine
             .guard
             .approvals()
             .iter()
@@ -1620,7 +1648,7 @@ impl App {
         let Some(cwd) = self.focus_session().map(|s| s.cwd.clone()) else {
             return Ok(());
         };
-        match self.jobs.working_diff(&cwd)? {
+        match self.engine.jobs.working_diff(&cwd)? {
             None => self.notice = Some("diffs need a git workspace".into()),
             Some(d) if d.trim().is_empty() => self.notice = Some("no uncommitted changes".into()),
             Some(d) => {
@@ -1694,7 +1722,7 @@ impl App {
                         Some("irreversible calls are never always-allowed: y to confirm".into());
                 }
                 _ => {
-                    self.guard.deny(id)?;
+                    self.engine.guard.deny(id)?;
                     self.mission.alarms_mut().answered_request(id, false);
                 }
             }
@@ -1705,10 +1733,10 @@ impl App {
         }
         self.mission.alarms_mut().answered_request(id, key != 'n');
         match key {
-            'y' => self.guard.approve(id),
-            'n' => self.guard.deny(id),
+            'y' => self.engine.guard.approve(id),
+            'n' => self.engine.guard.deny(id),
             _ => {
-                let done = self.guard.always_allow(id)?;
+                let done = self.engine.guard.always_allow(id)?;
                 self.notice = Some(match done.not_saved {
                     None => format!("always allowing {} (saved to config.toml)", done.rule),
                     Some(why) => format!(
@@ -1722,16 +1750,16 @@ impl App {
     }
 
     fn queue_key(&mut self, code: KeyCode) -> AppResult<()> {
-        let rows = self.jobs.queue();
+        let rows = self.engine.jobs.queue();
         match self.queue.handle(code, &rows) {
             QueueAction::None => {}
-            QueueAction::Cancel(id) => self.jobs.cancel(id)?,
+            QueueAction::Cancel(id) => self.engine.jobs.cancel(id)?,
             QueueAction::Retry(id) => {
-                let new = self.jobs.retry(id)?;
+                let new = self.engine.jobs.retry(id)?;
                 self.queue.selected = Some(new);
             }
             QueueAction::Priority(id, delta) => {
-                self.jobs.change_priority(id, delta)?;
+                self.engine.jobs.change_priority(id, delta)?;
             }
             QueueAction::View(id) => self.view(id)?,
         }
@@ -1748,11 +1776,11 @@ impl App {
                 self.mode = Mode::Input(InputPurpose::Search, input);
             }
             LedgerAction::Rerun(id) => {
-                self.jobs.retry(id)?;
+                self.engine.jobs.retry(id)?;
                 self.refresh_ledger();
             }
             LedgerAction::Fork(id) => {
-                self.jobs.fork(id)?;
+                self.engine.jobs.fork(id)?;
                 self.refresh_ledger();
             }
             LedgerAction::View(id) => self.view(id)?,
@@ -1796,9 +1824,9 @@ impl App {
     /// not from this run.
     fn view(&mut self, job: JobId) -> AppResult<()> {
         // A review job is shown as part of the job it audits.
-        let mut job = self.jobs.subject_of(job);
+        let mut job = self.engine.jobs.subject_of(job);
         let mut told = None;
-        let replay = match self.jobs.progress(job) {
+        let replay = match self.engine.jobs.progress(job) {
             Some(_) => None,
             None => {
                 let mut detail = self.history_service.detail(job)?;
@@ -1960,7 +1988,10 @@ impl App {
         let rendered =
             self.prompt_service
                 .render(pending.prompt_id, pending.session_id, &pending.values)?;
-        let job = self.jobs.dispatch_template(pending.session_id, &rendered)?;
+        let job = self
+            .engine
+            .jobs
+            .dispatch_template(pending.session_id, &rendered)?;
         self.focus_state.note_human(job, self.now());
         self.dashboard.follow(job, None);
         let session = self
@@ -2009,7 +2040,7 @@ impl App {
             .selected_session()
             .cloned()
             .ok_or(AppError::SessionNotFound)?;
-        let job = self.jobs.dispatch(session.id, prompt)?;
+        let job = self.engine.jobs.dispatch(session.id, prompt)?;
         self.focus_state.note_human(job, self.now());
         self.dashboard.follow(job, None);
         self.refresh_sessions(Some(&session));
@@ -2391,7 +2422,7 @@ mod tests {
         t.send("one");
         // Another session's job finishing re-sorts the list under the cursor.
         let a = session_named(&t, "a");
-        let id = t.app.jobs.dispatch(a, "elsewhere").unwrap();
+        let id = t.app.engine.jobs.dispatch(a, "elsewhere").unwrap();
         assert_eq!(t.runner.request(1).session_id, a);
         t.clock.advance(1_000);
         for i in 0..2 {
@@ -2402,7 +2433,7 @@ mod tests {
         assert_eq!(t.app.selected_session().unwrap().id, b);
         t.send("two");
         assert_eq!(t.runner.request(2).session_id, b);
-        assert!(t.app.jobs.progress(id).is_some());
+        assert!(t.app.engine.jobs.progress(id).is_some());
     }
 
     #[test]

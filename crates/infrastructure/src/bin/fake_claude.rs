@@ -2,8 +2,10 @@
 //!
 //! Env vars: FAKE_CLAUDE_FIXTURE (file printed to stdout), FAKE_CLAUDE_ECHO_FILE
 //! (receives {"stdin","cwd","args","hook_pipe","job_id"} as JSON), FAKE_CLAUDE_STDERR, FAKE_CLAUDE_EXIT,
+//! FAKE_CLAUDE_LINE_DELAY_MS (wait before each line of the fixture),
 //! FAKE_CLAUDE_SLEEP_MS (wait before exiting) and FAKE_CLAUDE_DONE_FILE (written
 //! after the wait, so tests can tell whether the process was killed).
+//! FAKE_CLAUDE_ARGS_FILE gets one line of arguments per start.
 //! FAKE_CLAUDE_START_FILE gets one line (nanoseconds since the epoch) per
 //! start, FAKE_CLAUDE_PIDS_FILE one line per process id, and
 //! FAKE_CLAUDE_GRANDCHILDREN=n starts n long-lived copies of this program.
@@ -34,6 +36,10 @@ fn main() {
         append_line("FAKE_CLAUDE_START_FILE", &now.to_string());
     }
     append_line("FAKE_CLAUDE_PIDS_FILE", &std::process::id().to_string());
+    if std::env::var_os("FAKE_CLAUDE_ARGS_FILE").is_some() {
+        let args: Vec<String> = std::env::args().skip(1).collect();
+        append_line("FAKE_CLAUDE_ARGS_FILE", &args.join(" "));
+    }
     if std::env::var_os("FAKE_CLAUDE_GRANDCHILD").is_some() {
         std::thread::sleep(std::time::Duration::from_secs(120));
         return;
@@ -85,7 +91,22 @@ fn main() {
         std::fs::write(path, echo.to_string()).unwrap();
     }
     if let Ok(path) = std::env::var("FAKE_CLAUDE_FIXTURE") {
-        print!("{}", std::fs::read_to_string(path).unwrap());
+        let text = std::fs::read_to_string(path).unwrap();
+        match std::env::var("FAKE_CLAUDE_LINE_DELAY_MS")
+            .ok()
+            .and_then(|ms| ms.parse::<u64>().ok())
+        {
+            // One step at a time, as a real run streams them.
+            Some(ms) => {
+                let mut out = std::io::stdout().lock();
+                for line in text.lines() {
+                    std::thread::sleep(std::time::Duration::from_millis(ms));
+                    writeln!(out, "{line}").unwrap();
+                    out.flush().unwrap();
+                }
+            }
+            None => print!("{text}"),
+        }
     }
     if let Ok(msg) = std::env::var("FAKE_CLAUDE_STDERR") {
         eprint!("{msg}");

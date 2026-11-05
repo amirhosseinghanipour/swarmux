@@ -15,6 +15,7 @@ mod missions;
 mod plans;
 mod prompts;
 mod queue;
+pub mod remote;
 mod routing;
 mod showcase;
 pub mod telemetry;

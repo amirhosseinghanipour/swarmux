@@ -214,6 +214,8 @@ pub struct JobService {
     tapped: Vec<(JobId, AgentEvent)>,
     /// Who is on a mission's board: those jobs get its MCP server.
     board: Option<Arc<crate::Board>>,
+    /// swarmux is stopping: nothing new starts.
+    draining: bool,
 }
 
 /// Where a queued job comes from, and what it may spend.
@@ -234,6 +236,10 @@ struct Lineage {
 const GC_EVERY_MS: Millis = 3_600_000;
 /// What a resumed job is told.
 const RESUME_PROMPT: &str = "The previous run stopped before it finished. Check the files in the working folder to see what is already done, then carry on from there.";
+
+/// The window a job stopped by swarmux's own stop is booked under: it
+/// resumes at the next start.
+pub const RESTART_WINDOW: &str = "restart";
 
 /// Environments restored at start.
 const RESTORE_ENVIRONMENTS: usize = 50;
@@ -273,6 +279,7 @@ impl JobService {
             tap: false,
             tapped: Vec::new(),
             board: None,
+            draining: false,
         }
     }
 
@@ -432,6 +439,92 @@ impl JobService {
             }
         }
         Ok(interrupted)
+    }
+
+    /// While draining, nothing new starts: queued jobs stay queued in the
+    /// store for the next start.
+    pub fn set_draining(&mut self, on: bool) {
+        self.draining = on;
+    }
+
+    pub fn draining(&self) -> bool {
+        self.draining
+    }
+
+    /// Stops every running job because swarmux itself stops: each is marked
+    /// interrupted and, with a governor, booked to resume as soon as
+    /// swarmux runs again. Returns the jobs stopped.
+    pub fn interrupt_running(&mut self) -> AppResult<Vec<JobId>> {
+        let now = self.clock.now();
+        let running: Vec<usize> = (0..self.tracked.len())
+            .filter(|&i| self.tracked[i].progress.status == JobStatus::Running)
+            .collect();
+        let mut stopped = Vec::new();
+        for i in running {
+            let id = self.tracked[i].job.id;
+            self.runner.cancel(id);
+            let tick = self.tick_of(i);
+            let t = &mut self.tracked[i];
+            let Some(result) = t.progress.interrupt("swarmux stopped", tick) else {
+                continue;
+            };
+            t.job.status = JobStatus::Interrupted;
+            t.finished_at = Some(now);
+            self.jobs.save_result(id, &result)?;
+            self.jobs.set_status(id, JobStatus::Interrupted, now)?;
+            if let Some(g) = &mut self.governor {
+                g.resume_at(id, now, RESTART_WINDOW)?;
+            }
+            stopped.push(id);
+        }
+        Ok(stopped)
+    }
+
+    /// The job as stored, whether or not this run follows it.
+    pub fn stored(&self, id: JobId) -> AppResult<Option<Job>> {
+        self.jobs.get(id)
+    }
+
+    /// Whether Claude Code created the job's session, so a new job can
+    /// pick up its conversation with `--resume`.
+    pub fn has_started(&self, id: JobId) -> AppResult<bool> {
+        let job = self.jobs.get(id)?.ok_or(AppError::JobNotFound)?;
+        self.sessions.has_started(job.session_id)
+    }
+
+    /// Follows a job that finished in an earlier run, so it has a
+    /// [`JobFact`] with its stored outcome. Jobs already followed, and
+    /// jobs that have not finished, are left alone.
+    pub fn adopt(&mut self, id: JobId) -> AppResult<()> {
+        if self.find(id).is_some() {
+            return Ok(());
+        }
+        let Some(job) = self.jobs.get(id)? else {
+            return Err(AppError::JobNotFound);
+        };
+        if !job.status.is_finished() {
+            return Ok(());
+        }
+        let name = self
+            .sessions
+            .get(job.session_id)?
+            .map_or_else(|| "?".to_string(), |s| s.name);
+        let result = self.jobs.result(id)?;
+        let status = job.status;
+        self.track(job, &name);
+        let Some(i) = self.find(id) else {
+            return Ok(());
+        };
+        let t = &mut self.tracked[i];
+        t.progress.status = status;
+        if let Some(r) = result {
+            t.progress.cost_usd = r.cost_usd;
+            t.outcome = Some(JobOutcome {
+                error: r.error,
+                text: r.text,
+            });
+        }
+        Ok(())
     }
 
     /// Queues `prompt` for the session; it starts as soon as it is allowed to.
@@ -710,7 +803,11 @@ impl JobService {
             match self.resume(p.job) {
                 Ok(new) => {
                     report.changed = true;
-                    let text = format!("resumed #{} after the {} reset", p.job, p.window);
+                    let text = if p.window == RESTART_WINDOW {
+                        format!("resumed #{} after swarmux restarted", p.job)
+                    } else {
+                        format!("resumed #{} after the {} reset", p.job, p.window)
+                    };
                     self.note(new, "governor", &text);
                 }
                 // Resumed or retried by hand meanwhile.
@@ -1076,6 +1173,9 @@ impl JobService {
 
     /// Starts every queued job the scheduling rule allows. True if any started.
     fn schedule(&mut self) -> AppResult<bool> {
+        if self.draining {
+            return Ok(false);
+        }
         if self.queued_jobs().next().is_none() {
             return Ok(false);
         }

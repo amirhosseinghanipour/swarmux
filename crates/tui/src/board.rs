@@ -8,7 +8,7 @@
 use std::rc::Rc;
 
 use crossterm::event::KeyCode;
-use swarmux_application::{AppError, AppResult, BoardInbox, BoardService};
+use swarmux_application::{AppResult, BoardInbox, BoardService};
 use swarmux_domain::AttentionKind;
 use swarmux_domain::board::{BoardEntry, BoardKind};
 
@@ -55,29 +55,18 @@ impl App {
     }
 
     pub(crate) fn set_board(&mut self, board: Option<(Rc<BoardService>, Rc<dyn BoardInbox>)>) {
-        self.board = board;
+        self.engine.board = board;
     }
 
     /// Whether the Board is on.
     pub fn board_on(&self) -> bool {
-        self.board.is_some()
-    }
-
-    /// Answers the calls agents made and releases the claims of jobs that
-    /// ended.
-    pub(crate) fn pump_board(&mut self) -> Vec<AppError> {
-        let Some((service, inbox)) = &self.board else {
-            return Vec::new();
-        };
-        // A job this run doesn't track ended in an earlier one.
-        let jobs = &self.jobs;
-        let finished = |job| jobs.progress(job).is_none_or(|p| p.status.is_finished());
-        service.pump(&**inbox, &finished)
+        self.engine.board.is_some()
     }
 
     /// The questions agents asked, for the inbox.
     pub(crate) fn board_items(&self) -> Vec<swarmux_domain::AttentionItem> {
-        self.board
+        self.engine
+            .board
             .as_ref()
             .map(|(service, _)| service.question_items())
             .unwrap_or_default()
@@ -85,7 +74,7 @@ impl App {
 
     /// The screen's rows: each kind under a header, newest first.
     pub fn board_rows(&self) -> Vec<BoardRow> {
-        let Some((service, _)) = &self.board else {
+        let Some((service, _)) = &self.engine.board else {
             return Vec::new();
         };
         let mut all = service.board().entries();
@@ -193,7 +182,7 @@ impl App {
     }
 
     fn dismiss_question(&mut self, id: i64) -> AppResult<()> {
-        if let Some((service, _)) = &self.board {
+        if let Some((service, _)) = &self.engine.board {
             service.dismiss(id)?;
             self.notice = Some(format!("question #{id} closed without an answer"));
         }
@@ -205,7 +194,7 @@ impl App {
         let Some(id) = self.board_screen.answering.take() else {
             return Ok(());
         };
-        if let Some((service, _)) = &self.board {
+        if let Some((service, _)) = &self.engine.board {
             service.answer(id, text)?;
             self.notice = Some(format!("answered question #{id}: agents see it with read"));
         }

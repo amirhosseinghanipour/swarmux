@@ -145,6 +145,10 @@ impl MergeQueue for GitMergeQueue {
         Ok(MergeOutcome::Conflict { files })
     }
 
+    fn contains(&self, workdir: &Path, branch: &str) -> AppResult<bool> {
+        Ok(self.succeeds(workdir, &["merge-base", "--is-ancestor", branch, "HEAD"]))
+    }
+
     fn fast_forward(&self, worktree: &Path, branch: &str) -> AppResult<()> {
         self.run(worktree, &["merge", "--ff-only", branch])
             .map(drop)

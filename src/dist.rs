@@ -61,6 +61,8 @@ pub fn install(dir: Option<PathBuf>, no_path: bool, statusline: bool) -> anyhow:
 
 /// Removes what `install` set up, and says what it removed.
 pub fn uninstall(purge: bool, no_path: bool) -> anyhow::Result<()> {
+    // Its executable and data folder must not be in use.
+    crate::daemon::stop_if_running()?;
     let report = InstallService::new(host(no_path)?).uninstall(purge)?;
     print(&report);
     if !report.done.is_empty() {

@@ -38,7 +38,7 @@ pub fn line(app: &App, view: &View, t: &Theme) -> Line<'static> {
         Some(ReviewState::Failed { .. }) => "failed".into(),
         Some(ReviewState::Skipped { .. }) => "skipped".into(),
     };
-    let decisions = format!("{} decisions", thousands(app.guard.stats().total()));
+    let decisions = format!("{} decisions", thousands(app.engine.guard.stats().total()));
     let mut spans = vec![Span::styled(" |", Style::new().fg(t.label))];
     spans.extend(pair("step", step));
     spans.extend(pair("effort", "—".into()));

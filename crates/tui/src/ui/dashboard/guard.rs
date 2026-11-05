@@ -43,7 +43,7 @@ impl Panel for Guard {
     /// The box with as many rows as fit.
     fn render(&self, frame: &mut Frame, area: Rect, vm: &ViewModel, t: &Theme, _tick: u64) {
         let app = vm.app;
-        let total = app.guard.stats().total();
+        let total = app.engine.guard.stats().total();
         let block = chrome::block(
             self,
             vm,
@@ -69,7 +69,7 @@ impl Panel for Guard {
     /// One line for small windows.
     fn summary(&self, vm: &ViewModel, t: &Theme, _tick: u64) -> Line<'static> {
         let app = vm.app;
-        let s = app.guard.stats();
+        let s = app.engine.guard.stats();
         let mut spans = vec![Span::styled(title(app), Style::new().fg(t.guard))];
         if let Some(share) = s.share(s.allowed) {
             spans.push(label(
@@ -90,7 +90,7 @@ impl Panel for Guard {
 /// (lower stays longer).
 fn rows<'a>(vm: &ViewModel<'a>, t: &Theme, width: usize) -> Vec<(u8, Line<'a>)> {
     let app = vm.app;
-    let s = app.guard.stats();
+    let s = app.engine.guard.stats();
     let mut rows = vec![(2, route_row(vm, t))];
 
     let tool_gate = match s.share(s.allowed) {
@@ -141,7 +141,7 @@ fn rows<'a>(vm: &ViewModel<'a>, t: &Theme, width: usize) -> Vec<(u8, Line<'a>)> 
     };
     rows.push((1, retry));
 
-    let latest = app.guard.recent().next().map_or_else(
+    let latest = app.engine.guard.recent().next().map_or_else(
         || Line::from(dim(t, "every tool call your jobs make is checked here")),
         |d| match (d.source, d.confidence) {
             (Source::Jev, Some(c)) => jev_decision_line(d, c, t),
@@ -255,8 +255,9 @@ fn route_row(vm: &ViewModel, t: &Theme) -> Line<'static> {
 
 /// `GUARD · fork layer · 2,418 decisions · < 0.4 ms`.
 fn title(app: &App) -> String {
-    let n = app.guard.stats().total();
+    let n = app.engine.guard.stats().total();
     let p95 = app
+        .engine
         .guard
         .p95_latency_us()
         .map_or_else(String::new, |us| format!(" · p95 < {}", latency(us)));

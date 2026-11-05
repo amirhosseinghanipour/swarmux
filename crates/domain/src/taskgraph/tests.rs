@@ -210,6 +210,7 @@ fn the_run_round_trips_through_json() {
     t.branch = "swarmux/m-t2/9".into();
     t.reinvoked = true;
     t.merge_blocked = true;
+    t.resumes = 2;
     t.note = "conflict in \"src/b.rs\"".into();
     t.started_at = Some(100);
     run.merged = vec!["t1".into()];
@@ -219,6 +220,16 @@ fn the_run_round_trips_through_json() {
     run.verify_from = Some(500);
     let back = GraphRun::from_json(&Json::parse(&run.to_json()).unwrap()).unwrap();
     assert_eq!(back, run);
+}
+
+#[test]
+fn a_run_kept_before_resumes_were_counted_reads_as_none() {
+    let p = fan();
+    let run = GraphRun::new(&p, "swarmux/m/integration", 42);
+    let old = run.to_json().replace("\"resumes\":0,", "");
+    assert!(!old.contains("resumes"));
+    let back = GraphRun::from_json(&Json::parse(&old).unwrap()).unwrap();
+    assert!(back.tasks.iter().all(|t| t.resumes == 0));
 }
 
 #[test]

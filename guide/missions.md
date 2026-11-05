@@ -122,6 +122,15 @@ session, since running it in parallel would only add merges. Set
   to the integration branch, the mission's checks run there, and the mission
   is delivered with its evidence bundle as any other. Your own branches are
   never written.
+- **After a restart.** Where each task stands is kept in the database, so a
+  graph carries on when swarmux starts again: merged tasks stay merged and
+  waiting ones wait. A task whose job was cut off continues in its own
+  worktree and Claude session, so at most the step under way is lost; one
+  whose session never began starts its task again, once. A task cut off
+  more than three times goes to your inbox. A merge that landed just before
+  the stop is seen in git and never made twice, and a mission that was being
+  verified is checked again. Single-job missions and plans being drafted
+  carry on the same way.
 
 The card shows each task's state (`waiting`, `running`, `gate`, `merging`,
 `merged`, `conflict`, `failed`), the merge queue, the claims held and how

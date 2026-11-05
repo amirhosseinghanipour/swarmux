@@ -54,6 +54,11 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+[features]
+# Runs the end-to-end tests of the background service against the fake
+# `claude` (tests/daemon.rs), which the infrastructure crate builds.
+fake-claude = ["swarmux-infrastructure/fake-claude"]
+
 [dependencies]
 swarmux-application.workspace = true
 swarmux-domain.workspace = true
@@ -64,7 +69,7 @@ clap.workspace = true
 rpassword.workspace = true
 ratatui.workspace = true
 serde_json.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["signal"] }
 tempfile.workspace = true
 unicode-width.workspace = true
 

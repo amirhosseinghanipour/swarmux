@@ -94,10 +94,14 @@ fn tasks_merge_in_order_and_a_conflict_is_undone_then_rebased() {
     let mut changed = queue.changed(&integ, &b1).unwrap();
     changed.sort();
     assert_eq!(changed, vec!["a.txt", "shared.txt"]);
+    assert!(!queue.contains(&integ, &b1).unwrap());
     let MergeOutcome::Merged { commit } = queue.merge(&integ, &b1, "merge t1").unwrap() else {
         panic!("t1 merges clean");
     };
     assert_eq!(git(&repo, &["rev-parse", branch]), commit);
+    // Once in, it is seen to be in: a restart never merges it again.
+    assert!(queue.contains(&integ, &b1).unwrap());
+    assert!(!queue.contains(&integ, &b2).unwrap());
 
     // t2 touched the same line: the merge conflicts and is undone.
     let before = git(&integ, &["rev-parse", "HEAD"]);

@@ -59,9 +59,9 @@ impl App {
             match self.send_routed(&routed, payload) {
                 Ok(job) => {
                     let line = routed.summary();
-                    self.jobs.note(job, "route", &line);
+                    self.engine.jobs.note(job, "route", &line);
                     // Choosing the session was the job's first decision.
-                    self.jobs.observe_decision(job);
+                    self.engine.jobs.observe_decision(job);
                     self.dashboard.follow(job, None);
                     self.notice = Some(line);
                     self.refresh_sessions(Some(&routed.session));
@@ -75,17 +75,17 @@ impl App {
     fn send_routed(&mut self, routed: &Routed, payload: RoutePayload) -> AppResult<JobId> {
         let session = routed.session.id;
         match payload {
-            RoutePayload::Plain(prompt) => self.jobs.dispatch(session, &prompt),
+            RoutePayload::Plain(prompt) => self.engine.jobs.dispatch(session, &prompt),
             RoutePayload::Template { prompt_id, values } => {
                 let rendered = self.prompt_service.render(prompt_id, session, &values)?;
-                self.jobs.dispatch_template(session, &rendered)
+                self.engine.jobs.dispatch_template(session, &rendered)
             }
         }
     }
 
     /// The user's answer to the JEV consent question.
     pub(crate) fn answer_consent(&mut self, yes: bool) -> AppResult<()> {
-        let Some(jev) = self.guard.jev().cloned() else {
+        let Some(jev) = self.engine.guard.jev().cloned() else {
             return Ok(());
         };
         if yes {
@@ -197,7 +197,7 @@ mod tests {
         assert!(out.contains("fake.example"), "{out}");
         assert!(out.contains("Never file contents"), "{out}");
         t.keys([KeyCode::Char('y')]);
-        let jev = t.app.guard.jev().unwrap().clone();
+        let jev = t.app.engine.guard.jev().unwrap().clone();
         assert_eq!(jev.state(), JevState::On);
         let out = render_to_string(&t.app, 160, 48);
         assert!(!out.contains("Never file contents"), "{out}");
@@ -209,13 +209,16 @@ mod tests {
         let mut t = test_app_with_jev(false);
         t.app.screen = Screen::Dashboard;
         t.keys([KeyCode::Char('n')]);
-        assert_eq!(t.app.guard.jev().unwrap().state(), JevState::Declined);
+        assert_eq!(
+            t.app.engine.guard.jev().unwrap().state(),
+            JevState::Declined
+        );
         let out = render_to_string(&t.app, 160, 48);
         assert!(out.contains("JEV typesafe off for this run"), "{out}");
         t.inbox.push(None, "Bash", "make");
         t.app.update();
         assert!(t.advisor.as_ref().unwrap().requests().is_empty());
-        assert_eq!(t.app.guard.pending_count(), 1);
+        assert_eq!(t.app.engine.guard.pending_count(), 1);
     }
 
     #[test]

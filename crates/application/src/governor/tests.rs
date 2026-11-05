@@ -427,6 +427,53 @@ fn resumes_pending_at_quit_come_back_after_a_restart() {
 }
 
 #[test]
+fn jobs_swarmux_stops_resume_at_the_next_start_and_queued_ones_wait() {
+    let mut r = rig();
+    let running = r.svc.dispatch(r.session.id, "task").unwrap();
+    r.runner
+        .emit(0, RunnerMsg::Event(init(&r.session.id.to_string())));
+    r.svc.pump();
+    let other = session(&r.store, "other");
+    // Stopping: nothing new starts, and what runs is stopped.
+    r.svc.set_draining(true);
+    let waiting = r.svc.dispatch(other.id, "later").unwrap();
+    assert_eq!(r.runner.started(), 1, "nothing starts while draining");
+    assert_eq!(r.svc.interrupt_running().unwrap(), [running]);
+    assert_eq!(r.runner.cancelled(), [running]);
+    assert_eq!(r.store.status_of(running), JobStatus::Interrupted);
+    assert_eq!(r.store.status_of(waiting), JobStatus::Queued);
+    drop(r.svc);
+
+    // The next start picks both up: the stopped job in its session.
+    let governor = Governor::new(&GovernorSettings::default()).with_resume_book(r.book.clone());
+    let mut svc = JobService::new(
+        r.store.clone(),
+        r.store.clone(),
+        r.runner.clone(),
+        r.clock.clone(),
+    )
+    .with_limits(Limits {
+        max_concurrent: 4,
+        min_free_ram: 0,
+    })
+    .with_governor(governor);
+    svc.recover().unwrap();
+    svc.pump();
+    assert_eq!(r.runner.started(), 3);
+    let resumed = r.runner.request(2);
+    assert!(resumed.resume);
+    assert_eq!(resumed.session_id, r.session.id);
+    assert!(
+        svc.progress(resumed.job_id)
+            .unwrap()
+            .log
+            .iter()
+            .any(|l| l.contains("after swarmux restarted"))
+    );
+    assert_eq!(svc.stats().awaiting_reset, 0);
+}
+
+#[test]
 fn pricey_work_is_downgraded_near_the_limit() {
     let mut r = rig();
     r.probe.set(vec![window("seven_day", 0.92, T0 + DAY, T0)]);
