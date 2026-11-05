@@ -294,7 +294,7 @@ pub(super) fn followed_job(app: &App) -> Option<JobId> {
 
 fn agents(frame: &mut Frame, area: Rect, app: &App) {
     let t = &app.look.theme;
-    let Some(tree) = followed_job(app).and_then(|j| app.jobs.agent_tree(j)) else {
+    let Some(tree) = followed_job(app).and_then(|j| app.engine.jobs.agent_tree(j)) else {
         return hint(frame, area, app, "select an item to see its agents");
     };
     let mut out = Vec::new();

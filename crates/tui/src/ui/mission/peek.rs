@@ -39,7 +39,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, now: i64) {
         );
         return;
     };
-    let Some(p) = app.jobs.progress(job) else {
+    let Some(p) = app.engine.jobs.progress(job) else {
         let text = format!("job #{job} is not from this run: ⏎ replays it");
         frame.render_widget(
             Line::from(dim(t, fit(&text, w))),
@@ -94,7 +94,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, now: i64) {
         Line::raw(""),
     ];
 
-    if let Some(act) = app.jobs.job_activity(job)
+    if let Some(act) = app.engine.jobs.job_activity(job)
         && !act.todos.is_empty()
     {
         out.push(Line::from(label(t, "todos")));

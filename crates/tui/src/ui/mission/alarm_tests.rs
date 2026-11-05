@@ -185,7 +185,7 @@ fn the_target_can_be_picked_from_a_rotated_list_and_esc_keeps_the_call_held() {
     t.keys([KeyCode::Esc]);
     assert_eq!(t.app.mode, Mode::Normal);
     assert!(allowed(&t).is_empty(), "esc keeps it held");
-    assert!(t.app.guard.pending_count() >= 2);
+    assert!(t.app.engine.guard.pending_count() >= 2);
 
     t.keys([KeyCode::Char('y')]);
     t.clock.advance(1_500);

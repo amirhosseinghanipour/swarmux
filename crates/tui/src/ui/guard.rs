@@ -25,7 +25,7 @@ const BAR: usize = 10;
 /// Whether JEV is on, and how to turn it on when it isn't.
 pub(crate) fn jev_line(app: &App, t: &Theme) -> Line<'static> {
     let muted = Style::new().fg(t.muted);
-    let Some(jev) = app.guard.jev() else {
+    let Some(jev) = app.engine.guard.jev() else {
         return Line::styled(
             "JEV off · bring your own key: swarmux jev set-key typesafe",
             muted,
@@ -48,7 +48,7 @@ pub(crate) fn jev_line(app: &App, t: &Theme) -> Line<'static> {
             muted,
         ),
         JevState::On => {
-            let deciding = match app.guard.consulting_count() {
+            let deciding = match app.engine.guard.consulting_count() {
                 0 => String::new(),
                 n => format!(" · deciding {n}"),
             };
@@ -58,7 +58,7 @@ pub(crate) fn jev_line(app: &App, t: &Theme) -> Line<'static> {
                     format!(
                         " · threshold {:.2} · {} decisions{deciding}",
                         jev.threshold(),
-                        app.guard.stats().jev
+                        app.engine.guard.stats().jev
                     ),
                     muted,
                 ),
@@ -155,7 +155,7 @@ pub fn render_approval_bar(frame: &mut Frame, area: Rect, app: &App) {
         return;
     };
     let r = &first.request;
-    let more = match app.guard.pending_count() {
+    let more = match app.engine.guard.pending_count() {
         0 | 1 => String::new(),
         n => format!(" +{}", n - 1),
     };
@@ -198,7 +198,7 @@ pub fn render_approval_bar(frame: &mut Frame, area: Rect, app: &App) {
 /// The oldest held tool call, its job and how long until it is denied.
 pub fn render_approval(frame: &mut Frame, area: Rect, app: &App) {
     let t = &app.look.theme;
-    let approvals = app.guard.approvals();
+    let approvals = app.engine.guard.approvals();
     let Some(first) = app.approval_target() else {
         return;
     };
@@ -286,7 +286,7 @@ pub fn render_approval(frame: &mut Frame, area: Rect, app: &App) {
 /// What JEV would send and where; `y` agrees, `n` keeps it off this run.
 pub fn render_consent(frame: &mut Frame, area: Rect, app: &App) {
     let t = &app.look.theme;
-    let Some(jev) = app.guard.jev() else {
+    let Some(jev) = app.engine.guard.jev() else {
         return;
     };
     let mut lines: Vec<Line> = jev.disclosure().into_iter().map(Line::raw).collect();
@@ -381,7 +381,7 @@ mod tests {
         t.app.update();
         t.keys([KeyCode::Char('y')]);
         assert_eq!(t.inbox.answer_to(id).unwrap().verdict, Verdict::Allow);
-        assert_eq!(t.app.guard.pending_count(), 0);
+        assert_eq!(t.app.engine.guard.pending_count(), 0);
         let out = render_to_string(&t.app, 120, 30);
         assert!(!out.contains("approval needed"), "{out}");
         assert!(!out.contains("approvals"), "{out}");

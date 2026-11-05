@@ -116,7 +116,7 @@ impl App {
         let request = c.challenge.request;
         let target = c.challenge.target.clone();
         let item = self.mission.alarms().find_request(request).cloned();
-        self.guard.approve(request)?;
+        self.engine.guard.approve(request)?;
         if let Some(item) = &item {
             self.mission
                 .alarms_mut()
@@ -150,7 +150,7 @@ impl App {
         let mut first_error = None;
         let mut done = 0;
         for id in &ids {
-            match self.guard.approve(*id) {
+            match self.engine.guard.approve(*id) {
                 Ok(()) => {
                     done += 1;
                     self.mission.alarms_mut().answered_request(*id, true);
@@ -250,7 +250,7 @@ impl App {
             return Ok(());
         };
         if take {
-            let done = self.guard.allow_rule(&offer.rule)?;
+            let done = self.engine.guard.allow_rule(&offer.rule)?;
             self.notice = Some(match done.not_saved {
                 None => format!("rule saved: {}", done.rule),
                 Some(why) => format!("rule {} for this run; not saved: {why}", done.rule),
@@ -283,7 +283,7 @@ impl App {
             && now - self.last_input <= ENGAGED_WITHIN_MS;
         let engaged = working || matches!(self.mode, Mode::Confirm(_));
         self.load.record(now, engaged);
-        self.jobs.set_supervisor_load(self.load.share(now));
+        self.engine.jobs.set_supervisor_load(self.load.share(now));
         if now - self.last_input >= IDLE_BREAKPOINT_MS && !self.idle_noted {
             self.idle_noted = true;
             self.note_breakpoint(Breakpoint::Idle);

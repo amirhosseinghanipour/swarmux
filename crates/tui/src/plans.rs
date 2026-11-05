@@ -16,7 +16,7 @@ impl App {
     /// The mission whose proposed plan `y`/`n`/`c` answer: the selected
     /// card on the Missions screen, or the selected plan item of the inbox.
     pub(crate) fn plan_target(&self) -> Option<String> {
-        let missions = self.missions.as_ref()?;
+        let missions = self.engine.missions.as_ref()?;
         let slug = match self.screen {
             Screen::Missions if self.missions_screen.composer.is_none() => self
                 .missions()
@@ -40,27 +40,33 @@ impl App {
 
     /// The mission's plan record, when it has one.
     pub fn mission_plan(&self, slug: &str) -> Option<&PlanRecord> {
-        self.missions.as_ref()?.plan(slug)
+        self.engine.missions.as_ref()?.plan(slug)
     }
 
     /// Whether the mission plans first (its own setting, else the default).
     pub fn mission_plans_first(&self, slug: &str) -> bool {
-        self.missions.as_ref().is_some_and(|m| m.plan_first(slug))
+        self.engine
+            .missions
+            .as_ref()
+            .is_some_and(|m| m.plan_first(slug))
     }
 
     /// A planning run is out for the mission.
     pub fn mission_planning(&self, slug: &str) -> bool {
-        self.missions.as_ref().is_some_and(|m| m.planning(slug))
+        self.engine
+            .missions
+            .as_ref()
+            .is_some_and(|m| m.planning(slug))
     }
 
     /// One key each: `y` approve, `n` change (asks for a note), `c` cancel.
     pub(crate) fn plan_key(&mut self, key: char, slug: &str) -> AppResult<()> {
-        let Some(service) = &mut self.missions else {
+        let Some(service) = &mut self.engine.missions else {
             return Ok(());
         };
         match key {
             'y' => {
-                let job = service.approve_plan(slug, &mut self.jobs)?;
+                let job = service.approve_plan(slug, &mut self.engine.jobs)?;
                 self.followed_mission(slug, job)?;
                 self.notice = Some(format!(
                     "plan approved: {slug} is out as job #{job} with the plan in its prompt"
@@ -83,7 +89,7 @@ impl App {
         let Some(slug) = self.missions_screen.note_for.take() else {
             return Ok(());
         };
-        let Some(service) = &mut self.missions else {
+        let Some(service) = &mut self.engine.missions else {
             return Ok(());
         };
         service.reject_plan(&slug, note)?;
@@ -93,7 +99,7 @@ impl App {
 
     /// `p` on the Missions screen: plan before building, or not.
     pub(crate) fn toggle_plan_first(&mut self, slug: &str) -> AppResult<()> {
-        let Some(service) = &mut self.missions else {
+        let Some(service) = &mut self.engine.missions else {
             return Ok(());
         };
         let on = !service.plan_first(slug);

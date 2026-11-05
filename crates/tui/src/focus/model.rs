@@ -174,6 +174,7 @@ impl Focus {
             .and_then(|id| app.sessions.iter().find(|s| s.id == id))
             .or_else(|| app.sessions.iter().find(|s| s.name == job.session_name));
         let held = app
+            .engine
             .guard
             .approvals()
             .into_iter()
@@ -181,6 +182,7 @@ impl Focus {
             .map(|a| format!("{} {}", a.request.tool_name, a.request.subject));
         let gate = app.mission.gates.get(&job.job_id);
         let todos: Vec<Todo> = app
+            .engine
             .jobs
             .job_activity(job.job_id)
             .map(|a| a.todos.clone())
