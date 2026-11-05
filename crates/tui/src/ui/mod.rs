@@ -2,6 +2,7 @@
 //! editor's scroll offset and the animation state (tweens and pulses).
 
 pub mod anim;
+pub mod board;
 pub mod confirm;
 pub mod constellation;
 pub mod dashboard;
@@ -96,6 +97,7 @@ fn draw_screens(frame: &mut Frame, app: &App, t: &Theme) {
         Screen::Queue => queue::render(frame, body, app),
         Screen::Ledger => ledger::render(frame, body, app),
         Screen::Sessions => sessions::render(frame, body, app),
+        Screen::Board => board::render(frame, body, app),
     }
     if app.guard.jev().is_some_and(|j| j.wants_consent()) {
         let h = guard::CONSENT_HEIGHT.min(body.height);
@@ -319,6 +321,10 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App, t: &Theme) {
                         .unwrap_or("?")
                 ),
                 InputPurpose::PlanNote => "what should the plan change?".to_string(),
+                InputPurpose::BoardAnswer => format!(
+                    "answer · {}",
+                    app.answering_question().unwrap_or_else(|| "—".into())
+                ),
                 InputPurpose::Search => "search".to_string(),
             };
             let keys = if *purpose == InputPurpose::Search {
@@ -410,9 +416,10 @@ pub(crate) fn hints(app: &App) -> &'static str {
             " / search · o filter · v verify · l labels · r re-run · f fork · enter view · ↑↓ select · q quit"
         }
         Screen::Prompts => {
-            " n new · e edit · x delete · d dispatch · D route · ↑↓ select · 0-6 screens · q quit"
+            " n new · e edit · x delete · d dispatch · D route · ↑↓ select · 0-7 screens · q quit"
         }
-        Screen::Sessions => " n new session · l lean on/off · ↑↓ select · 0-6 screens · q quit",
+        Screen::Sessions => " n new session · l lean on/off · ↑↓ select · 0-7 screens · q quit",
+        Screen::Board => " ↑↓ select · r answer a question · x close it · 0-7 screens · q quit",
     }
 }
 
