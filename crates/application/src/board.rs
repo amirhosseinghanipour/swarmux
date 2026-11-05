@@ -562,4 +562,6 @@ fn claims_as_held(
 }
 
 #[cfg(test)]
+mod ab;
+#[cfg(test)]
 mod tests;
