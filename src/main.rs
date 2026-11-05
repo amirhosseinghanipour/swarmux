@@ -55,6 +55,10 @@ struct Cli {
     /// A built-in theme for the demo (see `swarmux theme list`).
     #[arg(long, requires = "demo", value_name = "NAME")]
     theme: Option<String>,
+    /// Write the demo's key moments as JSON frames into DIR instead of
+    /// playing it (for the website and README images).
+    #[arg(long, requires = "demo", value_name = "DIR")]
+    snapshot: Option<std::path::PathBuf>,
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -368,10 +372,21 @@ fn main() -> anyhow::Result<ExitCode> {
             WorktreeAction::Checkpoints { job, n } => worktree::checkpoints(job, n),
             WorktreeAction::Mode { session, mode } => worktree::mode(&session, mode),
         },
-        None if cli.demo => demo::run(&demo::Options {
-            theme: cli.theme,
-            ..demo::Options::default()
-        }),
+        None if cli.demo => {
+            let options = demo::Options {
+                theme: cli.theme,
+                ..demo::Options::default()
+            };
+            match cli.snapshot {
+                Some(dir) => {
+                    for name in demo::snapshot::write(&options, &dir)? {
+                        println!("{}", dir.join(format!("{name}.json")).display());
+                    }
+                    Ok(())
+                }
+                None => demo::run(&options),
+            }
+        }
         None => run_tui(cli.no_splash),
         Some(Command::Doctor) => doctor::run(),
         Some(Command::Fetch { theme, color }) => fetch::run(theme.as_deref(), &color),

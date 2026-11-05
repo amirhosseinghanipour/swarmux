@@ -33,6 +33,11 @@ install: it does not start `claude`, and it keeps its data in a temporary
 folder that is deleted when you quit. Your `~/.swarmux` folder, your config and
 Claude Code's settings are not read or changed.
 
+`swarmux --demo --snapshot DIR` plays the same script without a terminal and
+writes its key moments into `DIR` as JSON frames (rows of styled text, colours
+as hex), one file per moment. Add `--theme NAME` for another theme. The website
+and the README images are made from these files.
+
 `swarmux --demo --theme NAME` picks one of the built-in themes (see
 `swarmux theme list`). The GIF and theme strip in this repository come from the
 VHS tapes in `assets/tapes/`.

@@ -8,6 +8,7 @@
 
 mod director;
 mod script;
+pub mod snapshot;
 
 use std::path::PathBuf;
 use std::rc::Rc;

@@ -2346,6 +2346,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "ratatui",
  "rpassword",
  "serde_json",
  "swarmux-application",
@@ -2354,6 +2355,7 @@ dependencies = [
  "swarmux-tui",
  "tempfile",
  "tokio",
+ "unicode-width",
 ]
 
 [[package]]
