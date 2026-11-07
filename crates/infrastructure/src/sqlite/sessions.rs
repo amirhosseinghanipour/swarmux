@@ -3,13 +3,13 @@ use std::path::PathBuf;
 use rusqlite::{OptionalExtension, Row, params};
 use swarmux_application::AppResult;
 use swarmux_application::ports::SessionRepository;
-use swarmux_domain::{Millis, Session, SessionId};
+use swarmux_domain::{Millis, Session, SessionId, WorkspaceId};
 use uuid::Uuid;
 
 use super::{OrStorage, SqliteStore};
 
-const COLS: &str =
-    "id, name, cwd, model, permission_mode, created_at, last_used_at, archived, lean, worktree";
+const COLS: &str = "id, name, cwd, model, permission_mode, created_at, last_used_at, archived, \
+                    lean, worktree, workspace_id";
 
 /// Reads a session id stored as text in column `idx`.
 pub(crate) fn session_id_at(r: &Row, idx: usize) -> rusqlite::Result<SessionId> {
@@ -32,6 +32,10 @@ fn from_row(r: &Row) -> rusqlite::Result<Session> {
         archived: r.get(7)?,
         lean: r.get(8)?,
         worktree: r.get(9)?,
+        workspace: r
+            .get::<_, Option<String>>(10)?
+            .as_deref()
+            .and_then(WorkspaceId::parse),
     })
 }
 
@@ -40,7 +44,8 @@ impl SessionRepository for SqliteStore {
         self.conn
             .execute(
                 &format!(
-                    "INSERT INTO sessions ({COLS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)"
+                    "INSERT INTO sessions ({COLS})
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"
                 ),
                 params![
                     s.id.to_string(),
@@ -52,7 +57,8 @@ impl SessionRepository for SqliteStore {
                     s.last_used_at,
                     s.archived,
                     s.lean,
-                    s.worktree
+                    s.worktree,
+                    s.workspace.map(|w| w.to_string())
                 ],
             )
             .or_storage()?;
