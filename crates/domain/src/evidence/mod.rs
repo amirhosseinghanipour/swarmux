@@ -1,4 +1,4 @@
-//! Evidence bundles: the receipt of a delivered mission.
+//! Evidence bundles: the verifiable record of a delivered mission.
 //!
 //! A bundle names the contract, the commit the work ended at, what the
 //! gate said and which checks ran, what the diff looked like, what it
@@ -159,7 +159,7 @@ pub struct Signature {
     pub value: String,
 }
 
-/// The receipt of one delivered mission.
+/// The verifiable record of one delivered mission.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Bundle {
     pub schema: u32,

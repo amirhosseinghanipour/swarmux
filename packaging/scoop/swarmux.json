@@ -1,6 +1,6 @@
 {
     "version": "<VERSION>",
-    "description": "The operations center for one-person, agent-run companies. Built on Claude Code.",
+    "description": "The control plane for autonomous AI agents: independent verification, policy, budgets and a tamper-evident record. Starts with Claude Code.",
     "homepage": "https://github.com/amirhosseinghanipour/swarmux",
     "license": "MIT",
     "architecture": {

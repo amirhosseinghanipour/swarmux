@@ -42,7 +42,7 @@ use swarmux_tui::{App, Launch};
 /// Claude Code may run the hook this much longer than an approval can wait.
 const HOOK_GRACE_SECS: u64 = 10;
 
-/// Autonomy with receipts. The operations center for agent-run work, built on Claude Code.
+/// Autonomy you can verify. The control plane for autonomous AI agents.
 #[derive(Parser)]
 #[command(version, about)]
 struct Cli {

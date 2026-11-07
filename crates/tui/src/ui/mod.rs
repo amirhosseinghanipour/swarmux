@@ -81,7 +81,7 @@ fn draw_screens(frame: &mut Frame, app: &App, t: &Theme) {
                 "SWARMUX",
                 Style::new().fg(t.title).add_modifier(Modifier::BOLD),
             ),
-            Span::styled("  ·  claude code command center", Style::new().fg(t.lead)),
+            Span::styled("  ·  verified autonomy", Style::new().fg(t.lead)),
         ])
         .centered()
     };

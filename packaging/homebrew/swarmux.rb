@@ -2,7 +2,7 @@
 # Formula/swarmux.rb). Fill in the placeholders for a release; see
 # RELEASING.md. Users then run: brew install amirhosseinghanipour/swarmux/swarmux
 class Swarmux < Formula
-  desc "Operations center for one-person, agent-run companies, built on Claude Code"
+  desc "Control plane for autonomous AI agents, starting with Claude Code"
   homepage "https://github.com/amirhosseinghanipour/swarmux"
   version "<VERSION>"
   license "MIT"

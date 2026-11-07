@@ -7,9 +7,9 @@
 |___/  \_/\_/   \__,_||_|   |_| |_| |_| \__,_|/_/\_\
 ```
 
-**Autonomy with receipts.**
+**Autonomy you can verify.**
 
-*The operations center for one-person, agent-run companies. Built on Claude Code.*
+*The control plane for autonomous AI agents.*
 
 </div>
 
@@ -20,6 +20,10 @@
 
   Caption: scripted demo · `swarmux --demo`
 -->
+
+swarmux runs AI agents unattended and holds their work to account: independent
+verification before anything counts as done, policy on every action, budgets
+that hold, and a tamper-evident record of all of it. It starts with Claude Code.
 
 - **Proves "done".** Gates swarmux runs itself, hidden checks the agent never
   sees, and evidence bundles you can re-check with `swarmux verify`.
@@ -51,9 +55,10 @@ uninstalling.
 Native Windows · Linux · macOS · one Rust binary · no tmux · no Electron · no
 login · no telemetry · MIT
 
-## Works with Claude Code
+## Starts with Claude Code
 
-swarmux is built on what Claude Code already offers: hooks, the status line and
+Claude Code is the first agent runtime swarmux supports; support for other
+runtimes is on the roadmap. swarmux uses what Claude Code already offers: hooks, the status line and
 `stream-json` output. Each job gets its Guard hooks through `--settings` on its
 own `claude` command line, so swarmux never changes your Claude Code settings
 files. To show swarmux in a session you start yourself, `swarmux statusline
@@ -109,7 +114,7 @@ From a checkout, use `cargo run` and `cargo run -- doctor`. See
 - **Ledger screen**: every run as a card with its outcome, evidence, cost,
   model mix and what became of it (merged, reverted); a digest of what
   happened while you were away; re-run, fork, search or verify from any card
-- **Evidence bundles**: every delivered mission leaves a JSON receipt that
+- **Evidence bundles**: every delivered mission leaves a verifiable JSON record that
   `swarmux verify` re-checks at the head commit in a clean checkout
 - **Audit ledger**: a tamper-evident, hash-chained record of every job,
   agent event, review and guard decision

@@ -46,7 +46,7 @@ follows [Semantic Versioning](https://semver.org/).
 - Independent verifier: checks run in a clean copy of the work, followed by
   hidden checks the agent never sees (`swarmux holdout`). Edited or disabled
   tests block the stop. A risk-gated reviewer audits the diff.
-- Evidence bundles: every delivered mission leaves a JSON receipt, and
+- Evidence bundles: every delivered mission leaves a verifiable JSON record, and
   `swarmux verify` re-checks it at its head commit in a clean checkout.
 - Ledger screen with a card per run, a digest of what happened while you were
   away, `swarmux brief`, and `swarmux labels` for what became of each branch

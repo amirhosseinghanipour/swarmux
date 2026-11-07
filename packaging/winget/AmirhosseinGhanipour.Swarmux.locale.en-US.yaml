@@ -7,7 +7,7 @@ PackageName: swarmux
 PackageUrl: https://github.com/amirhosseinghanipour/swarmux
 License: MIT
 LicenseUrl: https://github.com/amirhosseinghanipour/swarmux/blob/main/LICENSE
-ShortDescription: The operations center for one-person, agent-run companies. Built on Claude Code.
+ShortDescription: The control plane for autonomous AI agents. Starts with Claude Code.
 Moniker: swarmux
 Tags:
   - claude
