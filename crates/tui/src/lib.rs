@@ -8,6 +8,7 @@ mod board;
 mod dashboard;
 pub mod fetch;
 mod focus;
+mod followups;
 mod inbox;
 mod knowledge;
 mod ledger;

@@ -8,6 +8,7 @@ pub mod constellation;
 pub mod dashboard;
 pub mod editor;
 pub mod focus;
+pub mod followups;
 pub mod grid;
 pub mod guard;
 pub mod input;
@@ -100,6 +101,7 @@ fn draw_screens(frame: &mut Frame, app: &App, t: &Theme) {
         Screen::Sessions => sessions::render(frame, body, app),
         Screen::Board => board::render(frame, body, app),
         Screen::Knowledge => knowledge::render(frame, body, app),
+        Screen::Followups => followups::render(frame, body, app),
     }
     if app.engine.guard.jev().is_some_and(|j| j.wants_consent()) {
         let h = guard::CONSENT_HEIGHT.min(body.height);
@@ -445,14 +447,17 @@ pub(crate) fn hints(app: &App) -> &'static str {
             " / search · o filter · v verify · l labels · r re-run · f fork · enter view · ↑↓ select · q quit"
         }
         Screen::Prompts => {
-            " n new · e edit · x delete · d dispatch · D route · ↑↓ select · 0-8 screens · q quit"
+            " n new · e edit · x delete · d dispatch · D route · ↑↓ select · 0-9 screens · q quit"
         }
         Screen::Sessions => {
-            " n new session · w on a workspace · l lean on/off · ↑↓ select · 0-8 screens · q quit"
+            " n new session · w on a workspace · l lean on/off · ↑↓ select · 0-9 screens · q quit"
         }
-        Screen::Board => " ↑↓ select · r answer a question · x close it · 0-8 screens · q quit",
+        Screen::Board => " ↑↓ select · r answer a question · x close it · 0-9 screens · q quit",
         Screen::Knowledge => {
-            " ↑↓ select · a add (kind: text) · e edit · p promote · c confirm · x retire · 0-8 screens · q quit"
+            " ↑↓ select · a add (kind: text) · e edit · p promote · c confirm · x retire · 0-9 screens · q quit"
+        }
+        Screen::Followups => {
+            " ↑↓ select · a approve · d decline · l later · o open job · m draft mission · 0-9 screens · q quit"
         }
     }
 }

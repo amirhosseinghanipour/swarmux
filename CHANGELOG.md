@@ -8,6 +8,27 @@ follows [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Follow-through: what agents notice, ask or suggest is collected instead of
+  dying in their last message. The Board's `schedule_followup` (with its
+  `after_minutes` delay now honoured) and `ask_human` become follow-ups, and
+  one cheap Haiku call per finished job (`[followups] extract`, cost in the
+  ledger) lists the questions, decisions, suggested tasks, risks and
+  blockers in its final message. Repeats across jobs and repositories are
+  merged. Nothing is decided by a model: your standing orders
+  (`[[followups.order]]`: kinds, repos, path globs, keywords, a cost limit;
+  `auto-approve`, `always-ask` or `park`) decide, never for decisions, risks,
+  blockers, urgent items or protected paths unless you say `allow_risky`
+  (and never protected paths), and every automatic decision is in the ledger.
+- The owner brief: three times a day (`brief_times`, default 09:00, 13:00,
+  18:00) and on demand (`swarmux brief`, `swarmux followup brief`), as
+  decision cards with why, where from and a reason you might say no.
+  Only urgent items (a P1 risk, a blocker on running work) reach Mission
+  control's inbox. Answer with one key on the new Follow-ups screen (`9`:
+  `a` approve, `d` decline, `l` later, `o` open the job, `m` draft a mission)
+  or `swarmux followup approve|decline|defer <id>`. Approved follow-ups are
+  kept as intents; replies and brief delivery sit behind ports so a chat
+  adapter can be added. A rubber-stamp guard asks for one spot check when
+  you approve 95% or more of a kind over at least 20 decisions (schema v21).
 - Knowledge: rules, facts and decisions per workspace (or repository), each
   with a why, a scope (repositories, path globs, task classes), anchors with
   content hashes, a status (proposed, shadow, enforced, advisory, stale,

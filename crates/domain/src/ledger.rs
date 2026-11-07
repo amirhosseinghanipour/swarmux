@@ -74,13 +74,15 @@ pub enum LedgerKind {
     Watchdog,
     /// The checks were run again against the original tests.
     BaseSuite,
+    /// A follow-up was found or decided, or an owner brief was sent.
+    Followup,
     /// A knowledge item changed, was delivered to an agent, or a rule
     /// acted (or would have, in shadow).
     Knowledge,
 }
 
 impl LedgerKind {
-    pub const ALL: [LedgerKind; 17] = [
+    pub const ALL: [LedgerKind; 18] = [
         LedgerKind::Genesis,
         LedgerKind::JobQueued,
         LedgerKind::JobStarted,
@@ -97,6 +99,7 @@ impl LedgerKind {
         LedgerKind::Evidence,
         LedgerKind::Watchdog,
         LedgerKind::BaseSuite,
+        LedgerKind::Followup,
         LedgerKind::Knowledge,
     ];
 
@@ -119,6 +122,7 @@ impl LedgerKind {
             LedgerKind::Evidence => "evidence",
             LedgerKind::Watchdog => "watchdog",
             LedgerKind::BaseSuite => "base_suite",
+            LedgerKind::Followup => "followup",
             LedgerKind::Knowledge => "knowledge",
         }
     }
@@ -494,6 +498,7 @@ mod tests {
                 "evidence",
                 "watchdog",
                 "base_suite",
+                "followup",
                 "knowledge",
             ]
         );

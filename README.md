@@ -76,7 +76,7 @@ Twelve built-in themes, plus `wal`, base16 and matugen imports. List them with
 
 ```sh
 swarmux --demo         # a scripted demo: no Claude Code, no account, nothing of yours is touched
-swarmux                # the TUI: 1-8 switch screens (1 Mission control, 2 Missions, 7 Board, 8 Knowledge), 0 Focus, p sends a prompt, q detaches
+swarmux                # the TUI: 1-9 switch screens (1 Mission control, 2 Missions, 7 Board, 8 Knowledge, 9 Follow-ups), 0 Focus, p sends a prompt, q detaches
 swarmux workspace add ~/product  # a folder of several git repositories, worked on as one
 swarmux daemon status  # the background service that keeps the work going with no window open
 swarmux doctor         # checks Claude Code, the settings, the Guard hook and telemetry
@@ -154,6 +154,7 @@ Single Rust binary. Windows, macOS, Linux. Works with Claude Code only.
 - [Mission control](guide/mission-control.md) and the [inbox](guide/mission-control.md#the-inbox-as-an-alarm-panel)
 - [Missions](guide/missions.md)
 - [The Board: shared state between a mission's agents](guide/board.md)
+- [Follow-through: what your agents leave behind, brought to you three times a day](guide/follow-through.md)
 - [Ledger and evidence bundles](guide/ledger-and-evidence.md)
 - [Focus and the classic dashboard](guide/focus.md)
 - [Themes and layouts](guide/themes.md)

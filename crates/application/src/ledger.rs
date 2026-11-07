@@ -253,6 +253,76 @@ impl LedgerService {
         self.append_entry(now, LedgerKind::Evidence, SWARMUX, job, None, payload)
     }
 
+    /// Something happened to a follow-up: `found`, `merged`, `approved`,
+    /// `auto-approved`, `declined`, `deferred`, `due` or `spot_check`.
+    /// `by` is `owner`, `order:<id>` or `swarmux`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_followup(
+        &self,
+        event: &str,
+        id: i64,
+        kind: &str,
+        by: &str,
+        detail: &str,
+        job: Option<JobId>,
+        cost_usd: f64,
+    ) -> AppResult<()> {
+        let payload = Payload::new()
+            .str("event", event)
+            .int("followup", id)
+            .str("kind", kind)
+            .str("by", by)
+            .text("detail", detail)
+            .num("cost_usd", cost_usd);
+        self.append(
+            self.clock.now(),
+            LedgerKind::Followup,
+            SWARMUX,
+            job,
+            None,
+            payload,
+        )
+    }
+
+    /// The small-model call that listed a finished job's follow-ups, and
+    /// what it cost.
+    pub fn record_followup_extraction(
+        &self,
+        job: JobId,
+        detail: &str,
+        cost_usd: f64,
+    ) -> AppResult<()> {
+        let payload = Payload::new()
+            .str("event", "extract")
+            .text("detail", detail)
+            .num("cost_usd", cost_usd);
+        self.append(
+            self.clock.now(),
+            LedgerKind::Followup,
+            SWARMUX,
+            Some(job),
+            None,
+            payload,
+        )
+    }
+
+    /// An owner brief was sent.
+    pub fn record_brief(&self, cards: usize, finished: usize, met: usize) -> AppResult<()> {
+        let payload = Payload::new()
+            .str("event", "brief")
+            .int("cards", i64::try_from(cards).unwrap_or(i64::MAX))
+            .int("finished", i64::try_from(finished).unwrap_or(i64::MAX))
+            .int("met_checks", i64::try_from(met).unwrap_or(i64::MAX));
+        self.append(
+            self.clock.now(),
+            LedgerKind::Followup,
+            SWARMUX,
+            None,
+            None,
+            payload,
+        )
+    }
+
     /// An outcome label attached to a delivered mission.
     pub fn record_label(
         &self,

@@ -190,6 +190,7 @@ pub(crate) fn ntfy_push(n: &Notification) -> Push {
         AttentionKind::Drift => "a build strayed from its plan",
         AttentionKind::Merge => "a task of a mission can't merge",
         AttentionKind::BoardQuestion => "an agent has a question for you",
+        AttentionKind::FollowUp => "a follow-up needs you",
         AttentionKind::Knowledge => "project knowledge went stale",
     };
     let (priority, tag) = match n.priority {

@@ -10,6 +10,7 @@ use swarmux_domain::{
     ReviewState, Session, SessionId,
 };
 
+use crate::followup::{FollowStore, Intent, IntentStore};
 use crate::ledger::Ledger;
 use crate::ports::{
     Advice, AdviceAnswer, AdviceError, AdviceReply, AdviceRequest, AdviceSink, AgentCatalog,
@@ -19,6 +20,7 @@ use crate::ports::{
     SessionRepository, StoredEvent, SystemMonitor, TelemetryFeed, TelemetryStore, Workspace,
 };
 use crate::{AppError, AppResult, DecisionRecord, JobSummary, TelemetrySnapshot};
+use swarmux_domain::followup::FollowUp;
 use swarmux_domain::ledger::{LedgerDraft, LedgerEntry};
 use swarmux_domain::telemetry::{Environment, RateLimit};
 
@@ -1862,5 +1864,63 @@ impl FakeAnchors {
 impl crate::knowledge::AnchorReader for FakeAnchors {
     fn read(&self, _root: &std::path::Path, rel: &str) -> Option<String> {
         self.0.borrow().get(rel).cloned()
+    }
+}
+
+/// Follow-ups, intents and follow-through state in memory.
+#[derive(Default)]
+#[allow(missing_docs)]
+pub struct InMemoryFollowups {
+    items: RefCell<Vec<FollowUp>>,
+    state: RefCell<HashMap<String, i64>>,
+    intents: RefCell<Vec<Intent>>,
+}
+
+impl FollowStore for InMemoryFollowups {
+    fn insert(&self, f: &FollowUp) -> AppResult<i64> {
+        let mut v = self.items.borrow_mut();
+        let mut f = f.clone();
+        f.id = v.len() as i64 + 1;
+        v.push(f.clone());
+        Ok(f.id)
+    }
+    fn update(&self, f: &FollowUp) -> AppResult<()> {
+        let mut v = self.items.borrow_mut();
+        if let Some(x) = v.iter_mut().find(|x| x.id == f.id) {
+            *x = f.clone();
+        }
+        Ok(())
+    }
+    fn get(&self, id: i64) -> AppResult<Option<FollowUp>> {
+        Ok(self.items.borrow().iter().find(|f| f.id == id).cloned())
+    }
+    fn all(&self) -> AppResult<Vec<FollowUp>> {
+        Ok(self.items.borrow().clone())
+    }
+    fn state(&self, key: &str) -> AppResult<Option<i64>> {
+        Ok(self.state.borrow().get(key).copied())
+    }
+    fn set_state(&self, key: &str, value: i64) -> AppResult<()> {
+        self.state.borrow_mut().insert(key.into(), value);
+        Ok(())
+    }
+}
+
+impl IntentStore for InMemoryFollowups {
+    fn add(&self, i: &Intent) -> AppResult<i64> {
+        let mut v = self.intents.borrow_mut();
+        let mut i = i.clone();
+        i.id = v.len() as i64 + 1;
+        v.push(i.clone());
+        Ok(i.id)
+    }
+    fn list(&self) -> AppResult<Vec<Intent>> {
+        Ok(self.intents.borrow().clone())
+    }
+    fn mark_mission(&self, id: i64, slug: &str) -> AppResult<()> {
+        if let Some(i) = self.intents.borrow_mut().iter_mut().find(|i| i.id == id) {
+            i.mission = Some(slug.into());
+        }
+        Ok(())
     }
 }

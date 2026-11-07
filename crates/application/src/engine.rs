@@ -39,6 +39,8 @@ pub struct Engine {
     pub board: Option<(Rc<BoardService>, Rc<dyn BoardInbox>)>,
     /// Rules, facts and decisions, and what reached the agents.
     pub knowledge: Option<Rc<KnowledgeService>>,
+    /// Follow-ups agents leave behind, standing orders and the owner brief.
+    pub followups: Option<Rc<crate::followup::FollowUpService>>,
 }
 
 /// What one [`Engine::pump`] did.
@@ -71,6 +73,7 @@ impl Engine {
             missions: None,
             board: None,
             knowledge: None,
+            followups: None,
         }
     }
 
@@ -152,6 +155,24 @@ impl Engine {
             errors,
             graphs_changed: graphs.changed,
         }
+    }
+
+    /// Collects follow-ups from the boards and the jobs that ended, applies
+    /// the standing orders and sends the owner brief when it is due.
+    pub fn pump_followups(
+        &self,
+        facts: &[JobFact],
+        gates: &HashMap<JobId, GateState>,
+    ) -> crate::followup::FollowPump {
+        let Some(service) = &self.followups else {
+            return crate::followup::FollowPump::default();
+        };
+        let board = self
+            .board
+            .as_ref()
+            .map(|(b, _)| b.board().entries())
+            .unwrap_or_default();
+        service.pump(facts, gates, &board)
     }
 
     /// Jobs running and queued now.

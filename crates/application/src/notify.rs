@@ -201,6 +201,16 @@ impl NotifyService {
         }
     }
 
+    /// Sends a scheduled notice (the owner brief) now: it is the owner's own
+    /// schedule, so focus and quiet hours don't hold it back. The kill
+    /// switch still does.
+    pub fn announce(&mut self, note: &Notification) -> Vec<AppError> {
+        if !self.settings.enabled {
+            return Vec::new();
+        }
+        self.notifier.notify(note).err().into_iter().collect()
+    }
+
     /// Looks at the items that are due (the inbox after deferral) and sends
     /// what is new and allowed. Returns delivery errors for the caller to show.
     pub fn observe(
