@@ -11,6 +11,10 @@ committed by swarmux. Outside a git repository nothing changes: the job runs
 in the session's folder. A session can be set to `on`, `off` or `auto` (the
 default: on inside a repository).
 
+A job of a [workspace](workspaces.md) session gets a worktree set instead:
+one worktree per repository it touches, under a task folder laid out like
+the workspace.
+
 When the done-gate passes, and before Claude Code compacts its context,
 swarmux takes a checkpoint: the Claude session id, a commit holding the
 worktree's files, the ledger entry that records it, and a handoff (goal,

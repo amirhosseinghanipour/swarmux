@@ -22,6 +22,10 @@ wall_minutes = 90
 on_exhaust = "escalate"   # or "warn"
 ```
 
+A mission of a [workspace](workspaces.md) names the repositories it
+touches (`repos = [...]`), runs checks in each (`"app: flutter test"`) and
+lands in every one of them, or in none.
+
 Saving a mission lints it at once: no checks (it can't run), checks whose
 tests or scripts the agent could edit (`f` protects them), paths both
 writable and protected, a goal too short to act on, no budget, no scope. One
