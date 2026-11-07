@@ -110,6 +110,7 @@ impl Rerunner {
                     program: c.program.clone(),
                     args: c.args.clone(),
                     timeout_secs: c.timeout_secs,
+                    dir: None,
                 };
                 let run = run_checks(&*self.checker, &[check], checkout.path())
                     .into_iter()

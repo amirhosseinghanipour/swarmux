@@ -71,6 +71,11 @@ pub trait MergeQueue {
     /// Moves the branch checked out at `worktree` forward to `branch`;
     /// fails unless that is a fast-forward.
     fn fast_forward(&self, worktree: &Path, branch: &str) -> AppResult<()>;
+    /// The commit the branch checked out at `workdir` is at.
+    fn head(&self, workdir: &Path) -> AppResult<String>;
+    /// Puts the branch checked out at `workdir` (one of swarmux's own)
+    /// back to `commit`, undoing merges made since.
+    fn reset(&self, workdir: &Path, commit: &str) -> AppResult<()>;
 }
 
 /// A task's claim on the files its plan named.
@@ -179,8 +184,8 @@ impl WriteFence for ScopeClaims {
 /// What task graphs need, held by the mission service.
 #[derive(Default)]
 pub(super) struct GraphState {
-    merge: Option<Rc<dyn MergeQueue>>,
-    worktrees: Option<Rc<WorktreeService>>,
+    pub(super) merge: Option<Rc<dyn MergeQueue>>,
+    pub(super) worktrees: Option<Rc<WorktreeService>>,
     claims: Option<Arc<ScopeClaims>>,
 }
 
@@ -233,6 +238,11 @@ impl MissionService {
         let (Some(deps), true) = (self.deps(), self.plans.settings.parallel) else {
             return Topology::Single;
         };
+        // A workspace mission builds in one worktree set; graphs across
+        // repositories are not built yet.
+        if self.get(slug).is_some_and(|m| m.workspace.is_some()) {
+            return Topology::Single;
+        }
         let session = self
             .get(slug)
             .and_then(|m| m.session)

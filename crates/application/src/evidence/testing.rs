@@ -348,6 +348,7 @@ impl EvidenceRig {
                 ..Budget::default()
             },
             clarifications: Vec::new(),
+            repos: Vec::new(),
         }
     }
 

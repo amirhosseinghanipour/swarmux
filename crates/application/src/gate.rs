@@ -202,6 +202,11 @@ impl Work<'_> {
             problem,
             ..Checked::default()
         };
+        // Checks of a workspace's repositories run in the task folder: one
+        // clean copy of one repository can't hold them.
+        if spec.checks.iter().any(|c| c.dir.is_some()) {
+            return in_place(None);
+        }
         let Some(verifier) = self.verifier.filter(|_| spec.verifier.clean) else {
             return in_place(None);
         };
