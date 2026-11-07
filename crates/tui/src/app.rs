@@ -62,10 +62,12 @@ pub enum Screen {
     Board,
     /// Rules, facts and decisions kept for the agents.
     Knowledge,
+    /// What agents left behind, as decision cards.
+    Followups,
 }
 
 impl Screen {
-    pub const ALL: [Screen; 9] = [
+    pub const ALL: [Screen; 10] = [
         Screen::Mission,
         Screen::Missions,
         Screen::Prompts,
@@ -75,6 +77,7 @@ impl Screen {
         Screen::Dashboard,
         Screen::Board,
         Screen::Knowledge,
+        Screen::Followups,
     ];
 
     pub fn title(self) -> &'static str {
@@ -88,6 +91,7 @@ impl Screen {
             Screen::Sessions => "sessions",
             Screen::Board => "board",
             Screen::Knowledge => "knowledge",
+            Screen::Followups => "follow-ups",
         }
     }
 
@@ -103,6 +107,7 @@ impl Screen {
             Screen::Dashboard => '0',
             Screen::Board => '7',
             Screen::Knowledge => '8',
+            Screen::Followups => '9',
         }
     }
 
@@ -178,6 +183,8 @@ pub struct App {
     pub board_screen: crate::board::BoardScreen,
     /// The Knowledge screen's selection.
     pub knowledge_screen: crate::knowledge::KnowledgeScreen,
+    /// The Follow-ups screen: cards, approved intents and the brief preview.
+    pub followup_screen: crate::followups::FollowScreen,
     /// Jobs, the Guard, hooks, the gate, the watchdog, missions and the
     /// board: the services that keep the work going.
     pub(crate) engine: Engine,
@@ -220,7 +227,7 @@ pub struct App {
     /// The idle breakpoint has been noted since the last key.
     pub(crate) idle_noted: bool,
     /// Tells the user about new P1/P2 items while the window is away.
-    notifier: Option<NotifyService>,
+    pub(crate) notifier: Option<NotifyService>,
     /// Whether the terminal window has the user's attention.
     window: FocusTracker,
     /// The Constellation and Spectrum screens.
@@ -324,6 +331,7 @@ impl App {
             missions_screen: MissionsScreen::default(),
             board_screen: Default::default(),
             knowledge_screen: Default::default(),
+            followup_screen: Default::default(),
             engine: Engine::new(jobs, guard),
             evidence: None,
             away_since: None,
@@ -663,6 +671,7 @@ impl App {
         }
         escalations.extend(self.board_items());
         escalations.extend(self.knowledge_items());
+        escalations.extend(self.followup_items());
         self.mission.refresh(
             (
                 &self.engine.guard,
@@ -688,7 +697,7 @@ impl App {
             .map(|(s, _)| s.as_str())
     }
 
-    fn show_toast(&mut self, text: String) {
+    pub(crate) fn show_toast(&mut self, text: String) {
         self.toast = Some((text, self.frame + self.look.frames(TOAST_MS)));
     }
 
@@ -874,6 +883,7 @@ impl App {
         self.refresh_mission();
         self.tick_inbox();
         self.pump_notifications();
+        self.pump_followups();
         if let Some(e) = self.pump_missions().into_iter().last() {
             self.error = Some(e.to_string());
         }
@@ -1200,6 +1210,9 @@ impl App {
             return;
         }
         if self.board_key(key.code) {
+            return;
+        }
+        if self.followups_key(key.code) {
             return;
         }
         if self.knowledge_key(key.code) {
@@ -1893,7 +1906,7 @@ impl App {
 
     /// Shows `job` on the dashboard, rebuilding it from history if it is
     /// not from this run.
-    fn view(&mut self, job: JobId) -> AppResult<()> {
+    pub(crate) fn view(&mut self, job: JobId) -> AppResult<()> {
         // A review job is shown as part of the job it audits.
         let mut job = self.engine.jobs.subject_of(job);
         let mut told = None;
@@ -2435,7 +2448,7 @@ mod tests {
         assert_eq!(t.app.screen, Screen::Missions);
         press(&mut t.app, KeyCode::Char('0'));
         assert_eq!(t.app.screen, Screen::Dashboard);
-        press(&mut t.app, KeyCode::Char('9'));
+        press(&mut t.app, KeyCode::Char('='));
         assert_eq!(t.app.screen, Screen::Dashboard, "no such screen");
         press(&mut t.app, KeyCode::Char('8'));
         assert_eq!(t.app.screen, Screen::Knowledge);
