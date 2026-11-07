@@ -196,8 +196,9 @@ impl KnowledgeHub {
         if request.subject.is_empty() || !reads_or_writes(&request.tool_name) {
             return None;
         }
-        let path = request.subject.replace('\\', "/");
-        let root = info.root.trim_end_matches('/');
+        let path = unalias(&request.subject.replace('\\', "/"));
+        let root = unalias(info.root.trim_end_matches('/'));
+        let root = root.as_str();
         let looks_absolute = path.starts_with('/') || path.as_bytes().get(1) == Some(&b':');
         if !looks_absolute {
             return Some(path.trim_start_matches("./").to_string());
@@ -413,5 +414,34 @@ impl RuleChecks for KnowledgeHub {
             passed,
             shadow,
         });
+    }
+}
+
+/// `path` with macOS's `/private` prefix dropped from `/var`, `/tmp` and
+/// `/etc`, which are links to `/private/...` there: a tool may report either
+/// form for the same file.
+fn unalias(path: &str) -> String {
+    for dir in ["var", "tmp", "etc"] {
+        let long = format!("/private/{dir}");
+        if path == long || path.starts_with(&format!("{long}/")) {
+            return path["/private".len()..].to_string();
+        }
+    }
+    path.to_string()
+}
+
+#[cfg(test)]
+mod unalias_tests {
+    use super::unalias;
+
+    #[test]
+    fn macos_private_links_are_the_same_folder() {
+        assert_eq!(
+            unalias("/private/var/folders/x/a.sql"),
+            "/var/folders/x/a.sql"
+        );
+        assert_eq!(unalias("/private/tmp"), "/tmp");
+        assert_eq!(unalias("/private/varnish/a"), "/private/varnish/a");
+        assert_eq!(unalias("C:/work/a"), "C:/work/a");
     }
 }
