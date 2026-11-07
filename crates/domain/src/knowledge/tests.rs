@@ -444,6 +444,20 @@ fn pulls_are_path_triggered_deduped_and_capped() {
 }
 
 #[test]
+fn a_guard_rule_is_pulled_where_it_watches() {
+    let mut g = item("R1", Kind::Rule, "Ask before auth changes.");
+    g.enforcer = Some(guard(&["db/auth/**"], None, Action::Ask));
+    let all = vec![g];
+    let j = job(&[], &["work"]);
+    let none = BTreeSet::new();
+    assert_eq!(
+        deliver::pulled(&all, &j, "db/auth/x.sql", false, &none).len(),
+        1
+    );
+    assert!(deliver::pulled(&all, &j, "db/other.sql", false, &none).is_empty());
+}
+
+#[test]
 fn rendering_cleans_quotes_and_tags_its_source() {
     let mut i = item(
         "D4",

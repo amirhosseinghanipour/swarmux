@@ -146,7 +146,11 @@ pub fn pulled<'a>(
     let mut out: Vec<&Item> = items
         .iter()
         .filter(|i| for_job(i, job) && !i.core && !delivered.contains(&i.id))
-        .filter(|i| i.scope.matches_path(rel, fold) || i.anchors.iter().any(|a| same(&a.path)))
+        .filter(|i| {
+            i.scope.matches_path(rel, fold)
+                || guards_path(i, rel, fold)
+                || i.anchors.iter().any(|a| same(&a.path))
+        })
         .collect();
     out.sort_by(|a, b| {
         (a.kind != Kind::Rule)
@@ -154,6 +158,18 @@ pub fn pulled<'a>(
             .then(a.id.cmp(&b.id))
     });
     out
+}
+
+/// Whether `item` is a guard rule watching `rel`: the agent hears of it
+/// before it breaks it.
+fn guards_path(item: &Item, rel: &str, fold: bool) -> bool {
+    match &item.enforcer {
+        Some(super::Enforcer::Guard(g)) => g
+            .paths
+            .iter()
+            .any(|p| crate::guard::glob::glob_match(p, rel, fold)),
+        _ => false,
+    }
 }
 
 /// A pull of `items`, cut to `cap` tokens; `None` when none fits.
