@@ -49,6 +49,7 @@ struct RawConfig {
     watchdog: Option<crate::config_watchdog::RawWatchdog>,
     missions: Option<crate::config_missions::RawMissions>,
     board: Option<crate::config_board::RawBoard>,
+    followups: Option<crate::config_followups::RawFollowups>,
     theme: Option<String>,
     layout: Option<String>,
     icons: Option<String>,
@@ -190,6 +191,9 @@ pub fn parse_settings(text: &str, path: &Path) -> Result<Settings, ConfigError> 
     }
     if let Some(missions) = raw.missions {
         settings.missions = crate::config_missions::parse_missions(missions, text, path)?;
+    }
+    if let Some(followups) = raw.followups {
+        settings.followups = crate::config_followups::parse_followups(followups, text, path)?;
     }
     // The watchdog calls a loop at the guard's count; the loop breaker then
     // stops the job one failure later.
@@ -797,6 +801,26 @@ unknown = 1
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn followups_section_reads_times_and_standing_orders() {
+        let s = parse(
+            "[followups]\nbrief_times = [\"08:30\", \"17:00\"]\nextract_model = \"haiku\"\n\n\
+             [[followups.order]]\nid = \"docs\"\nkinds = [\"task\"]\npaths = [\"docs/**\"]\n\
+             action = \"auto-approve\"\n\n[[followups.order]]\nkeywords = [\"migration\"]\naction = \"always-ask\"\n",
+        )
+        .unwrap()
+        .followups;
+        assert_eq!(s.slots.labels(), ["08:30", "17:00"]);
+        assert_eq!(s.orders.len(), 2);
+        assert_eq!(s.orders[0].id, "docs");
+        assert_eq!(s.orders[1].id, "order-2");
+        assert!(!s.orders[0].allow_risky);
+        assert_eq!(parse("").unwrap().followups.slots.labels().len(), 3);
+        assert!(parse("[followups]\nbrief_times = [\"9am\"]\n").is_err());
+        assert!(parse("[[followups.order]]\naction = \"auto-approve\"\n").is_err());
+        assert!(parse("[[followups.order]]\nkinds = [\"nope\"]\naction = \"park\"\n").is_err());
     }
 
     #[test]

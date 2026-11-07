@@ -7,6 +7,7 @@ mod cache;
 mod consents;
 mod decisions;
 mod evidence;
+mod followups;
 mod governor;
 mod jobs;
 mod knowledge;
@@ -411,6 +412,43 @@ CREATE TABLE knowledge_items (
 CREATE INDEX knowledge_items_home ON knowledge_items(home);
 ";
 
+/// Follow-through (v21): follow-ups agents leave behind, the approved ones
+/// waiting to become missions (`followup_intents`), and small numbers kept
+/// between runs (`followup_state`: the last brief, the jobs already read).
+const SCHEMA_FOLLOWUPS: &str = "
+CREATE TABLE followups (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,
+    text TEXT NOT NULL,
+    rationale TEXT NOT NULL DEFAULT '',
+    against TEXT NOT NULL DEFAULT '',
+    repo TEXT NOT NULL DEFAULT '',
+    paths TEXT NOT NULL DEFAULT '[]',
+    urgency TEXT NOT NULL,
+    est_cost REAL,
+    sources TEXT NOT NULL DEFAULT '[]',
+    created INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    decided_by TEXT,
+    decided_at INTEGER,
+    due_at INTEGER
+);
+CREATE INDEX followups_status ON followups(status);
+CREATE TABLE followup_intents (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    followup INTEGER NOT NULL,
+    text TEXT NOT NULL,
+    repo TEXT NOT NULL DEFAULT '',
+    paths TEXT NOT NULL DEFAULT '[]',
+    created INTEGER NOT NULL,
+    mission TEXT
+);
+CREATE TABLE followup_state (
+    key TEXT PRIMARY KEY,
+    value INTEGER NOT NULL
+);
+";
+
 /// Migrations in order; index + 1 is the resulting `user_version`.
 const MIGRATIONS: &[&str] = &[
     SCHEMA_V1,
@@ -433,6 +471,7 @@ const MIGRATIONS: &[&str] = &[
     SCHEMA_WORKSPACES,
     SCHEMA_WORKTREE_SETS,
     SCHEMA_KNOWLEDGE,
+    SCHEMA_FOLLOWUPS,
 ];
 
 /// Maps adapter errors into the application's error type.

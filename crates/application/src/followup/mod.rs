@@ -143,12 +143,14 @@ pub trait ReplySource {
 }
 
 /// The `[followups]` section.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct FollowSettings {
     /// Off: nothing is collected from the Board or from finished jobs.
     pub enabled: bool,
     /// Ask a small model for the follow-ups in each finished job's message.
     pub extract: bool,
+    /// The model that reads finished jobs.
+    pub extract_model: String,
     pub slots: BriefSlots,
     pub orders: Vec<StandingOrder>,
     pub max_cards: usize,
@@ -165,6 +167,7 @@ impl Default for FollowSettings {
         FollowSettings {
             enabled: true,
             extract: true,
+            extract_model: "haiku".into(),
             slots: BriefSlots::default(),
             orders: Vec::new(),
             max_cards: 5,

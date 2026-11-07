@@ -31,6 +31,8 @@ pub struct Settings {
     pub missions: crate::PlanSettings,
     /// The Board: typed shared state between the agents of a mission.
     pub board: BoardSettings,
+    /// Follow-through: what agents leave behind, standing orders, the brief.
+    pub followups: crate::FollowSettings,
 }
 
 /// The `[board]` section.
@@ -354,6 +356,7 @@ impl Default for Settings {
             notify: crate::NotifySettings::default(),
             missions: crate::PlanSettings::default(),
             board: BoardSettings::default(),
+            followups: crate::FollowSettings::default(),
         }
     }
 }
