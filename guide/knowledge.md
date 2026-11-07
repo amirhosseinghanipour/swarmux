@@ -182,9 +182,9 @@ anchors and enforcers are set with `swarmux knowledge edit`.
 
 ## Not yet
 
-- Contracts between repositories (tables, RPCs and their consumers) and
-  lessons learned from corrections are reserved kinds; nothing creates them
-  yet.
+- Lessons learned from corrections are a reserved kind; nothing creates
+  them yet. Contracts between repositories are derived from the sources
+  rather than written by hand: see [contracts](contracts.md).
 - Agents can't ask the project a question yet; their questions go through
   the [Board](board.md).
 - Gate and lint rules' checks run in the job's worktree (or task folder),

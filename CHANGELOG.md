@@ -8,6 +8,23 @@ follows [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Cross-repo contracts: what each repository of a workspace provides
+  (tables, columns, enums, functions, policies, OpenAPI endpoints and
+  schemas, `.env.example` keys) and which files of which repositories
+  consume it, read from the sources without a model. Pluggable extractors:
+  SQL migrations and dumps (applied in file order, so renames and drops
+  count), OpenAPI (JSON and block YAML), and consumer scans for Dart/Flutter,
+  TypeScript/JavaScript (including Supabase's generated types) and Python.
+  Scans are incremental by content hash (schema v21). `swarmux contracts
+  [--workspace W] [--consumers] [show <symbol>]` and a Contracts tab on the
+  Knowledge screen (`t`).
+- Agents hear who consumes a file they read or edit (a provider's
+  consumers, a consumer's provider shape) in the same 300-token pull as
+  knowledge. A workspace mission's done-gate compares the contracts with
+  those at job start: the consumer repositories' checks join the run, a
+  removed or renamed symbol that is still used blocks with the exact places,
+  and consumers outside the mission's repos raise an inbox item. Verdicts
+  and deliveries are ledger entries.
 - Knowledge: rules, facts and decisions per workspace (or repository), each
   with a why, a scope (repositories, path globs, task classes), anchors with
   content hashes, a status (proposed, shadow, enforced, advisory, stale,
