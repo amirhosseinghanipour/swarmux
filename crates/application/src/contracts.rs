@@ -126,7 +126,17 @@ pub fn scan_tree(
         } else {
             folder.split('/').fold(tree.to_path_buf(), |p, c| p.join(c))
         };
+        // A repository at the root does not own the other repositories.
+        let nested = |rel: &str| {
+            folder == "."
+                && repos
+                    .iter()
+                    .any(|(_, f)| f != "." && rel.starts_with(&format!("{f}/")))
+        };
         for f in source.files(&dir, &contracts::wanted) {
+            if nested(&f.rel) {
+                continue;
+            }
             stats.files += 1;
             let key = (repo.clone(), f.rel.clone());
             let old = cache.get(&key);
@@ -521,7 +531,6 @@ impl ContractService {
         self.hub.register(
             start.job,
             hub::JobTree {
-                workspace: id,
                 root: start.cwd.to_path_buf(),
                 repos,
                 commands: w
@@ -538,7 +547,12 @@ impl ContractService {
                     })
                     .collect(),
                 baseline: Arc::new(scan.index),
-                mission: None,
+                cache: Arc::new(
+                    scan.records
+                        .into_iter()
+                        .map(|r| ((r.repo.clone(), r.path.clone()), r))
+                        .collect(),
+                ),
             },
         );
         Ok(())

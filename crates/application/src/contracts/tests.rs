@@ -156,7 +156,6 @@ fn only_changed_files_are_read_again() {
 fn tree_for_job(t: &FakeTree, baseline_root: &str, job_root: &str) -> JobTree {
     let scan = scan_tree(t, Path::new(baseline_root), &repos(), &Cache::new());
     JobTree {
-        workspace: WorkspaceId::random(),
         root: PathBuf::from(job_root),
         repos: repos(),
         commands: vec![
@@ -170,7 +169,12 @@ fn tree_for_job(t: &FakeTree, baseline_root: &str, job_root: &str) -> JobTree {
             ),
         ],
         baseline: Arc::new(scan.index),
-        mission: None,
+        cache: Arc::new(
+            scan.records
+                .into_iter()
+                .map(|r| ((r.repo.clone(), r.path.clone()), r))
+                .collect(),
+        ),
     }
 }
 
@@ -251,12 +255,13 @@ fn a_mission_that_already_checks_a_repo_adds_nothing_for_it() {
     let t = Arc::new(FakeTree::default());
     workspace_tree(&t, "/ws");
     t.copy("/ws", "/task");
-    let mut tree = tree_for_job(&t, "/ws", "/task");
-    tree.mission = Some((
+    let tree = tree_for_job(&t, "/ws", "/task");
+    let (hub, job) = hub_with(t.clone(), tree);
+    hub.set_mission(
+        job,
         vec!["backend".into(), "app".into(), "admin".into()],
         vec!["app: flutter test".into()],
-    ));
-    let (hub, job) = hub_with(t.clone(), tree);
+    );
     t.put(
         "/task/backend",
         "supabase/migrations/001.sql",
@@ -279,9 +284,9 @@ fn consumers_outside_the_mission_escalate() {
     let t = Arc::new(FakeTree::default());
     workspace_tree(&t, "/ws");
     t.copy("/ws", "/task");
-    let mut tree = tree_for_job(&t, "/ws", "/task");
-    tree.mission = Some((vec!["backend".into()], Vec::new()));
+    let tree = tree_for_job(&t, "/ws", "/task");
     let (hub, job) = hub_with(t.clone(), tree);
+    hub.set_mission(job, vec!["backend".into()], Vec::new());
     t.put(
         "/task/backend",
         "supabase/migrations/001.sql",

@@ -28,7 +28,6 @@ const CONSUMER_COMMANDS: [&str; 6] = ["analyze", "typecheck", "check", "lint", "
 /// What a running job's tree is, for contracts.
 #[derive(Clone)]
 pub(crate) struct JobTree {
-    pub workspace: WorkspaceId,
     pub root: PathBuf,
     /// Repository name and its folder below the root.
     pub repos: Vec<(String, String)>,
@@ -36,8 +35,9 @@ pub(crate) struct JobTree {
     pub commands: Vec<(String, Vec<(String, String)>)>,
     /// The contracts when the job started.
     pub baseline: Arc<Index>,
-    /// The mission's repositories (empty: all) and acceptance checks.
-    pub mission: Option<(Vec<String>, Vec<String>)>,
+    /// What the job's files yielded when last read, so a check reads only
+    /// the files the job changed since.
+    pub cache: Arc<Cache>,
 }
 
 /// What the cross-repo check of a mission's gate decided.
@@ -62,6 +62,9 @@ struct State {
     caches: HashMap<WorkspaceId, Arc<Cache>>,
     indexes: HashMap<WorkspaceId, Arc<Index>>,
     jobs: HashMap<JobId, JobTree>,
+    /// A mission job's repositories (empty: all) and acceptance checks;
+    /// told at launch, which can be before the job starts.
+    missions: HashMap<JobId, (Vec<String>, Vec<String>)>,
     delivered: HashMap<JobId, BTreeSet<String>>,
     events: Vec<ContractEvent>,
     /// The last verdict per job, so an unchanged one is recorded once.
@@ -109,22 +112,12 @@ impl ContractHub {
 
     pub(crate) fn register(&self, job: JobId, tree: JobTree) {
         let mut s = lock(&self.state);
-        // A restarted job keeps its mission.
-        let mission = s.jobs.get(&job).and_then(|t| t.mission.clone());
-        s.jobs.insert(
-            job,
-            JobTree {
-                mission: tree.mission.clone().or(mission),
-                ..tree
-            },
-        );
+        s.jobs.insert(job, tree);
         s.delivered.remove(&job);
     }
 
     pub(crate) fn set_mission(&self, job: JobId, repos: Vec<String>, checks: Vec<String>) {
-        if let Some(t) = lock(&self.state).jobs.get_mut(&job) {
-            t.mission = Some((repos, checks));
-        }
+        lock(&self.state).missions.insert(job, (repos, checks));
     }
 
     /// What was checked and delivered since the last call.
@@ -236,14 +229,21 @@ impl ContractHub {
 
 impl ContractGate for ContractHub {
     fn judge(&self, job: JobId) -> Option<ContractJudgement> {
-        let (tree, cache) = {
+        let (tree, mission) = {
             let s = lock(&self.state);
-            let tree = s.jobs.get(&job)?.clone();
-            let cache = s.caches.get(&tree.workspace).cloned().unwrap_or_default();
-            (tree, cache)
+            (s.jobs.get(&job)?.clone(), s.missions.get(&job).cloned())
         };
         let started = std::time::Instant::now();
-        let scan = scan_tree(&*self.source, &tree.root, &tree.repos, &cache);
+        let scan = scan_tree(&*self.source, &tree.root, &tree.repos, &tree.cache);
+        let fresh: Cache = scan
+            .records
+            .iter()
+            .cloned()
+            .map(|r| ((r.repo.clone(), r.path.clone()), r))
+            .collect();
+        if let Some(t) = lock(&self.state).jobs.get_mut(&job) {
+            t.cache = Arc::new(fresh);
+        }
         let report = Report::of(&tree.baseline, &scan.index);
         if report.is_empty() {
             let mut s = lock(&self.state);
@@ -251,7 +251,7 @@ impl ContractGate for ContractHub {
             s.last.remove(&job);
             return None;
         }
-        let (scope, mission_checks) = tree.mission.clone().unwrap_or_default();
+        let (scope, mission_checks) = mission.unwrap_or_default();
         let in_scope = |repo: &str| scope.is_empty() || scope.iter().any(|r| r == repo);
         let impacted = report.repos();
         let inside: BTreeSet<String> = impacted.iter().filter(|r| in_scope(r)).cloned().collect();
