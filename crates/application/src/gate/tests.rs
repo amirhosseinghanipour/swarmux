@@ -2,6 +2,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use super::*;
 use crate::SharedPolicy;
+use crate::contracts::{ContractGate, ContractJudgement};
 use crate::ports::{HookRequest, NewJob, SessionRepository};
 use crate::testing::{FixedClock, InMemoryLedger, InMemoryStore};
 use swarmux_domain::ledger::LedgerKind;
@@ -55,11 +56,13 @@ struct FakeChecker {
     fixed: Mutex<bool>,
     flaky: Mutex<bool>,
     runs: AtomicU32,
+    ran: Mutex<Vec<String>>,
 }
 
 impl Checker for FakeChecker {
     fn run(&self, check: &GateCheck, _root: &Path) -> CheckRun {
         let n = self.runs.fetch_add(1, Ordering::SeqCst);
+        lock(&self.ran).push(check.name.clone());
         // A rule's hidden check that never passes.
         let pass =
             check.name != "rule R1" && (*lock(&self.fixed) || (*lock(&self.flaky) && n % 2 == 1));
@@ -95,11 +98,23 @@ fn fixture(max_blocks: u32) -> Fixture {
 }
 
 fn fixture_with(max_blocks: u32, rules: Option<Arc<dyn RuleChecks>>) -> Fixture {
+    fixture_full(max_blocks, rules, None)
+}
+
+fn fixture_full(
+    max_blocks: u32,
+    rules: Option<Arc<dyn RuleChecks>>,
+    contracts: Option<Arc<dyn ContractGate>>,
+) -> Fixture {
     let source = Arc::new(FakeSource::new(max_blocks));
     let checker = Arc::new(FakeChecker::default());
     let (keeper, rx) = GateKeeper::new(source.clone(), checker.clone());
     let keeper = match rules {
         Some(rules) => keeper.with_rules(rules),
+        None => keeper,
+    };
+    let keeper = match contracts {
+        Some(c) => keeper.with_contracts(c),
         None => keeper,
     };
     let store = Rc::new(InMemoryStore::default());
@@ -711,5 +726,51 @@ fn a_failing_gate_rule_blocks_a_mission_without_naming_its_check() {
         lock(&rules.reports)
             .iter()
             .any(|(r, passed, shadow)| r == "R1" && !passed && !shadow)
+    );
+}
+
+/// Judges every change as breaking `app/lib/orders.dart:42`.
+struct BreaksApp;
+
+impl ContractGate for BreaksApp {
+    fn judge(&self, _job: JobId) -> Option<ContractJudgement> {
+        Some(ContractJudgement {
+            checks: vec![GateCheck::new("app: flutter analyze", "flutter", &["analyze"]).in_dir("app")],
+            run: CheckRun {
+                name: "contracts".into(),
+                command: "swarmux contracts check".into(),
+                exit: Some(1),
+                timed_out: false,
+                spawn_error: None,
+                duration_ms: 3,
+                output: "BROKEN: table orders is gone but still used by: app/lib/orders.dart:42, admin/src/api.ts:17".into(),
+                flaky: false,
+            },
+        })
+    }
+}
+
+#[test]
+fn a_mission_that_breaks_a_consumer_is_blocked_with_its_places() {
+    let f = fixture_full(3, None, Some(Arc::new(BreaksApp)));
+    f.start();
+    f.fix();
+    // Not a mission's job: the contracts are not its gate's business.
+    f.edit();
+    assert_eq!(f.stop(HookEvent::Stop, "done"), StopAnswer::Allow);
+
+    f.keeper.assign(f.job, MissionGate::default());
+    f.edit();
+    let answer = f.stop(HookEvent::Stop, "done");
+    let StopAnswer::Block { reason } = answer else {
+        panic!("{answer:?}")
+    };
+    assert!(reason.contains("app/lib/orders.dart:42"), "{reason}");
+    assert!(reason.contains("admin/src/api.ts:17"), "{reason}");
+    assert!(
+        lock(&f.checker.ran)
+            .iter()
+            .any(|n| n == "app: flutter analyze"),
+        "the consumer's check ran too"
     );
 }

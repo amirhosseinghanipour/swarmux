@@ -14,6 +14,9 @@ use crate::knowledge::KnowledgeRow;
 use crate::theme::Theme;
 
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
+    if app.knowledge_screen.contracts_tab {
+        return contracts(frame, area, app);
+    }
     let t = &app.look.theme;
     let block = super::rounded(t)
         .border_style(Style::new().fg(t.muted))
@@ -125,4 +128,76 @@ fn item_line<'a>(t: &Theme, i: &Item, chosen: bool) -> Line<'a> {
         ),
         Span::styled(tags, Style::new().fg(t.muted)),
     ])
+}
+
+/// The Contracts tab: what each repository provides and who consumes it.
+fn contracts(frame: &mut Frame, area: Rect, app: &App) {
+    let t = &app.look.theme;
+    let name = app
+        .contract_workspace()
+        .map_or_else(|| "—".to_string(), |w| w.name.clone());
+    let block = super::rounded(t)
+        .border_style(Style::new().fg(t.muted))
+        .title(format!(" contracts · {name} "));
+    let rows = &app.knowledge_screen.contract_rows;
+    let mut lines = vec![Line::from(Span::styled(
+        "t items · r read again · w next workspace · ↑↓ select",
+        Style::new().fg(t.muted),
+    ))];
+    if rows.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "no contracts found: SQL migrations, OpenAPI files and .env.example are read",
+            Style::new().fg(t.muted),
+        )));
+    }
+    let sites = app.selected_contract_sites();
+    let mut selected_line = 0;
+    for (n, row) in rows.iter().enumerate() {
+        let chosen = n == app.knowledge_screen.contract_selected;
+        if chosen {
+            selected_line = lines.len();
+        }
+        let mut style = Style::new().fg(if row.consumers == 0 { t.muted } else { t.text });
+        if chosen {
+            style = style.add_modifier(Modifier::REVERSED);
+        }
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!(
+                    "{}{:<38}",
+                    if chosen { "▸ " } else { "  " },
+                    row.provided.sym.label()
+                ),
+                style,
+            ),
+            Span::styled(
+                format!(" {:<44}", row.provided.place()),
+                Style::new().fg(t.muted),
+            ),
+            Span::styled(
+                match row.consumers {
+                    0 => " —".to_string(),
+                    1 => " 1 consumer".to_string(),
+                    c => format!(" {c} consumers"),
+                },
+                Style::new().fg(t.label),
+            ),
+        ]));
+        if chosen {
+            for s in &sites {
+                lines.push(Line::from(Span::styled(
+                    format!(
+                        "      {}{}",
+                        s.place(),
+                        if s.inferred { "  (inferred)" } else { "" }
+                    ),
+                    Style::new().fg(t.text),
+                )));
+            }
+        }
+    }
+    let inner = area.height.saturating_sub(2) as usize;
+    let top = selected_line.saturating_sub(inner.saturating_sub(4));
+    let shown: Vec<Line> = lines.into_iter().skip(top).collect();
+    frame.render_widget(Paragraph::new(shown).block(block), area);
 }

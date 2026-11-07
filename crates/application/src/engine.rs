@@ -13,6 +13,7 @@ use std::rc::Rc;
 use swarmux_domain::JobId;
 
 use crate::board::{BoardInbox, BoardService};
+use crate::contracts::ContractService;
 use crate::gate::{GateService, GateState};
 use crate::guard::GuardService;
 use crate::hookbus::HookBus;
@@ -41,6 +42,8 @@ pub struct Engine {
     pub knowledge: Option<Rc<KnowledgeService>>,
     /// Follow-ups agents leave behind, standing orders and the owner brief.
     pub followups: Option<Rc<crate::followup::FollowUpService>>,
+    /// What the repositories of a workspace provide and consume.
+    pub contracts: Option<Rc<ContractService>>,
 }
 
 /// What one [`Engine::pump`] did.
@@ -74,6 +77,7 @@ impl Engine {
             board: None,
             knowledge: None,
             followups: None,
+            contracts: None,
         }
     }
 
@@ -124,6 +128,9 @@ impl Engine {
         }
         if let Some(knowledge) = &self.knowledge {
             errors.extend(knowledge.pump());
+        }
+        if let Some(contracts) = &self.contracts {
+            errors.extend(contracts.pump());
         }
         EngineReport {
             errors,

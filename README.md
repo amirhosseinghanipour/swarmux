@@ -166,6 +166,7 @@ Single Rust binary. Windows, macOS, Linux. Works with Claude Code only.
 - [Worktrees and checkpoints](guide/worktrees.md)
 - [Workspaces: several repositories worked on as one](guide/workspaces.md)
 - [Knowledge: rules, facts and decisions your agents keep to](guide/knowledge.md)
+- [Contracts: what your repositories promise each other](guide/contracts.md)
 - [Usage governor](guide/governor.md)
 - [Watchdog and recovery ladder](guide/watchdog.md)
 - [Notifications](guide/notifications.md)

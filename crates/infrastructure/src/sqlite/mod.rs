@@ -5,6 +5,7 @@ mod anchors;
 mod board;
 mod cache;
 mod consents;
+mod contracts;
 mod decisions;
 mod evidence;
 mod followups;
@@ -449,6 +450,23 @@ CREATE TABLE followup_state (
 );
 ";
 
+/// Contracts (v22): what each file of a workspace's repositories yielded
+/// (the facts the extractors read), keyed by path with its content hash, so
+/// a rescan only reads again what changed. Derived data: it can be dropped
+/// and is rebuilt by the next scan.
+const SCHEMA_CONTRACTS: &str = "
+CREATE TABLE contract_files (
+    workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    repo TEXT NOT NULL,
+    path TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    mtime INTEGER NOT NULL,
+    hash TEXT NOT NULL,
+    facts TEXT NOT NULL,
+    PRIMARY KEY (workspace_id, repo, path)
+);
+";
+
 /// Migrations in order; index + 1 is the resulting `user_version`.
 const MIGRATIONS: &[&str] = &[
     SCHEMA_V1,
@@ -472,6 +490,7 @@ const MIGRATIONS: &[&str] = &[
     SCHEMA_WORKTREE_SETS,
     SCHEMA_KNOWLEDGE,
     SCHEMA_FOLLOWUPS,
+    SCHEMA_CONTRACTS,
 ];
 
 /// Maps adapter errors into the application's error type.

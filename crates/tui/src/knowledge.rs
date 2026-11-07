@@ -5,7 +5,7 @@
 use std::rc::Rc;
 
 use crossterm::event::KeyCode;
-use swarmux_application::{AppError, AppResult, KnowledgeService};
+use swarmux_application::{AppError, AppResult, ContractRow, ContractService, KnowledgeService};
 use swarmux_domain::AttentionItem;
 use swarmux_domain::knowledge::{Draft, Home, Item, ItemId, Kind, Registry, Status};
 
@@ -19,6 +19,14 @@ pub struct KnowledgeScreen {
     pub selected: usize,
     /// The item whose text is being edited.
     pub editing: Option<ItemId>,
+    /// Showing the contracts between repositories instead of the items.
+    pub contracts_tab: bool,
+    /// The selected contract, by place among `contract_rows`.
+    pub contract_selected: usize,
+    /// The workspace whose contracts are shown, by place in the list.
+    pub contract_workspace: usize,
+    /// The contracts of that workspace, read when the tab opens or `r`.
+    pub contract_rows: Vec<ContractRow>,
 }
 
 /// One row of the screen.
@@ -59,12 +67,74 @@ impl App {
         self.engine.knowledge.is_some()
     }
 
-    /// Stale knowledge, for the inbox.
+    /// Lets the Contracts tab show who consumes what, and puts changes
+    /// that break repositories outside their mission in the inbox.
+    pub fn with_contracts(mut self, contracts: Option<Rc<ContractService>>) -> App {
+        self.engine.contracts = contracts;
+        self
+    }
+
+    /// Stale knowledge and contract breaks outside a mission, for the inbox.
     pub(crate) fn knowledge_items(&self) -> Vec<AttentionItem> {
-        self.engine
+        let mut items = self
+            .engine
             .knowledge
             .as_ref()
             .map(|k| k.stale_items())
+            .unwrap_or_default();
+        if let Some(c) = &self.engine.contracts {
+            items.extend(c.attention());
+        }
+        items
+    }
+
+    /// The workspace whose contracts the tab shows.
+    pub fn contract_workspace(&self) -> Option<&swarmux_domain::Workspace> {
+        let n = self.workspaces.len();
+        (n > 0).then(|| &self.workspaces[self.knowledge_screen.contract_workspace % n])
+    }
+
+    /// Reads the shown workspace's contracts again, files that changed only.
+    fn refresh_contracts(&mut self, rescan: bool) {
+        let (Some(c), Some(w)) = (
+            self.engine.contracts.clone(),
+            self.contract_workspace().cloned(),
+        ) else {
+            self.knowledge_screen.contract_rows.clear();
+            return;
+        };
+        if rescan && let Err(e) = c.rescan(&w) {
+            self.error = Some(e.to_string());
+        }
+        match c.rows(w.id) {
+            Ok(rows) => {
+                self.knowledge_screen.contract_selected = self
+                    .knowledge_screen
+                    .contract_selected
+                    .min(rows.len().saturating_sub(1));
+                self.knowledge_screen.contract_rows = rows;
+            }
+            Err(e) => self.error = Some(e.to_string()),
+        }
+    }
+
+    /// Who consumes the selected contract.
+    pub fn selected_contract_sites(&self) -> Vec<swarmux_domain::contracts::Site> {
+        let (Some(c), Some(w)) = (&self.engine.contracts, self.contract_workspace()) else {
+            return Vec::new();
+        };
+        let Some(row) = self
+            .knowledge_screen
+            .contract_rows
+            .get(self.knowledge_screen.contract_selected)
+        else {
+            return Vec::new();
+        };
+        c.consumers(w.id, &row.provided.sym.label())
+            .unwrap_or_default()
+            .into_iter()
+            .find(|k| k.provided == row.provided)
+            .map(|k| k.sites)
             .unwrap_or_default()
     }
 
@@ -137,6 +207,37 @@ impl App {
     pub(crate) fn knowledge_key(&mut self, code: KeyCode) -> bool {
         if self.screen != Screen::Knowledge {
             return false;
+        }
+        if code == KeyCode::Char('t') && self.engine.contracts.is_some() {
+            self.knowledge_screen.contracts_tab = !self.knowledge_screen.contracts_tab;
+            if self.knowledge_screen.contracts_tab {
+                self.refresh_contracts(false);
+            }
+            return true;
+        }
+        if self.knowledge_screen.contracts_tab {
+            let count = self.knowledge_screen.contract_rows.len();
+            match code {
+                KeyCode::Up | KeyCode::Char('k') => {
+                    self.knowledge_screen.contract_selected =
+                        self.knowledge_screen.contract_selected.saturating_sub(1);
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    self.knowledge_screen.contract_selected =
+                        (self.knowledge_screen.contract_selected + 1).min(count.saturating_sub(1));
+                }
+                KeyCode::Char('r') => {
+                    self.refresh_contracts(true);
+                    self.notice = Some("contracts read again (only changed files)".into());
+                }
+                KeyCode::Char('w') => {
+                    self.knowledge_screen.contract_workspace += 1;
+                    self.knowledge_screen.contract_selected = 0;
+                    self.refresh_contracts(false);
+                }
+                _ => return false,
+            }
+            return true;
         }
         let count = self.knowledge_list().len();
         match code {

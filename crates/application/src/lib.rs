@@ -8,6 +8,7 @@ pub mod attention;
 pub mod board;
 pub mod cache;
 pub mod checkpoint;
+pub mod contracts;
 pub mod daemon;
 mod decision;
 pub mod dist;
@@ -50,6 +51,11 @@ pub use board::{
     Member,
 };
 pub use checkpoint::{CheckpointService, HandoffBoard, Notes};
+pub use contracts::{
+    Consumed, ContractEvent, ContractGate, ContractHub, ContractJudgement, ContractRow,
+    ContractService, ContractStore, FileRecord, PullContext, Rescanned, ScanStats, SourceFile,
+    SourceTree, StartFan, WatchFan,
+};
 pub use decision::{DecisionRecord, Outcome, Source};
 pub use engine::{Engine, EngineReport, MissionsPump};
 pub use error::{AppError, AppResult};

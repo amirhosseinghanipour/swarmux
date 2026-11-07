@@ -1924,3 +1924,95 @@ impl IntentStore for InMemoryFollowups {
         Ok(())
     }
 }
+
+/// What each file yielded, in memory.
+#[derive(Default)]
+pub struct InMemoryContracts(pub RefCell<Vec<crate::contracts::FileRecord>>);
+
+impl crate::contracts::ContractStore for InMemoryContracts {
+    fn records(
+        &self,
+        _workspace: swarmux_domain::WorkspaceId,
+    ) -> AppResult<Vec<crate::contracts::FileRecord>> {
+        Ok(self.0.borrow().clone())
+    }
+
+    fn apply(
+        &self,
+        _workspace: swarmux_domain::WorkspaceId,
+        upserts: &[crate::contracts::FileRecord],
+        removed: &[(String, String)],
+    ) -> AppResult<()> {
+        let mut all = self.0.borrow_mut();
+        all.retain(|r| {
+            !removed.contains(&(r.repo.clone(), r.path.clone()))
+                && !upserts.iter().any(|u| u.repo == r.repo && u.path == r.path)
+        });
+        all.extend(upserts.iter().cloned());
+        Ok(())
+    }
+}
+
+/// Source files by (folder, relative path), in memory.
+#[derive(Default)]
+pub struct FakeSources(pub std::sync::Mutex<std::collections::BTreeMap<(String, String), String>>);
+
+impl FakeSources {
+    pub fn put(&self, dir: &str, rel: &str, text: &str) {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert((dir.to_string(), rel.to_string()), text.to_string());
+    }
+}
+
+impl crate::contracts::SourceTree for FakeSources {
+    fn files(
+        &self,
+        dir: &Path,
+        wanted: &dyn Fn(&str) -> bool,
+    ) -> Vec<crate::contracts::SourceFile> {
+        let dir = dir.to_string_lossy().replace('\\', "/");
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .filter(|((d, r), _)| *d == dir && wanted(r))
+            .map(|((_, r), t)| crate::contracts::SourceFile {
+                rel: r.clone(),
+                size: t.len() as u64,
+                mtime: 1,
+            })
+            .collect()
+    }
+
+    fn read(&self, dir: &Path, rel: &str) -> Option<String> {
+        let dir = dir.to_string_lossy().replace('\\', "/");
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&(dir, rel.to_string()))
+            .cloned()
+    }
+}
+
+/// A workspace store with nothing in it.
+pub struct NoWorkspaces;
+
+impl crate::workspace::WorkspaceStore for NoWorkspaces {
+    fn save(&self, _: &swarmux_domain::Workspace) -> AppResult<()> {
+        Ok(())
+    }
+
+    fn list(&self) -> AppResult<Vec<swarmux_domain::Workspace>> {
+        Ok(Vec::new())
+    }
+
+    fn get(&self, _: swarmux_domain::WorkspaceId) -> AppResult<Option<swarmux_domain::Workspace>> {
+        Ok(None)
+    }
+
+    fn remove(&self, _: swarmux_domain::WorkspaceId) -> AppResult<()> {
+        Ok(())
+    }
+}

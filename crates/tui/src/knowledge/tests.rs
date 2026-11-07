@@ -140,3 +140,58 @@ fn stale_items_reach_the_inbox_and_are_confirmed_with_c() {
             .all(|i| i.kind != AttentionKind::Knowledge)
     );
 }
+
+#[test]
+fn the_contracts_tab_lists_what_repositories_provide_and_who_consumes_it() {
+    use std::path::PathBuf;
+    use std::sync::Arc;
+    use swarmux_application::ContractService;
+    use swarmux_application::testing::{FakeSources, InMemoryContracts, NoWorkspaces};
+    use swarmux_domain::{Repo, Workspace, WorkspaceId};
+
+    let mut r = rig();
+    let repo = |name: &str| Repo {
+        name: name.into(),
+        path: name.into(),
+        git_root: PathBuf::from(format!("/shop/{name}")),
+        default_branch: None,
+        stacks: Vec::new(),
+        commands: Vec::new(),
+    };
+    let mut w = Workspace::new(WorkspaceId::random(), "shop", PathBuf::from("/shop"), 1).unwrap();
+    w.repos = vec![repo("backend"), repo("app")];
+    let sources = Arc::new(FakeSources::default());
+    sources.put(
+        "/shop/backend",
+        "migrations/001.sql",
+        "create table orders (id uuid);",
+    );
+    sources.put(
+        "/shop/app",
+        "lib/orders.dart",
+        "final r = supabase.from('orders').select('id');",
+    );
+    let contracts = Rc::new(ContractService::new(
+        Rc::new(InMemoryContracts::default()),
+        Rc::new(NoWorkspaces),
+        sources,
+        r.t.clock.clone(),
+    ));
+    contracts.rescan(&w).unwrap();
+    r.t.app.workspaces = vec![w];
+    r.t.app.engine.contracts = Some(contracts);
+
+    r.key(KeyCode::Char('8'));
+    assert!(!r.screen().contains("contracts ·"), "items come first");
+    r.key(KeyCode::Char('t'));
+    let screen = r.screen();
+    assert!(screen.contains("contracts · shop"), "{screen}");
+    assert!(screen.contains("table orders"), "{screen}");
+    assert!(screen.contains("backend/migrations/001.sql:1"), "{screen}");
+    // The selected contract shows its consumers under it.
+    let sites = r.t.app.selected_contract_sites();
+    assert_eq!(sites.len(), 1);
+    assert!(r.screen().contains("app/lib/orders.dart:1"));
+    r.key(KeyCode::Char('t'));
+    assert!(!r.screen().contains("contracts ·"));
+}
