@@ -546,11 +546,13 @@ impl KnowledgeService {
                 Some(_) => {
                     item.id = self.state.borrow().projection.next_id(item.kind);
                     item.provenance.events.clear();
+                    item.created_at = self.clock.now();
                     self.commit(&item.id.clone(), OWNER, Change::Put(Box::new(item)))?;
                     done.added += 1;
                 }
                 None => {
                     item.provenance.events.clear();
+                    item.created_at = self.clock.now();
                     self.commit(&item.id.clone(), OWNER, Change::Put(Box::new(item)))?;
                     done.added += 1;
                 }
