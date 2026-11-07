@@ -153,4 +153,14 @@ impl MergeQueue for GitMergeQueue {
         self.run(worktree, &["merge", "--ff-only", branch])
             .map(drop)
     }
+
+    fn head(&self, workdir: &Path) -> AppResult<String> {
+        self.run(workdir, &["rev-parse", "HEAD"])
+    }
+
+    fn reset(&self, workdir: &Path, commit: &str) -> AppResult<()> {
+        // Only ever an integration branch's own folder, which nobody edits.
+        self.run(workdir, &["reset", "--hard", "--quiet", commit])
+            .map(drop)
+    }
 }
