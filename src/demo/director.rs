@@ -277,6 +277,7 @@ impl Director {
                     tokens_in,
                     tokens_out,
                     cache_read: tokens_in * 3,
+                    cache_creation: None,
                     context_window: Some(200_000),
                     subagents_spawned: 0,
                     text: (*text).to_string(),

@@ -8,6 +8,21 @@ follows [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- The done-gate reads a job's diff for weakened tests (deleted or switched-off
+  tests, dropped or loosened assertions, edited snapshots, wider tolerances,
+  relaxed CI) and blocks the stop as *tests weakened* with the evidence lines;
+  `allow_test_changes` in `.swarmux/gates.toml` says which changes are
+  intended. The inbox item is P1 when the mission's checks are affected.
+- Base-suite check: the checks run again with the original versions of the
+  changed test and protected files laid over the agent's code, as its own gate
+  step and ledger entry.
+- Prompt-cache metric per job (read and written tokens, `—` when unknown), on
+  the Ledger card, in the job detail and in Focus; `swarmux stats cache`.
+- Ledger anchoring: `swarmux audit checkpoint`, `audit verify` against every
+  signed checkpoint (cut short, rewritten), `audit export-checkpoints`; a
+  checkpoint is taken when a mission is delivered and kept in its evidence
+  bundle. The signing key is an ed25519 minisign key in the OS keychain.
+
 - Mission control, the home screen: an alarm-grade inbox of what needs you
   (ranked by urgency, with batches, shelving and focus mode), a wall of session
   cards and a strip of limits and data health, scaled to the window size.

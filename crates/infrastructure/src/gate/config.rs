@@ -52,12 +52,20 @@ struct RawVerifier {
     clean: Option<bool>,
     /// `"block"` (default) or `"allow"`: edits to existing tests.
     test_edits: Option<String>,
+    /// Run the checks again against the original tests (default: yes).
+    base_suite: Option<bool>,
+    /// Globs of tests that may be removed or changed on purpose.
+    #[serde(default)]
+    allow_test_changes: Vec<String>,
 }
 
 fn verifier_spec(raw: &RawVerifier) -> Result<VerifierSpec, String> {
     let mut spec = VerifierSpec::default();
     if let Some(clean) = raw.clean {
         spec.clean = clean;
+    }
+    if let Some(base) = raw.base_suite {
+        spec.base_suite = base;
     }
     spec.block_test_edits = match raw.test_edits.as_deref().map(str::trim) {
         None | Some("block") => true,
@@ -168,6 +176,7 @@ pub fn parse_gates(text: &str, repo: &RepoFacts) -> Result<GateSpec, String> {
         evidence: raw.gate.evidence,
         subagent_checks: raw.gate.subagent_checks,
         verifier: verifier_spec(&raw.verifier)?,
+        allow_test_changes: raw.verifier.allow_test_changes,
     })
 }
 

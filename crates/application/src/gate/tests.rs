@@ -208,6 +208,7 @@ impl Fixture {
             todos_done: 0,
             todos_total: 0,
             context: None,
+            cache_ratio: None,
             flow: Vec::new(),
         }]
     }

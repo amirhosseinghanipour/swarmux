@@ -449,6 +449,7 @@ mod tests {
             review_of: None,
             cost_usd: 0.5,
             context: None,
+            cache_ratio: None,
             flow: Vec::new(),
             todos_done: 0,
             todos_total: 0,

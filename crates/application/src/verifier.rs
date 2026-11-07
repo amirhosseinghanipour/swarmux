@@ -16,8 +16,11 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use swarmux_domain::gate::{CheckRun, GateCheck, GateSpec, PinChange};
-use swarmux_domain::verifier::{HiddenTally, HoldoutCheck, protected_changes, scan_diff};
+use swarmux_domain::gate::{CheckRun, GateCheck, GateSpec, PinChange, protected_glob};
+use swarmux_domain::verifier::weakening::{Weakening, detect};
+use swarmux_domain::verifier::{
+    BaseSuite, HiddenTally, HoldoutCheck, is_test_path, parse_diff, protected_changes,
+};
 
 use crate::AppResult;
 use crate::gate::{Checker, run_checks};
@@ -31,6 +34,9 @@ pub trait CleanCopy: Send {
     /// The change from `base` to what the copy holds, as a unified diff.
     /// Without a base: from the last commit, so only work not yet committed.
     fn diff_from(&self, base: Option<&str>) -> AppResult<String>;
+    /// Puts `paths` back as the commit `base` had them, over what the copy
+    /// holds. Only the copy changes.
+    fn restore(&self, base: &str, paths: &[String]) -> AppResult<()>;
 }
 
 /// Makes clean copies of work in progress.
@@ -79,8 +85,12 @@ pub struct Verification {
     /// started from, as git compares them (line endings normalised).
     pub protected: Vec<PinChange>,
     pub hidden: Option<HiddenTally>,
-    /// Tests edited or switched off since the job started.
+    /// Evidence lines for tests weakened since the job started.
     pub tampering: Vec<String>,
+    /// Whether any of them touches what the checks run.
+    pub checks_weakened: bool,
+    /// The checks against the original tests, when the job changed any.
+    pub base_suite: Option<BaseSuite>,
     /// What went wrong around the checks, for the user only (never names a
     /// hidden check).
     pub problem: Option<String>,
@@ -158,17 +168,38 @@ impl Verifier {
             .map_err(|e| e.to_string())?;
         let spec = request.spec;
         let mut out = Verification::default();
+        let mut diff_text = None;
         match copy.diff_from(request.base) {
             Ok(diff) => {
-                out.protected = protected_changes(&diff, &spec.protected_globs(), cfg!(windows));
+                let globs = spec.protected_globs();
+                out.protected = protected_changes(&diff, &globs, cfg!(windows));
                 if spec.verifier.block_test_edits {
-                    out.tampering = scan_diff(&diff).iter().map(|t| t.describe()).collect();
+                    let found = detect(&diff, &spec.allow_test_changes);
+                    out.checks_weakened = found
+                        .iter()
+                        .any(|w| w.affects_checks(&globs, &spec.checks, cfg!(windows)));
+                    out.tampering = found.iter().map(Weakening::describe).collect();
                 }
+                diff_text = Some(diff);
             }
             Err(e) => out.problem = Some(format!("verifier: no diff to scan: {e}")),
         }
         if request.visible {
             out.runs = run_checks(&*self.checker, &spec.checks, copy.path());
+        }
+        // Before the hidden files are placed: a check that runs everything
+        // must not print a hidden test's name into what the agent is told.
+        // Only when the visible checks passed: a failure is already a block.
+        let passing = out.runs.iter().all(CheckRun::passed);
+        if request.visible
+            && passing
+            && spec.verifier.base_suite
+            && let (Some(base), Some(diff)) = (request.base, &diff_text)
+        {
+            match run_base_suite(&*self.checker, copy.as_ref(), spec, base, diff) {
+                Ok(found) => out.base_suite = found,
+                Err(e) => out.problem = Some(format!("verifier: base suite not run: {e}")),
+            }
         }
         if request.hidden {
             out.hidden = self.run_hidden(copy.as_ref(), &mut out.problem);
@@ -227,6 +258,58 @@ impl Verifier {
         }
         Some(tally)
     }
+}
+
+/// The files of `diff` that existed at the base commit and are tests or
+/// protected: the ones whose original versions must still pass.
+pub fn base_suite_paths(diff: &str, spec: &GateSpec) -> Vec<String> {
+    let globs = spec.protected_globs();
+    let fold = cfg!(windows);
+    let mut out = Vec::new();
+    for f in parse_diff(diff) {
+        if f.created && f.renamed_from.is_none() {
+            continue;
+        }
+        let path = f.renamed_from.clone().unwrap_or_else(|| f.path.clone());
+        let ours = path.starts_with(".swarmux/");
+        let wanted = protected_glob(&globs, &path, fold).is_some() || is_test_path(&path);
+        let allowed = protected_glob(&spec.allow_test_changes, &path, fold).is_some();
+        if !ours && wanted && !allowed {
+            out.push(path);
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// Lays the base commit's versions of the changed protected and test files
+/// over the copy and runs the visible checks again. `None` when the job
+/// changed no such file.
+fn run_base_suite(
+    checker: &dyn Checker,
+    copy: &dyn CleanCopy,
+    spec: &GateSpec,
+    base: &str,
+    diff: &str,
+) -> AppResult<Option<BaseSuite>> {
+    let paths = base_suite_paths(diff, spec);
+    if paths.is_empty() || spec.checks.is_empty() {
+        return Ok(None);
+    }
+    copy.restore(base, &paths)?;
+    let failed = run_checks(checker, &spec.checks, copy.path())
+        .iter()
+        .filter(|r| !r.passed())
+        .map(|r| {
+            let line = r.failure_excerpt().into_iter().next();
+            (r.name.clone(), line.unwrap_or_else(|| r.status_text()))
+        })
+        .collect();
+    Ok(Some(BaseSuite {
+        restored: paths,
+        failed,
+    }))
 }
 
 /// Whether a tool call names one of `fenced` (or works inside one); the

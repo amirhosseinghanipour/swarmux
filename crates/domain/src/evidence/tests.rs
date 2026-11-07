@@ -21,6 +21,7 @@ fn check(name: &str, passed: bool) -> CheckResult {
 
 fn bundle() -> Bundle {
     Bundle {
+        anchor: None,
         schema: BUNDLE_SCHEMA,
         contract: ContractRef {
             slug: "fast-search".into(),
@@ -200,6 +201,7 @@ fn card(job: i64, outcome: RunOutcome, usd: f64, at: i64, mission: bool) -> RunC
         models: vec![("sonnet".into(), usd)],
         labels: Vec::new(),
         at,
+        cache: None,
     }
 }
 

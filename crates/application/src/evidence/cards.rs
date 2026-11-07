@@ -60,6 +60,7 @@ fn card(row: &JobSummary, mission: Option<&Mission>, stored: Option<&Stored>) ->
         models,
         labels: stored.map(|s| s.labels.clone()).unwrap_or_default(),
         at: row.created_at,
+        cache: row.cache_ratio,
     }
 }
 

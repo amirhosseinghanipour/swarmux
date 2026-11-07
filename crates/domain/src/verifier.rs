@@ -11,6 +11,8 @@
 
 use std::collections::HashSet;
 
+pub mod weakening;
+
 use crate::alarm::{Reversibility, RiskInputs, RiskTier, assess};
 use crate::gate::{GateCheck, Pin, PinChange, protected_glob};
 
@@ -53,6 +55,37 @@ pub const ANTI_EXPLOIT_PREAMBLE: &str = "How your work is judged: swarmux runs t
 - Never switch a test off: no skip or ignore markers, no `.only`, no commenting tests out.\n\
 - Never special-case the inputs a test uses or detect that code runs under test; solve the problem in general.\n\
 - If a check looks wrong, stop and say so instead of working around it.";
+
+/// The base-suite check: the checks run again with the original versions
+/// of the protected and test files laid over the agent's code, so passing
+/// requires the tests that existed when the job started, unmodified.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct BaseSuite {
+    /// The files put back as the base commit had them.
+    pub restored: Vec<String>,
+    /// The checks that failed against them, with a first failing line each.
+    pub failed: Vec<(String, String)>,
+}
+
+impl BaseSuite {
+    pub fn clean(&self) -> bool {
+        self.failed.is_empty()
+    }
+
+    /// The verdict line, like `base suite: 3 original test files put back, tests failed`.
+    pub fn text(&self) -> String {
+        let n = self.restored.len();
+        let files = format!(
+            "{n} original test file{} put back",
+            if n == 1 { "" } else { "s" }
+        );
+        if self.failed.is_empty() {
+            return format!("base suite: {files}, checks still pass");
+        }
+        let names: Vec<&str> = self.failed.iter().map(|(n, _)| n.as_str()).collect();
+        format!("base suite: {files}, {} failed", names.join(", "))
+    }
+}
 
 /// Longest name of a repository's or a check's holdout folder.
 const NAME_MAX: usize = 64;
@@ -188,7 +221,7 @@ impl Tamper {
 }
 
 /// Markers that switch a test off, or run some tests and not the rest.
-const SKIP_MARKERS: [&str; 27] = [
+const SKIP_MARKERS: [&str; 30] = [
     "#[ignore",
     "@pytest.mark.skip",
     "@pytest.mark.xfail",
@@ -216,6 +249,9 @@ const SKIP_MARKERS: [&str; 27] = [
     "#[cfg(any())]",
     "if: false",
     "--skip",
+    "skip: true",
+    "skip: '",
+    "skip: \"",
 ];
 
 /// Folders whose files are tests.

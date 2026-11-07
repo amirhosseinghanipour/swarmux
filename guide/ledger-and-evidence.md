@@ -9,7 +9,9 @@ every gate verdict with the digest of its ledger entry, the checkpoints, the
 reviewer's verdict, the cost by phase and by model, and the stretch of the
 ledger that tells the story with the hash it ended at. The bundle's digest is
 the SHA-256 of its JSON without the signature, and the sealing is itself an
-entry in the audit ledger. The signature is only that hash for now: it shows
+entry in the audit ledger. When sealing, swarmux also signs a checkpoint of
+the ledger (see [Anchoring](#anchoring-the-ledger)) and keeps it in the
+bundle; `swarmux verify` checks it. The signature is only that hash for now: it shows
 a bundle was edited, it does not say who wrote it. A mission that cannot be
 sealed (no passing verdict on the ledger, no git repository) is escalated
 instead of delivered, and missions delivered before bundles existed get one
@@ -31,7 +33,10 @@ be reproduced and is reported as a mismatch; jobs in their own worktree
 they are covered.
 
 The ledger screen shows a card per run (outcome, title, cost; then time,
-checks passed and the bundle's digest, the models paid, the label). The
+checks passed and the bundle's digest, the models paid, the cache-read
+share, the label). Focus shows the same share in its header. It is the part
+of the job's input that came from the prompt cache, `—` when the job did not
+report it. `swarmux stats cache [--days N]` totals it per model. The
 strip on top gives pass^3 (the chance of three delivered missions in a row
 at the current rate), delivered over ended, dollars per verified outcome,
 gate blocks and hand-offs per mission, and a 28-day activity strip; under it
@@ -65,15 +70,48 @@ decision is also appended to a ledger in `~/.swarmux/swarmux.db`. Each entry
 holds the SHA-256 of the previous entry plus its own content, so editing,
 removing or reordering anything already recorded breaks the chain. Only
 swarmux writes it; the agent runner never gets a handle on it, and the table
-refuses changes and deletions. The chain has no secret key: someone who
-rewrites every entry after an edit gets a valid chain with a different head,
-so keep a head hash you printed earlier to compare against.
+refuses changes and deletions. The chain alone has no secret key: someone who
+can write the end of it can rewrite every entry after an edit and get a valid
+chain with a different head. That is what anchoring is for.
 
 ```sh
-swarmux audit verify      # walks the chain; prints the head hash, exits 1 at the first break
+swarmux audit verify      # walks the chain and every checkpoint; exits 1 on a break
 swarmux audit tail -n 20  # the newest entries
 swarmux doctor            # includes the ledger head and whether it verifies
 ```
+
+### Anchoring the ledger
+
+A checkpoint is a signed statement: "at this time the ledger had this many
+entries and its last entry hashed to this". It is signed with an ed25519 key
+(minisign format) that lives outside the database, in the OS keychain when
+there is one.
+
+```sh
+swarmux audit checkpoint                   # sign the head now (also done whenever a mission is delivered)
+swarmux audit verify                       # the chain, and the ledger against every checkpoint
+swarmux audit export-checkpoints > cp.txt  # one line each: keep a copy where an agent cannot write
+swarmux audit verify --checkpoints cp.txt  # also check against that copy
+```
+
+`verify` reports **cut short** when the ledger is shorter than a checkpoint
+says it was, and **rewritten** when the entry at a checkpoint's position
+hashes differently now, even if the rewritten chain is internally valid.
+Entries after the newest checkpoint are not anchored yet; `verify` says how
+many.
+
+What this protects, honestly: the ledger is *tamper-evident, anchored*, not
+tamper-proof. Agents run as your own OS user, so anything that can write the
+database can in principle also ask the keychain for the key (or read it from
+`~/.swarmux/audit.key` on a machine without a keychain, which `audit
+checkpoint` says), delete the checkpoints and sign new ones. Checkpoints
+raise the bar from "edit a file" to "edit a file and use the key" and make
+the earlier history committed to something the database does not hold by
+itself. The strong guarantee comes from a copy outside the machine's reach:
+export the checkpoints now and then (a gist, an email to yourself) and verify
+against them. On Linux the keychain may not survive a reboot; then a new key
+is made, and earlier checkpoints still verify against their own recorded key
+but show as made by another key.
 
 Long texts (prompts, answers, tool output) are kept up to 8 KB per field,
 with the SHA-256 and length of the full text.

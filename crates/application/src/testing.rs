@@ -108,6 +108,9 @@ impl InMemoryStore {
             started_at: row.started_at,
             error: r.and_then(|r| r.error.clone()),
             review_of: row.job.review_of,
+            cache_ratio: r.and_then(|r| {
+                swarmux_domain::cache_read_ratio(r.tokens_in, r.cache_read, r.cache_creation)
+            }),
         }
     }
 

@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
+use swarmux_application::anchor::AnchorService;
 use swarmux_application::ledger::LedgerService;
 use swarmux_application::ports::Clock;
 use swarmux_application::{
@@ -45,6 +46,7 @@ pub fn service(
     ledger: Rc<LedgerService>,
     clock: Rc<dyn Clock>,
     checkpoints: Option<Rc<CheckpointService>>,
+    anchor: Option<Rc<AnchorService>>,
 ) -> Rc<EvidenceService> {
     let mut service = EvidenceService::new(
         Rc::new(EvidenceFiles::new(store.clone())),
@@ -57,6 +59,9 @@ pub fn service(
     .with_probe(Rc::new(GhOutcomes::default()));
     if let Some(c) = checkpoints {
         service = service.with_checkpoints(c);
+    }
+    if let Some(a) = anchor {
+        service = service.with_anchor(a);
     }
     Rc::new(service)
 }
@@ -77,7 +82,8 @@ fn open() -> anyhow::Result<Opened> {
         Rc::new(SqliteLedger::open(&paths.db)?),
         clock.clone(),
     ));
-    let service = service(store.clone(), ledger, clock.clone(), None);
+    let anchor = crate::audit::service(&paths).ok().map(Rc::new);
+    let service = service(store.clone(), ledger, clock.clone(), None, anchor);
     Ok(Opened {
         store,
         service,

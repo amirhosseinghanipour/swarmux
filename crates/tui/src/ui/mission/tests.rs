@@ -66,6 +66,7 @@ fn finish(t: &TestApp, i: usize, is_error: bool, text: &str) {
             tokens_in: 1_200,
             tokens_out: 5_400,
             cache_read: 182_400,
+            cache_creation: None,
             context_window: Some(200_000),
             subagents_spawned: 0,
             text: text.into(),

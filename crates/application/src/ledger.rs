@@ -473,7 +473,27 @@ impl LedgerService {
             None => payload,
         };
         let actor = if r.event.is_some() { "gate" } else { "cli" };
-        self.append(now, LedgerKind::GateVerdict, actor, r.job, session, payload)
+        self.append(now, LedgerKind::GateVerdict, actor, r.job, session, payload)?;
+        // The base-suite step has its own entry: what was put back, what
+        // failed against it.
+        let Some(base) = &r.findings.base_suite else {
+            return Ok(());
+        };
+        let failed: Vec<Payload> = base
+            .failed
+            .iter()
+            .map(|(name, line)| {
+                Payload::new()
+                    .str("check", name)
+                    .text("first_failure", line)
+            })
+            .collect();
+        let payload = Payload::new()
+            .str("outcome", if base.clean() { "pass" } else { "fail" })
+            .strs("restored", &base.restored)
+            .objects("failed", failed)
+            .text("verdict", &base.text());
+        self.append(now, LedgerKind::BaseSuite, actor, r.job, session, payload)
     }
 
     /// What the watchdog saw or did for `job`: an `alarm`, a `rung` taken,

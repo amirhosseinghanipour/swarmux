@@ -47,3 +47,44 @@ pub fn alarms(days: i64) -> anyhow::Result<()> {
     }
     Ok(())
 }
+
+/// `swarmux stats cache`: how much of what the agents read came from the
+/// prompt cache over the last `days` days.
+pub fn cache(days: i64) -> anyhow::Result<()> {
+    let paths = Paths::default_home()?;
+    std::fs::create_dir_all(&paths.data_dir)
+        .with_context(|| format!("cannot create {}", paths.data_dir.display()))?;
+    let store = SqliteStore::open(&paths.db)?;
+    let report = swarmux_application::cache::cache_report(&store, SystemClock.now(), days)?;
+    let pct = |r: Option<f64>| r.map_or_else(|| "—".to_string(), |r| format!("{:.0}%", r * 100.0));
+    println!(
+        "prompt cache, last {} day{}",
+        report.days,
+        if report.days == 1 { "" } else { "s" }
+    );
+    let all = report.all;
+    if all.jobs == 0 {
+        println!("  no finished jobs");
+        return Ok(());
+    }
+    println!(
+        "  cache-read  {}   of input, over {} of {} jobs that reported it",
+        pct(all.ratio()),
+        all.known,
+        all.jobs
+    );
+    println!(
+        "  tokens      {} read from cache, {} written to it, {} not cached",
+        all.cache_read, all.cache_creation, all.input
+    );
+    for (model, t) in &report.models {
+        println!(
+            "  {:<24} {:>5}   {} job{}",
+            model,
+            pct(t.ratio()),
+            t.jobs,
+            if t.jobs == 1 { "" } else { "s" }
+        );
+    }
+    Ok(())
+}

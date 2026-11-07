@@ -18,6 +18,7 @@ pub use cards::{
 pub use verdict::{RunFacts, VerdictFacts, checks_of, parse_verdict, sealed_digest};
 pub use verify::{Rerun, VerifyItem, VerifyReport, compare_checks};
 
+use crate::anchor::Checkpoint;
 use crate::json::Json;
 use crate::ledger::{Hash, Payload, hex, sha256};
 use crate::verifier::HiddenTally;
@@ -187,6 +188,10 @@ pub struct Bundle {
     pub wall_ms: u64,
     pub ledger: LedgerRange,
     pub sealed_at: Millis,
+    /// The signed checkpoint of the ledger that covers the bundle's
+    /// entries, when one could be taken: ties the bundle to the ledger
+    /// head with a key that is not in the database.
+    pub anchor: Option<Checkpoint>,
     pub signature: Option<Signature>,
 }
 
@@ -299,13 +304,20 @@ impl Bundle {
             ),
             None => body,
         };
-        body.objects("gates", gates)
+        let body = body
+            .objects("gates", gates)
             .json("review", &review)
             .objects("checkpoints", checkpoints)
             .json("cost", &cost.build())
             .int("wall_ms", clamp(self.wall_ms))
             .json("ledger", &ledger.build())
-            .int("sealed_at", self.sealed_at)
+            .int("sealed_at", self.sealed_at);
+        // Written only when a checkpoint was taken, so bundles sealed
+        // before anchoring existed keep their digest.
+        match &self.anchor {
+            Some(a) => body.json("anchor", &a.to_json()),
+            None => body,
+        }
     }
 
     /// The JSON the digest is taken over: everything but the signature.
@@ -469,6 +481,10 @@ impl Bundle {
                 head_hash: string(l, "head_hash")?,
             },
             sealed_at: num(&j, "sealed_at")? as i64,
+            anchor: match j.get("anchor") {
+                Some(a @ Json::Obj(_)) => Some(Checkpoint::from_value(a)?),
+                _ => None,
+            },
             signature,
         })
     }

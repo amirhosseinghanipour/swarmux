@@ -72,10 +72,12 @@ pub enum LedgerKind {
     Evidence,
     /// The watchdog saw trouble, took a recovery rung, or saw it settle.
     Watchdog,
+    /// The checks were run again against the original tests.
+    BaseSuite,
 }
 
 impl LedgerKind {
-    pub const ALL: [LedgerKind; 15] = [
+    pub const ALL: [LedgerKind; 16] = [
         LedgerKind::Genesis,
         LedgerKind::JobQueued,
         LedgerKind::JobStarted,
@@ -91,6 +93,7 @@ impl LedgerKind {
         LedgerKind::Mission,
         LedgerKind::Evidence,
         LedgerKind::Watchdog,
+        LedgerKind::BaseSuite,
     ];
 
     /// The stable name stored and hashed.
@@ -111,6 +114,7 @@ impl LedgerKind {
             LedgerKind::Mission => "mission",
             LedgerKind::Evidence => "evidence",
             LedgerKind::Watchdog => "watchdog",
+            LedgerKind::BaseSuite => "base_suite",
         }
     }
 
@@ -484,6 +488,7 @@ mod tests {
                 "mission",
                 "evidence",
                 "watchdog",
+                "base_suite",
             ]
         );
     }

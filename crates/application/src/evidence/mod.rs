@@ -32,6 +32,7 @@ use swarmux_domain::ledger::{Hash, hex};
 use swarmux_domain::mission::{Mission, MissionState, compile};
 use swarmux_domain::{JobId, Millis, ReviewState};
 
+use crate::anchor::AnchorService;
 use crate::checkpoint::CheckpointService;
 use crate::ledger::LedgerService;
 use crate::ports::{Clock, JobRepository};
@@ -140,6 +141,7 @@ pub struct EvidenceService {
     signer: Rc<dyn Signer>,
     clock: Rc<dyn Clock>,
     checkpoints: Option<Rc<CheckpointService>>,
+    anchor: Option<Rc<AnchorService>>,
     rerunner: Option<Rerunner>,
     probe: Option<Rc<dyn OutcomeProbe>>,
     probe_tx: Sender<(String, ProbeReply)>,
@@ -172,6 +174,7 @@ impl EvidenceService {
             signer: Rc::new(HashSigner),
             clock,
             checkpoints: None,
+            anchor: None,
             rerunner: None,
             probe: None,
             probe_tx,
@@ -193,6 +196,13 @@ impl EvidenceService {
     /// Lists a mission's checkpoints in its bundle and finds its worktree.
     pub fn with_checkpoints(mut self, checkpoints: Rc<CheckpointService>) -> EvidenceService {
         self.checkpoints = Some(checkpoints);
+        self
+    }
+
+    /// Takes a signed checkpoint of the ledger as each bundle is sealed
+    /// and keeps it in the bundle.
+    pub fn with_anchor(mut self, anchor: Rc<AnchorService>) -> EvidenceService {
+        self.anchor = Some(anchor);
         self
     }
 
@@ -259,6 +269,9 @@ impl EvidenceService {
             None => Vec::new(),
         };
         let (cost, wall_ms, review) = self.cost_of(job, mission)?;
+        // A checkpoint that cannot be signed (no key, locked keychain)
+        // does not stop a delivery: the bundle simply has none.
+        let anchor = self.anchor.as_ref().and_then(|a| a.checkpoint().ok());
         let k = &mission.contract;
         let mut bundle = Bundle {
             schema: BUNDLE_SCHEMA,
@@ -296,6 +309,7 @@ impl EvidenceService {
                 head_hash: hex(&trail.last_hash),
             },
             sealed_at: self.clock.now(),
+            anchor,
             signature: None,
         };
         bundle.signature = Some(self.signer.sign(&bundle.digest()));

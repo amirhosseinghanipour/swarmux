@@ -276,11 +276,13 @@ fn job_lines(d: &JobDetail, t: &Theme) -> Vec<Line<'static>> {
         ]),
         Line::styled(
             format!(
-                "{} UTC{duration} · ${:.4} · in {} / out {}",
+                "{} UTC{duration} · ${:.4} · in {} / out {} · cache {}",
                 iso_minute(s.created_at),
                 s.cost_usd,
                 short(s.tokens_in),
-                short(s.tokens_out)
+                short(s.tokens_out),
+                s.cache_ratio
+                    .map_or_else(|| "—".to_string(), |c| format!("{:.0}%", c * 100.0))
             ),
             Style::new().fg(t.muted),
         ),

@@ -379,6 +379,7 @@ impl EvidenceRig {
                     tokens_in: 1000,
                     tokens_out: 4000,
                     cache_read: 0,
+                    cache_creation: None,
                     cost_usd: 1.5,
                     duration_ms: 90_000,
                     outcome: "success".into(),

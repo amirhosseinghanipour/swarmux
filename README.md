@@ -116,6 +116,14 @@ From a checkout, use `cargo run` and `cargo run -- doctor`. See
   happened while you were away; re-run, fork, search or verify from any card
 - **Evidence bundles**: every delivered mission leaves a verifiable JSON record that
   `swarmux verify` re-checks at the head commit in a clean checkout
+- **Test-weakening detector and base suite**: deleted, skipped, loosened or
+  re-blessed tests block a stop, and the checks are run again against the
+  original tests ([verifier](guide/verifier.md))
+- **Anchored ledger**: signed checkpoints of the audit ledger's head, kept
+  with your key, expose a ledger that was cut short or rewritten
+  ([ledger](guide/ledger-and-evidence.md#anchoring-the-ledger))
+- **Cache-read metric**: how much of each job's input came from the prompt
+  cache, on the Ledger card and in Focus; `swarmux stats cache`
 - **Audit ledger**: a tamper-evident, hash-chained record of every job,
   agent event, review and guard decision
 - **JEV (optional, bring your own key)**: the hosted Jev model for fuzzy
