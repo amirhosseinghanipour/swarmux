@@ -52,7 +52,7 @@ fn job_from_row(r: &Row) -> rusqlite::Result<Job> {
 const SUMMARY_SELECT: &str = "
 SELECT j.id, j.session_id, COALESCE(s.name, ''), j.body_rendered, j.model, j.status,
        r.cost_usd, r.tokens_in, r.tokens_out, r.duration_ms, j.created_at, j.started_at, r.error,
-       j.review_of
+       j.review_of, r.cache_read, r.cache_creation
 FROM jobs j
 LEFT JOIN sessions s ON s.id = j.session_id
 LEFT JOIN job_results r ON r.job_id = j.id";
@@ -73,6 +73,18 @@ fn summary_from_row(r: &Row) -> rusqlite::Result<JobSummary> {
         started_at: r.get(11)?,
         error: r.get(12)?,
         review_of: r.get::<_, Option<i64>>(13)?.map(JobId),
+        cache_ratio: {
+            let read = r.get::<_, Option<i64>>(14)?;
+            let created = r.get::<_, Option<i64>>(15)?;
+            let input = r.get::<_, Option<i64>>(7)?.unwrap_or(0);
+            read.and_then(|read| {
+                swarmux_domain::cache_read_ratio(
+                    input as u64,
+                    read as u64,
+                    created.map(|c| c as u64),
+                )
+            })
+        },
     })
 }
 
@@ -173,8 +185,8 @@ impl JobRepository for SqliteStore {
         self.conn
             .execute(
                 "INSERT OR REPLACE INTO job_results
-                 (job_id, tokens_in, tokens_out, cache_read, cost_usd, duration_ms, outcome, error, text)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                 (job_id, tokens_in, tokens_out, cache_read, cost_usd, duration_ms, outcome, error, text, cache_creation)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                 params![
                     id.0,
                     r.tokens_in as i64,
@@ -184,7 +196,8 @@ impl JobRepository for SqliteStore {
                     r.duration_ms as i64,
                     r.outcome,
                     r.error,
-                    cap(&r.text, TEXT_CAP)
+                    cap(&r.text, TEXT_CAP),
+                    r.cache_creation.map(|n| n as i64)
                 ],
             )
             .or_storage()?;
@@ -194,7 +207,7 @@ impl JobRepository for SqliteStore {
     fn result(&self, id: JobId) -> AppResult<Option<JobResult>> {
         self.conn
             .query_row(
-                "SELECT tokens_in, tokens_out, cache_read, cost_usd, duration_ms, outcome, error, text
+                "SELECT tokens_in, tokens_out, cache_read, cost_usd, duration_ms, outcome, error, text, cache_creation
                  FROM job_results WHERE job_id = ?1",
                 [id.0],
                 |r| {
@@ -207,6 +220,7 @@ impl JobRepository for SqliteStore {
                         outcome: r.get(5)?,
                         error: r.get(6)?,
                         text: r.get(7)?,
+                        cache_creation: r.get::<_, Option<i64>>(8)?.map(|n| n as u64),
                     })
                 },
             )
@@ -412,6 +426,7 @@ mod tests {
                 tokens_in: 10,
                 tokens_out: 20,
                 cache_read: 0,
+                cache_creation: None,
                 cost_usd: 0.5,
                 duration_ms: 1500,
                 outcome: "failed".into(),
@@ -483,6 +498,7 @@ mod tests {
             tokens_in: 0,
             tokens_out: 0,
             cache_read: 0,
+            cache_creation: None,
             cost_usd: 0.0,
             duration_ms: 0,
             outcome: "success".into(),

@@ -155,6 +155,9 @@ pub struct RunCard {
     pub models: Vec<(String, f64)>,
     pub labels: Vec<Label>,
     pub at: Millis,
+    /// Share of the run's input served from the prompt cache; `None` when
+    /// unknown.
+    pub cache: Option<f64>,
 }
 
 impl RunCard {

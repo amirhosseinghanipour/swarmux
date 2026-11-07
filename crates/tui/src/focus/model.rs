@@ -32,6 +32,9 @@ pub struct Who {
     pub elapsed_ms: Option<Millis>,
     pub cost_usd: f64,
     pub context: Option<f64>,
+    /// Share of the job's input served from the prompt cache; unknown
+    /// while it runs or when it did not report.
+    pub cache: Option<f64>,
 }
 
 /// A point the session can be resumed from.
@@ -239,6 +242,7 @@ impl Focus {
             }),
             cost_usd: job.cost_usd,
             context: fact.and_then(|f| f.context),
+            cache: fact.and_then(|f| f.cache_ratio),
         };
 
         let started = fact.and_then(|f| f.started_at.or(Some(f.created_at)));

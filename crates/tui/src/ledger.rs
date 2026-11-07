@@ -172,6 +172,7 @@ mod tests {
             started_at: None,
             error: None,
             review_of: None,
+            cache_ratio: None,
         }
     }
 
@@ -186,6 +187,7 @@ mod tests {
             models: Vec::new(),
             labels: Vec::new(),
             at: 0,
+            cache: None,
         }
     }
 

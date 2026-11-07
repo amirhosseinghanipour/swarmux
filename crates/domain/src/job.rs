@@ -80,6 +80,9 @@ pub struct JobResult {
     pub tokens_in: u64,
     pub tokens_out: u64,
     pub cache_read: u64,
+    /// Tokens written to the prompt cache; `None` when unknown (the usage
+    /// did not say, or the job ended before it reported any).
+    pub cache_creation: Option<u64>,
     pub cost_usd: f64,
     pub duration_ms: u64,
     pub outcome: String,

@@ -165,10 +165,15 @@ fn header(frame: &mut Frame, area: Rect, app: &App, f: &Focus) {
         (None, Some(cwd)) => badge.push(cwd.display().to_string()),
         (None, None) => {}
     }
-    let ctx = who.context.map(|c| format!("ctx {:.0}%", c * 100.0));
-    let right = ctx.map_or_else(Line::default, |c| {
-        Line::from(Span::styled(format!("{c} "), Style::new().fg(t.muted)))
-    });
+    let cache = who.cache.map_or_else(
+        || "cache —".to_string(),
+        |c| format!("cache {:.0}%", c * 100.0),
+    );
+    let ctx = who.context.map_or_else(
+        || cache.clone(),
+        |c| format!("ctx {:.0}% · {cache}", c * 100.0),
+    );
+    let right = Line::from(Span::styled(format!("{ctx} "), Style::new().fg(t.muted)));
     let room = w.saturating_sub(right.width() + 2);
     frame.render_widget(
         Line::from(vec![

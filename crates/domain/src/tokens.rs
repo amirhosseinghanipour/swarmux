@@ -6,6 +6,16 @@ pub fn estimate_tokens(text: &str) -> usize {
     text.chars().count().div_ceil(4)
 }
 
+/// The share of a job's input that came from the prompt cache:
+/// `cache_read / (input + cache_read + cache_creation)`. `None` when it
+/// cannot be told: the usage did not report cache writes, or no input was
+/// reported at all.
+pub fn cache_read_ratio(input: u64, cache_read: u64, cache_creation: Option<u64>) -> Option<f64> {
+    let created = cache_creation?;
+    let total = input.saturating_add(cache_read).saturating_add(created);
+    (total > 0).then(|| cache_read as f64 / total as f64)
+}
+
 /// Usage of one actor (the lead, a subagent or the reviewer).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TokenTally {

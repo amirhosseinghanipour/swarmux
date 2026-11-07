@@ -27,6 +27,9 @@ pub struct JobSummary {
     pub error: Option<String>,
     /// Set on a review job: the job it audits.
     pub review_of: Option<JobId>,
+    /// Share of the job's input served from the prompt cache; `None` when
+    /// unknown.
+    pub cache_ratio: Option<f64>,
 }
 
 impl JobSummary {
@@ -217,6 +220,7 @@ mod tests {
             tokens_in: 1,
             tokens_out: 2,
             cache_read: 0,
+            cache_creation: None,
             cost_usd: 0.25,
             duration_ms: 1000,
             outcome: "success".into(),

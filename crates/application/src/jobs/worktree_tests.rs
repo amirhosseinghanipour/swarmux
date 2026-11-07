@@ -60,6 +60,7 @@ fn done() -> AgentEvent {
         tokens_in: 1,
         tokens_out: 2,
         cache_read: 0,
+        cache_creation: None,
         context_window: None,
         subagents_spawned: 0,
         text: "done".into(),
