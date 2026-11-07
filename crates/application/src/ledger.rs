@@ -185,6 +185,17 @@ impl LedgerService {
         )
     }
 
+    /// A knowledge item changed, was delivered, or a rule acted (or would
+    /// have); returns the entry's `seq`.
+    pub fn record_knowledge(
+        &self,
+        job: Option<JobId>,
+        payload: Payload,
+        now: Millis,
+    ) -> AppResult<u64> {
+        self.append_entry(now, LedgerKind::Knowledge, SWARMUX, job, None, payload)
+    }
+
     /// A mission went from `from` to its current state.
     pub fn record_mission(
         &self,

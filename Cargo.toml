@@ -21,6 +21,7 @@ clap = { version = "4.6.7", features = ["derive"] }
 crossterm = "0.29"
 keyring = { version = "3.6.3", features = ["apple-native", "windows-native", "linux-native"] }
 ratatui = "0.30"
+regex = { version = "1.13.1", default-features = false, features = ["std", "unicode-perl"] }
 reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls", "blocking"] }
 rpassword = "7.5.4"
 rusqlite = { version = "0.41", features = ["bundled"] }

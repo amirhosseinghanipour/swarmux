@@ -17,6 +17,7 @@ use crate::gate::{GateService, GateState};
 use crate::guard::GuardService;
 use crate::hookbus::HookBus;
 use crate::jobs::{JobFact, JobService};
+use crate::knowledge::KnowledgeService;
 use crate::missions::MissionService;
 use crate::watchdog::Watchdog;
 use crate::{AppError, AppResult};
@@ -36,6 +37,8 @@ pub struct Engine {
     pub missions: Option<MissionService>,
     /// The mission boards and where agents' calls arrive.
     pub board: Option<(Rc<BoardService>, Rc<dyn BoardInbox>)>,
+    /// Rules, facts and decisions, and what reached the agents.
+    pub knowledge: Option<Rc<KnowledgeService>>,
 }
 
 /// What one [`Engine::pump`] did.
@@ -67,6 +70,7 @@ impl Engine {
             watchdog: None,
             missions: None,
             board: None,
+            knowledge: None,
         }
     }
 
@@ -114,6 +118,9 @@ impl Engine {
             let jobs = &self.jobs;
             let finished = |job| jobs.progress(job).is_none_or(|p| p.status.is_finished());
             errors.extend(service.pump(&**inbox, &finished));
+        }
+        if let Some(knowledge) = &self.knowledge {
+            errors.extend(knowledge.pump());
         }
         EngineReport {
             errors,

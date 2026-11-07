@@ -555,6 +555,7 @@ impl FakeHookInbox {
                 subject: subject.into(),
                 input: format!("{{\"subject\":{subject:?}}}"),
                 cwd: "/w".into(),
+                content: String::new(),
             },
             answered: None,
         });
@@ -1799,5 +1800,67 @@ impl FakeScanner {
 impl crate::workspace::WorkspaceScanner for FakeScanner {
     fn scan(&self, root: &Path) -> AppResult<Vec<crate::workspace::ScannedRepo>> {
         Ok(self.found.borrow().get(root).cloned().unwrap_or_default())
+    }
+}
+
+/// Knowledge events and the stored projection, in memory.
+#[derive(Default)]
+pub struct InMemoryKnowledge {
+    pub events: RefCell<Vec<swarmux_domain::knowledge::Event>>,
+    pub items: RefCell<std::collections::BTreeMap<String, swarmux_domain::knowledge::Item>>,
+}
+
+impl crate::knowledge::KnowledgeStore for InMemoryKnowledge {
+    fn append(
+        &self,
+        event: &swarmux_domain::knowledge::Event,
+        item: &swarmux_domain::knowledge::Item,
+    ) -> AppResult<u64> {
+        let mut events = self.events.borrow_mut();
+        let mut e = event.clone();
+        e.seq = events.len() as u64 + 1;
+        events.push(e.clone());
+        self.items
+            .borrow_mut()
+            .insert(item.id.to_string(), item.clone());
+        Ok(e.seq)
+    }
+
+    fn events(&self) -> AppResult<Vec<swarmux_domain::knowledge::Event>> {
+        Ok(self.events.borrow().clone())
+    }
+
+    fn last_seq(&self) -> AppResult<u64> {
+        Ok(self.events.borrow().len() as u64)
+    }
+
+    fn items(&self) -> AppResult<Vec<swarmux_domain::knowledge::Item>> {
+        Ok(self.items.borrow().values().cloned().collect())
+    }
+
+    fn replace_items(&self, items: &[swarmux_domain::knowledge::Item]) -> AppResult<()> {
+        *self.items.borrow_mut() = items
+            .iter()
+            .map(|i| (i.id.to_string(), i.clone()))
+            .collect();
+        Ok(())
+    }
+}
+
+/// Files anchors read, by path relative to any root.
+#[derive(Default)]
+pub struct FakeAnchors(pub RefCell<HashMap<String, String>>);
+
+impl FakeAnchors {
+    pub fn set(&self, rel: &str, text: &str) {
+        self.0
+            .borrow_mut()
+            .insert(rel.to_string(), text.to_string());
+    }
+}
+
+impl crate::knowledge::AnchorReader for FakeAnchors {
+    fn read(&self, _root: &std::path::Path, rel: &str) -> Option<String> {
+        self.0.borrow().get(rel).cloned()
     }
 }

@@ -183,7 +183,7 @@ pub trait Clock {
 }
 
 /// A tool call Claude Code asks swarmux about (its PreToolUse hook).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct HookRequest {
     /// Unique within this run.
     pub request_id: u64,
@@ -196,6 +196,9 @@ pub struct HookRequest {
     pub input: String,
     /// The folder the call was made from.
     pub cwd: String,
+    /// The text a file tool writes (`content`, `new_string`, every edit's
+    /// `new_string`), for knowledge rules; empty for other tools.
+    pub content: String,
 }
 
 /// A hook request as it left the inbox.

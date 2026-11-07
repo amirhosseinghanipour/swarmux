@@ -13,8 +13,8 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use swarmux_application::ports::{HookInbox, InboxItem};
 use swarmux_application::{
     AllowStop, BoardCall, BoardInbox, BoardReply, HookFeed, HookNotice, NoSessionContext,
-    SessionStartContext, SessionStartInfo, SharedPolicy, StatuslineFeed, StopAnswer, StopContext,
-    StopPolicy,
+    NoToolContext, SessionStartContext, SessionStartInfo, SharedPolicy, StatuslineFeed, StopAnswer,
+    StopContext, StopPolicy, ToolContext,
 };
 use swarmux_domain::telemetry::Statusline;
 use swarmux_domain::{Decision, HookEvent, JobId, Verdict};
@@ -39,6 +39,8 @@ type Waiting = Mutex<HashMap<u64, oneshot::Sender<Decision>>>;
 pub struct Responders {
     pub stop: Arc<dyn StopPolicy>,
     pub session_start: Arc<dyn SessionStartContext>,
+    /// What a tool call adds to the agent's context (knowledge it pulls).
+    pub tool_context: Arc<dyn ToolContext>,
 }
 
 impl Default for Responders {
@@ -46,6 +48,7 @@ impl Default for Responders {
         Responders {
             stop: Arc::new(AllowStop),
             session_start: Arc::new(NoSessionContext),
+            tool_context: Arc::new(NoToolContext),
         }
     }
 }
@@ -243,9 +246,7 @@ async fn serve<S: AsyncRead + AsyncWrite>(conn: S, shared: Arc<Shared>) {
             }
             Ok(wire) if wire.is_board() => WireReply::board(&board(wire, &shared).await),
             Ok(wire) => match wire.hook_event() {
-                Some(HookEvent::PreToolUse) => {
-                    WireReply::from_decision(&decide(wire, &shared).await)
-                }
+                Some(HookEvent::PreToolUse) => decide(wire, &shared).await,
                 Some(event) => lifecycle(event, wire, shared.clone()).await,
                 // An event this version doesn't know: leave it alone.
                 None => WireReply::pass(),
@@ -293,27 +294,35 @@ async fn board(wire: WireRequest, shared: &Shared) -> BoardReply {
     }
 }
 
-async fn decide(wire: WireRequest, shared: &Shared) -> Decision {
+/// Decides a tool call, with what it adds to the agent's context (the
+/// knowledge a file pulls, a rule's warning) unless it is denied.
+async fn decide(wire: WireRequest, shared: &Shared) -> WireReply {
     let id = shared.next_id.fetch_add(1, Ordering::Relaxed);
     let request = wire.into_hook_request(id);
     let (decision, micros) = shared.policy.decide(&request);
-    if decision.verdict != Verdict::Ask {
+    let decision = if decision.verdict == Verdict::Ask {
+        let (tx, rx) = oneshot::channel();
+        lock(&shared.waiting).insert(id, tx);
+        let _ = lock(&shared.items).send(InboxItem {
+            request: request.clone(),
+            answered: None,
+        });
+        // If the app goes away, leave the call to Claude Code's own rules.
+        rx.await
+            .unwrap_or_else(|_| Decision::new(Verdict::Pass, None))
+    } else {
         let item = InboxItem {
-            request,
+            request: request.clone(),
             answered: Some((decision.clone(), micros)),
         };
         let _ = lock(&shared.items).send(item);
-        return decision;
+        decision
+    };
+    let mut reply = WireReply::from_decision(&decision);
+    if decision.verdict != Verdict::Deny {
+        reply.context = shared.responders.tool_context.tool_context(&request);
     }
-    let (tx, rx) = oneshot::channel();
-    lock(&shared.waiting).insert(id, tx);
-    let _ = lock(&shared.items).send(InboxItem {
-        request,
-        answered: None,
-    });
-    // If the app goes away, leave the call to Claude Code's own rules.
-    rx.await
-        .unwrap_or_else(|_| Decision::new(Verdict::Pass, None))
+    reply
 }
 
 /// Hands a lifecycle event to the app and answers it: the events Claude

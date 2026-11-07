@@ -60,10 +60,12 @@ pub enum Screen {
     Dashboard,
     /// What the agents of each mission wrote to each other.
     Board,
+    /// Rules, facts and decisions kept for the agents.
+    Knowledge,
 }
 
 impl Screen {
-    pub const ALL: [Screen; 8] = [
+    pub const ALL: [Screen; 9] = [
         Screen::Mission,
         Screen::Missions,
         Screen::Prompts,
@@ -72,6 +74,7 @@ impl Screen {
         Screen::Sessions,
         Screen::Dashboard,
         Screen::Board,
+        Screen::Knowledge,
     ];
 
     pub fn title(self) -> &'static str {
@@ -84,6 +87,7 @@ impl Screen {
             Screen::Ledger => "ledger",
             Screen::Sessions => "sessions",
             Screen::Board => "board",
+            Screen::Knowledge => "knowledge",
         }
     }
 
@@ -98,6 +102,7 @@ impl Screen {
             Screen::Sessions => '6',
             Screen::Dashboard => '0',
             Screen::Board => '7',
+            Screen::Knowledge => '8',
         }
     }
 
@@ -122,6 +127,10 @@ pub enum InputPurpose {
     Search,
     /// The workspace a new session works on.
     WorkspaceSession,
+    /// A new knowledge item, `kind: text`.
+    KnowledgeAdd,
+    /// The new text of a knowledge item.
+    KnowledgeEdit,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -167,6 +176,8 @@ pub struct App {
     pub missions_screen: MissionsScreen,
     /// The Board screen's selection.
     pub board_screen: crate::board::BoardScreen,
+    /// The Knowledge screen's selection.
+    pub knowledge_screen: crate::knowledge::KnowledgeScreen,
     /// Jobs, the Guard, hooks, the gate, the watchdog, missions and the
     /// board: the services that keep the work going.
     pub(crate) engine: Engine,
@@ -312,6 +323,7 @@ impl App {
             mission: MissionState::default(),
             missions_screen: MissionsScreen::default(),
             board_screen: Default::default(),
+            knowledge_screen: Default::default(),
             engine: Engine::new(jobs, guard),
             evidence: None,
             away_since: None,
@@ -650,6 +662,7 @@ impl App {
             escalations.extend(missions.plan_items(now));
         }
         escalations.extend(self.board_items());
+        escalations.extend(self.knowledge_items());
         self.mission.refresh(
             (
                 &self.engine.guard,
@@ -1129,6 +1142,8 @@ impl App {
                         InputPurpose::BoardAnswer => self.submit_board_answer(&text),
                         InputPurpose::Search => Ok(()),
                         InputPurpose::WorkspaceSession => self.create_workspace_session(&text),
+                        InputPurpose::KnowledgeAdd => self.submit_knowledge_add(&text),
+                        InputPurpose::KnowledgeEdit => self.submit_knowledge_edit(&text),
                     };
                     self.show(result);
                 }
@@ -1185,6 +1200,9 @@ impl App {
             return;
         }
         if self.board_key(key.code) {
+            return;
+        }
+        if self.knowledge_key(key.code) {
             return;
         }
         let confirming_delete = std::mem::take(&mut self.prompts.confirm_delete);
@@ -1742,6 +1760,11 @@ impl App {
             (Some(0), false) => None,
             (Some(i), false) => boxed.get(i - 1).copied(),
         };
+    }
+
+    /// The folder swarmux was started in.
+    pub(crate) fn cwd(&self) -> &std::path::Path {
+        &self.cwd
     }
 
     pub(crate) fn show(&mut self, result: AppResult<()>) {
@@ -2412,8 +2435,10 @@ mod tests {
         assert_eq!(t.app.screen, Screen::Missions);
         press(&mut t.app, KeyCode::Char('0'));
         assert_eq!(t.app.screen, Screen::Dashboard);
-        press(&mut t.app, KeyCode::Char('8'));
+        press(&mut t.app, KeyCode::Char('9'));
         assert_eq!(t.app.screen, Screen::Dashboard, "no such screen");
+        press(&mut t.app, KeyCode::Char('8'));
+        assert_eq!(t.app.screen, Screen::Knowledge);
         press(&mut t.app, KeyCode::Char('1'));
         assert_eq!(t.app.screen, Screen::Mission);
         assert_eq!(Screen::default(), Screen::Mission, "the home screen");

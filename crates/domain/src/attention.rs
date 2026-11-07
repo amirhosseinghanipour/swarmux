@@ -60,6 +60,8 @@ pub enum AttentionKind {
     BoardQuestion,
     /// A follow-up too urgent to wait for the owner brief.
     FollowUp,
+    /// Knowledge items whose code changed wait to be confirmed.
+    Knowledge,
 }
 
 impl AttentionKind {
@@ -78,6 +80,7 @@ impl AttentionKind {
             AttentionKind::Merge => "merge",
             AttentionKind::BoardQuestion => "ask",
             AttentionKind::FollowUp => "followup",
+            AttentionKind::Knowledge => "knowledge",
         }
     }
 
@@ -242,7 +245,8 @@ impl AttentionItem {
                 | AttentionKind::Drift
                 | AttentionKind::Merge
                 | AttentionKind::BoardQuestion
-                | AttentionKind::FollowUp,
+                | AttentionKind::FollowUp
+                | AttentionKind::Knowledge,
             ) => self.id.to_string(),
             (None, kind) => kind.as_str().to_string(),
         }
@@ -554,6 +558,7 @@ impl AttentionItem {
             AttentionKind::Merge => "merge",
             AttentionKind::BoardQuestion => "ask",
             AttentionKind::FollowUp => "followup",
+            AttentionKind::Knowledge => "knowledge",
         };
         AttentionItem {
             id: AttentionId::new(format!("job:{job}:{suffix}")),

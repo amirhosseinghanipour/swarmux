@@ -335,6 +335,16 @@ pub fn fenced_folder<'a>(fenced: &'a [PathBuf], subject: &str, cwd: &str) -> Opt
     })
 }
 
+/// Whether a shell line runs `swarmux knowledge` or `swarmux rules`, which
+/// show the commands of rules' hidden checks.
+pub fn runs_knowledge_command(tool: &str, subject: &str) -> bool {
+    if !matches!(tool, "Bash" | "PowerShell") {
+        return false;
+    }
+    let s = subject.to_ascii_lowercase();
+    s.contains("swarmux") && (s.contains("knowledge") || s.contains(" rules"))
+}
+
 /// Whether a shell line runs `swarmux holdout`, which lists hidden checks.
 pub fn runs_holdout_command(tool: &str, subject: &str) -> bool {
     if !matches!(tool, "Bash" | "PowerShell") {

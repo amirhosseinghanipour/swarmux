@@ -73,6 +73,7 @@ pub fn run(action: Action) -> anyhow::Result<()> {
                 println!("no repositories came or went");
             }
             print!("{}", show(&w));
+            crate::knowledge::recheck_workspace(w.id)?;
             Ok(())
         }
         Action::Rm { name } => {

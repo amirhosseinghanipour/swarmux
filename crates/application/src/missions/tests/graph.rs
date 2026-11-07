@@ -245,6 +245,7 @@ impl G {
             subject: subject.into(),
             input: String::new(),
             cwd,
+            content: String::new(),
         });
         let refused = d.verdict == Verdict::Deny;
         if refused {

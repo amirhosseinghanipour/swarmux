@@ -76,7 +76,7 @@ Twelve built-in themes, plus `wal`, base16 and matugen imports. List them with
 
 ```sh
 swarmux --demo         # a scripted demo: no Claude Code, no account, nothing of yours is touched
-swarmux                # the TUI: 1-7 switch screens (1 Mission control, 2 Missions, 7 Board), 0 Focus, p sends a prompt, q detaches
+swarmux                # the TUI: 1-8 switch screens (1 Mission control, 2 Missions, 7 Board, 8 Knowledge), 0 Focus, p sends a prompt, q detaches
 swarmux workspace add ~/product  # a folder of several git repositories, worked on as one
 swarmux daemon status  # the background service that keeps the work going with no window open
 swarmux doctor         # checks Claude Code, the settings, the Guard hook and telemetry
@@ -99,6 +99,11 @@ From a checkout, use `cargo run` and `cargo run -- doctor`. See
   admin site) worked on as one: a job sees every repository it touches, in
   a worktree per repository, and a mission lands in each of them in order,
   or in none
+- **Knowledge**: the rules, facts and decisions of a workspace, each scoped,
+  anchored to the code it is about and withheld once that code changes; a
+  one-page map every session starts with (and gets again after a
+  compaction), the items a file is about when an agent opens it, and rules
+  the Guard and the gate enforce, proven in shadow first
 - **Background service**: close the window and the work goes on; `swarmux`
   attaches again from any terminal, several windows at once, and a restart
   picks missions and jobs up where they were
@@ -159,6 +164,7 @@ Single Rust binary. Windows, macOS, Linux. Works with Claude Code only.
 - [Independent verifier, hidden checks and review](guide/verifier.md)
 - [Worktrees and checkpoints](guide/worktrees.md)
 - [Workspaces: several repositories worked on as one](guide/workspaces.md)
+- [Knowledge: rules, facts and decisions your agents keep to](guide/knowledge.md)
 - [Usage governor](guide/governor.md)
 - [Watchdog and recovery ladder](guide/watchdog.md)
 - [Notifications](guide/notifications.md)
