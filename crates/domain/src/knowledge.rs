@@ -666,11 +666,18 @@ impl Projection {
                 next.last_check = old.last_check;
                 next.created_at = old.created_at;
                 let mut events = old.provenance.events.clone();
-                events.extend(next.provenance.events.iter().copied());
+                for seq in &next.provenance.events {
+                    if !events.contains(seq) {
+                        events.push(*seq);
+                    }
+                }
                 next.provenance.events = events;
             }
-            next.provenance.events.extend(e.ledger);
-            next.provenance.events.dedup();
+            if let Some(seq) = e.ledger
+                && !next.provenance.events.contains(&seq)
+            {
+                next.provenance.events.push(seq);
+            }
             next.updated_at = e.at;
             self.items.insert(e.item.clone(), next);
             return;
