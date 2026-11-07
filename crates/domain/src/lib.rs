@@ -13,6 +13,7 @@ pub mod dist;
 mod error;
 mod event;
 pub mod evidence;
+pub mod followup;
 pub mod gate;
 mod guard;
 mod hook;

@@ -58,6 +58,8 @@ pub enum AttentionKind {
     Merge,
     /// An agent asked the user a question through the Board.
     BoardQuestion,
+    /// A follow-up too urgent to wait for the owner brief.
+    FollowUp,
 }
 
 impl AttentionKind {
@@ -75,6 +77,7 @@ impl AttentionKind {
             AttentionKind::Drift => "drift",
             AttentionKind::Merge => "merge",
             AttentionKind::BoardQuestion => "ask",
+            AttentionKind::FollowUp => "followup",
         }
     }
 
@@ -238,7 +241,8 @@ impl AttentionItem {
                 | AttentionKind::PlanReady
                 | AttentionKind::Drift
                 | AttentionKind::Merge
-                | AttentionKind::BoardQuestion,
+                | AttentionKind::BoardQuestion
+                | AttentionKind::FollowUp,
             ) => self.id.to_string(),
             (None, kind) => kind.as_str().to_string(),
         }
@@ -480,6 +484,25 @@ impl AttentionItem {
         )
     }
 
+    /// A follow-up that can't wait for the owner brief: a P1 risk is P1, a
+    /// blocker on running work P2. Answered on the Follow-ups screen.
+    pub fn follow_up(
+        id: i64,
+        job: Option<JobId>,
+        priority: Priority,
+        title: &str,
+        detail: &str,
+        since: Millis,
+    ) -> AttentionItem {
+        AttentionItem::of_mission(
+            format!("followup:{id}"),
+            (AttentionKind::FollowUp, priority, Likelihood::Certain),
+            (None, job),
+            (title, detail),
+            since,
+        )
+    }
+
     fn of_mission(
         id: String,
         (kind, priority, likelihood): (AttentionKind, Priority, Likelihood),
@@ -530,6 +553,7 @@ impl AttentionItem {
             AttentionKind::Drift => "drift",
             AttentionKind::Merge => "merge",
             AttentionKind::BoardQuestion => "ask",
+            AttentionKind::FollowUp => "followup",
         };
         AttentionItem {
             id: AttentionId::new(format!("job:{job}:{suffix}")),
