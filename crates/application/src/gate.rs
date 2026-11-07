@@ -27,6 +27,7 @@ use swarmux_domain::{
 
 use crate::attention::{Change, ChangeKind};
 use crate::checkpoint::{CheckpointService, Notes};
+use crate::contracts::{ContractGate, ContractJudgement};
 use crate::hookbus::{HookNotice, StopAnswer, StopContext, StopPolicy};
 use crate::knowledge::{RuleCheck, RuleChecks};
 use crate::ledger::LedgerService;
@@ -175,6 +176,8 @@ pub struct GateKeeper {
     verifier: Option<Verifier>,
     /// The checks knowledge rules add, and where their results go.
     rules: Option<Arc<dyn RuleChecks>>,
+    /// The cross-repo check of a mission's change (contracts).
+    contracts: Option<Arc<dyn ContractGate>>,
 }
 
 /// What running a repository's checks found.
@@ -282,6 +285,7 @@ impl GateKeeper {
             jobs: Mutex::default(),
             verifier: None,
             rules: None,
+            contracts: None,
         };
         (keeper, rx)
     }
@@ -292,6 +296,24 @@ impl GateKeeper {
     pub fn with_rules(mut self, rules: Arc<dyn RuleChecks>) -> GateKeeper {
         self.rules = Some(rules);
         self
+    }
+
+    /// Judges a mission's change against the contracts between repositories:
+    /// the checks of the repositories that consume what changed run with
+    /// the others, and a removed or renamed symbol that is still used
+    /// fails the gate with the places that use it.
+    pub fn with_contracts(mut self, contracts: Arc<dyn ContractGate>) -> GateKeeper {
+        self.contracts = Some(contracts);
+        self
+    }
+
+    /// The contract verdict of a mission's `job`, when it changed something
+    /// since the last stop.
+    fn contract_judgement(&self, job: Option<JobId>, key: &Key) -> Option<ContractJudgement> {
+        let (job, contracts) = (job?, self.contracts.as_ref()?);
+        let mission = lock(&self.jobs).contains_key(&job);
+        let touched = lock(&self.watches).get(key).is_some_and(|w| w.touched);
+        (mission && touched).then(|| contracts.judge(job)).flatten()
     }
 
     /// The rule checks of `job`, hidden ones when it is a mission's.
@@ -352,6 +374,14 @@ impl GateKeeper {
         add_lint(&mut gate.spec, &rules);
         let key = Key::of(stop.job, &stop.session);
         let subagent = stop.event == HookEvent::SubagentStop;
+        let contract = if subagent {
+            None
+        } else {
+            self.contract_judgement(stop.job, &key)
+        };
+        if let Some(c) = &contract {
+            add_checks(&mut gate.spec, &c.checks);
+        }
         let spec = &gate.spec;
         let (baseline, base, executed, blocks, touched) = {
             let mut watches = lock(&self.watches);
@@ -376,6 +406,9 @@ impl GateKeeper {
         } else {
             Checked::default()
         };
+        if let (true, Some(c)) = (touched && !subagent, contract) {
+            checked.runs.push(c.run);
+        }
         if touched && !subagent {
             run_rule_checks(
                 &*self.checker,
@@ -560,6 +593,7 @@ impl JobGates for GateKeeper {
         let rules = self.rule_checks(Some(job));
         add_lint(&mut gate.spec, &rules);
         let provider = self.rules.clone();
+        let contracts = self.contracts.clone();
         let source = self.source.clone();
         let checker = self.checker.clone();
         let verifier = self.verifier.clone();
@@ -571,7 +605,21 @@ impl JobGates for GateKeeper {
                     checker: &*checker,
                     verifier: verifier.as_ref(),
                 };
-                let mut record = verify_now(&*source, &work, job, &gate, baseline, base.as_deref());
+                let mut gate = gate;
+                let contract = contracts.and_then(|c| c.judge(job));
+                if let Some(c) = &contract {
+                    add_checks(&mut gate.spec, &c.checks);
+                }
+                let extra = contract.map(|c| c.run);
+                let mut record = verify_now(
+                    &*source,
+                    &work,
+                    job,
+                    &gate,
+                    baseline,
+                    base.as_deref(),
+                    extra,
+                );
                 if !rules.is_empty() {
                     let mut checked = Checked {
                         runs: record.findings.runs.clone(),
@@ -618,6 +666,15 @@ impl<T: JobGates + ?Sized> JobGates for Arc<T> {
 
     fn verify(&self, job: JobId, dir: &Path) -> Result<(), String> {
         (**self).verify(job, dir)
+    }
+}
+
+/// `checks` (by name) added to the visible ones.
+fn add_checks(spec: &mut GateSpec, checks: &[GateCheck]) {
+    for c in checks {
+        if !spec.checks.iter().any(|k| k.name == c.name) {
+            spec.checks.push(c.clone());
+        }
     }
 }
 
@@ -690,10 +747,12 @@ fn verify_now(
     gate: &LoadedGate,
     baseline: Option<(PathBuf, Vec<Pin>)>,
     base: Option<&str>,
+    extra: Option<CheckRun>,
 ) -> GateRecord {
     let spec = &gate.spec;
     let globs = spec.protected_globs();
-    let found = work.check(gate, base, true, true);
+    let mut found = work.check(gate, base, true, true);
+    found.runs.extend(extra);
     let pins = match &baseline {
         Some((root, before)) if *root == gate.root => {
             pin_findings(Some(before), &source.pins(root, &globs), &found.protected)

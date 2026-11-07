@@ -193,11 +193,16 @@ impl KnowledgeHub {
 
     /// The call's path relative to the job's root, `/`-separated.
     fn relative(info: &JobInfo, request: &HookRequest) -> Option<String> {
+        Self::relative_to(&info.root, request)
+    }
+
+    /// Like [`relative`](Self::relative) for a job that runs in `root`.
+    pub(crate) fn relative_to(root: &str, request: &HookRequest) -> Option<String> {
         if request.subject.is_empty() || !reads_or_writes(&request.tool_name) {
             return None;
         }
         let path = request.subject.replace('\\', "/");
-        let root = info.root.trim_end_matches('/');
+        let root = root.trim_end_matches('/');
         let looks_absolute = path.starts_with('/') || path.as_bytes().get(1) == Some(&b':');
         if !looks_absolute {
             return Some(path.trim_start_matches("./").to_string());
