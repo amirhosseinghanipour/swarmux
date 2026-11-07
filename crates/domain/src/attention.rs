@@ -58,6 +58,8 @@ pub enum AttentionKind {
     Merge,
     /// An agent asked the user a question through the Board.
     BoardQuestion,
+    /// Knowledge items whose code changed wait to be confirmed.
+    Knowledge,
 }
 
 impl AttentionKind {
@@ -75,6 +77,7 @@ impl AttentionKind {
             AttentionKind::Drift => "drift",
             AttentionKind::Merge => "merge",
             AttentionKind::BoardQuestion => "ask",
+            AttentionKind::Knowledge => "knowledge",
         }
     }
 
@@ -238,7 +241,8 @@ impl AttentionItem {
                 | AttentionKind::PlanReady
                 | AttentionKind::Drift
                 | AttentionKind::Merge
-                | AttentionKind::BoardQuestion,
+                | AttentionKind::BoardQuestion
+                | AttentionKind::Knowledge,
             ) => self.id.to_string(),
             (None, kind) => kind.as_str().to_string(),
         }
@@ -530,6 +534,7 @@ impl AttentionItem {
             AttentionKind::Drift => "drift",
             AttentionKind::Merge => "merge",
             AttentionKind::BoardQuestion => "ask",
+            AttentionKind::Knowledge => "knowledge",
         };
         AttentionItem {
             id: AttentionId::new(format!("job:{job}:{suffix}")),

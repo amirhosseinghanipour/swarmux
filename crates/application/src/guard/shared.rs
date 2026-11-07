@@ -7,6 +7,7 @@ use std::time::Instant;
 use swarmux_domain::{Decision, GuardPolicy, Pattern, Verdict};
 
 use crate::gate::WriteFence;
+use crate::knowledge::RuleGuard;
 use crate::ports::HookRequest;
 use crate::watchdog::NudgeGate;
 
@@ -19,6 +20,8 @@ pub struct SharedPolicy {
     fences: Vec<Arc<dyn WriteFence>>,
     /// Watchdog messages waiting for the agent's next tool call.
     nudges: Option<Arc<dyn NudgeGate>>,
+    /// The owner's knowledge rules: they only ever forbid.
+    rules: Option<Arc<dyn RuleGuard>>,
 }
 
 impl fmt::Debug for SharedPolicy {
@@ -27,6 +30,7 @@ impl fmt::Debug for SharedPolicy {
             .field("policy", &self.policy)
             .field("fences", &self.fences.len())
             .field("nudges", &self.nudges.is_some())
+            .field("rules", &self.rules.is_some())
             .finish()
     }
 }
@@ -37,6 +41,7 @@ impl SharedPolicy {
             policy: Arc::new(RwLock::new(policy)),
             fences: Vec::new(),
             nudges: None,
+            rules: None,
         }
     }
 
@@ -45,6 +50,14 @@ impl SharedPolicy {
     /// agent something.
     pub fn with_nudges(mut self, nudges: Arc<dyn NudgeGate>) -> SharedPolicy {
         self.nudges = Some(nudges);
+        self
+    }
+
+    /// Consults the knowledge rules after the fences and before the
+    /// policy: a rule may deny or hold a call, never allow one, and the
+    /// policy's deny still wins over a rule's ask.
+    pub fn with_rules(mut self, rules: Arc<dyn RuleGuard>) -> SharedPolicy {
+        self.rules = Some(rules);
         self
     }
 
@@ -68,11 +81,18 @@ impl SharedPolicy {
         });
         let decision = match fenced {
             Some(rule) => Decision::new(Verdict::Deny, Some(rule)),
-            None => self
-                .policy
-                .read()
-                .unwrap_or_else(PoisonError::into_inner)
-                .decide(&request.tool_name, &request.subject, &request.cwd),
+            None => {
+                let ruled = self.rules.as_ref().and_then(|r| r.check(request));
+                let policy = self
+                    .policy
+                    .read()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .decide(&request.tool_name, &request.subject, &request.cwd);
+                match ruled {
+                    Some(r) if r.verdict == Verdict::Deny || policy.verdict != Verdict::Deny => r,
+                    _ => policy,
+                }
+            }
         };
         // A call the rules deny anyway keeps its reason and the message waits.
         let nudge = match (&self.nudges, request.job_id, decision.verdict) {

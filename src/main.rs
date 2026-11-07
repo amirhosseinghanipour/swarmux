@@ -10,6 +10,7 @@ mod fetch;
 mod gate;
 mod holdout;
 mod jev;
+mod knowledge;
 mod stats;
 mod telemetry;
 mod theme;
@@ -142,6 +143,18 @@ enum Command {
     Workspace {
         #[command(subcommand)]
         action: workspace::Action,
+    },
+    /// Rules, facts and decisions kept for a workspace's (or a
+    /// repository's) agents: enforced by the Guard and the gate, or given
+    /// to them as quoted text when they start and when they touch a file.
+    Knowledge {
+        #[command(subcommand)]
+        action: Box<knowledge::Action>,
+    },
+    /// The rule registry: how many rules, enforced, failing, advisory-only.
+    Rules {
+        #[command(flatten)]
+        home: knowledge::HomeArgs,
     },
     /// Per-job git worktrees, their port blocks and checkpoints.
     Worktree {
@@ -421,6 +434,8 @@ fn main() -> anyhow::Result<ExitCode> {
             HoldoutAction::Rm { repo, check } => holdout::rm(&repo, &check),
         },
         Some(Command::Workspace { action }) => workspace::run(action),
+        Some(Command::Knowledge { action }) => knowledge::run(*action),
+        Some(Command::Rules { home }) => knowledge::rules(home),
         Some(Command::Worktree { action }) => match action {
             WorktreeAction::List => worktree::list(),
             WorktreeAction::Gc { dry_run } => worktree::gc(dry_run),
@@ -542,7 +557,15 @@ fn build_app(
     // checks run in clean copies, followed by the hidden ones.
     let checker = holdout::checker();
     let (keeper, gate_records) = GateKeeper::new(Arc::new(FsGateSource::new()), checker.clone());
-    let keeper = Arc::new(keeper.with_verifier(holdout::verifier(&paths, checker)));
+    // Rules, facts and decisions: guard rules ask the policy first, gate
+    // and lint rules add checks, and sessions get what is in scope.
+    let knowledge = Rc::new(knowledge::service(store.clone(), ledger.clone())?);
+    let hub = knowledge.hub();
+    let keeper = Arc::new(
+        keeper
+            .with_verifier(holdout::verifier(&paths, checker))
+            .with_rules(hub.clone()),
+    );
     let guard_settings = &settings.guard;
     // Watchdog nudges reach an agent as the reason its next call is not run.
     let nudges = NudgeBoard::new();
@@ -551,7 +574,8 @@ fn build_app(
     let policy = SharedPolicy::new(guard_settings.policy())
         .with_fence(keeper.clone())
         .with_fence(claims.clone())
-        .with_nudges(nudges.clone());
+        .with_nudges(nudges.clone())
+        .with_rules(hub.clone());
     let pipe = hook::endpoint_for(std::process::id());
     // Handoffs reach the sessions that start after a checkpoint.
     let board = HandoffBoard::new();
@@ -562,9 +586,12 @@ fn build_app(
         Some(hub) => Arc::new(BoardDigest::new(hub.clone(), Some(board.clone()))),
         None => board.clone(),
     };
+    // The knowledge goes first: it stays the same, so the prompt caches.
+    hub.set_inner(session_start);
     let responders = Responders {
         stop: keeper.clone(),
-        session_start,
+        session_start: hub.clone(),
+        tool_context: hub,
     };
     let server = Rc::new(
         HookServer::start_with(rt.handle(), &pipe, policy.clone(), responders)
@@ -655,6 +682,7 @@ fn build_app(
             worktrees.clone(),
             claims.clone(),
         );
+    let missions = missions.with_watch(knowledge.clone());
     let mut missions = match &board_hub {
         Some(hub) => missions.with_board(hub.clone()),
         None => missions,
@@ -742,7 +770,8 @@ fn build_app(
         .with_agent_catalog(Rc::new(FsAgentCatalog::new(Some(paths.home.clone()))))
         .with_execution_log(Rc::new(keeper))
         .with_worktrees(worktrees)
-        .with_governor(governor);
+        .with_governor(governor)
+        .with_starts(knowledge.clone());
     if let Some(hub) = &board_hub {
         jobs = jobs.with_board(hub.clone());
     }
@@ -761,6 +790,7 @@ fn build_app(
     .with_clock(Rc::new(SystemClock))
     .with_workspaces(workspaces)
     .with_board(board_service.zip(Some(board_inbox)))
+    .with_knowledge(Some(knowledge))
     .with_hook_bus(hook_bus)
     .with_gate(gate)
     .with_watchdog(watchdog)

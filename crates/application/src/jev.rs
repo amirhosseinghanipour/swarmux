@@ -232,6 +232,7 @@ mod tests {
             subject: format!("echo {}\nsecond line", "x".repeat(300)),
             input: "{\"secret\":\"file contents\"}".into(),
             cwd: "/w".into(),
+            content: String::new(),
         };
         j.ask_tool(&request, Box::new(|_| {}));
         j.ask_session(&"y".repeat(5000), vec!["a".into()], Box::new(|_| {}));

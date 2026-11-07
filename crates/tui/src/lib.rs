@@ -9,6 +9,7 @@ mod dashboard;
 pub mod fetch;
 mod focus;
 mod inbox;
+mod knowledge;
 mod ledger;
 mod mission;
 mod missions;

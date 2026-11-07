@@ -56,6 +56,11 @@ why (for example `loop guard: Bash failed the same way twice`). With the
 [watchdog](watchdog.md) on, the agent is nudged first and stopped one failure
 later.
 
+[Knowledge rules](knowledge.md) with a `guard` enforcer are consulted after
+the protected paths and before these rules. They only forbid: a rule can
+deny a call or hold it for you as a P1 approval that shows the rule, never
+allow one, and a deny here still wins over a rule's ask.
+
 Every decision is logged in the database with its rule and latency; the
 Dashboard's green guard panel shows this run's counts and latest decisions.
 `swarmux doctor` prints the policy and checks the hook end to end.

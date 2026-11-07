@@ -11,6 +11,7 @@ pub mod focus;
 pub mod grid;
 pub mod guard;
 pub mod input;
+pub mod knowledge;
 pub mod ledger;
 pub mod look;
 pub mod mission;
@@ -98,6 +99,7 @@ fn draw_screens(frame: &mut Frame, app: &App, t: &Theme) {
         Screen::Ledger => ledger::render(frame, body, app),
         Screen::Sessions => sessions::render(frame, body, app),
         Screen::Board => board::render(frame, body, app),
+        Screen::Knowledge => knowledge::render(frame, body, app),
     }
     if app.engine.guard.jev().is_some_and(|j| j.wants_consent()) {
         let h = guard::CONSENT_HEIGHT.min(body.height);
@@ -334,6 +336,14 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App, t: &Theme) {
                     app.answering_question().unwrap_or_else(|| "—".into())
                 ),
                 InputPurpose::Search => "search".to_string(),
+                InputPurpose::KnowledgeAdd => "rule: …, fact: … or decision: …".to_string(),
+                InputPurpose::KnowledgeEdit => format!(
+                    "edit {}",
+                    app.knowledge_screen
+                        .editing
+                        .as_ref()
+                        .map_or_else(|| "—".to_string(), ToString::to_string)
+                ),
             };
             let keys = if *purpose == InputPurpose::Search {
                 "   enter keep · esc clear"
@@ -435,12 +445,15 @@ pub(crate) fn hints(app: &App) -> &'static str {
             " / search · o filter · v verify · l labels · r re-run · f fork · enter view · ↑↓ select · q quit"
         }
         Screen::Prompts => {
-            " n new · e edit · x delete · d dispatch · D route · ↑↓ select · 0-7 screens · q quit"
+            " n new · e edit · x delete · d dispatch · D route · ↑↓ select · 0-8 screens · q quit"
         }
         Screen::Sessions => {
-            " n new session · w on a workspace · l lean on/off · ↑↓ select · 0-7 screens · q quit"
+            " n new session · w on a workspace · l lean on/off · ↑↓ select · 0-8 screens · q quit"
         }
-        Screen::Board => " ↑↓ select · r answer a question · x close it · 0-7 screens · q quit",
+        Screen::Board => " ↑↓ select · r answer a question · x close it · 0-8 screens · q quit",
+        Screen::Knowledge => {
+            " ↑↓ select · a add (kind: text) · e edit · p promote · c confirm · x retire · 0-8 screens · q quit"
+        }
     }
 }
 

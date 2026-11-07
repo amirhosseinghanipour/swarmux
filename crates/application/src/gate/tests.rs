@@ -60,7 +60,9 @@ struct FakeChecker {
 impl Checker for FakeChecker {
     fn run(&self, check: &GateCheck, _root: &Path) -> CheckRun {
         let n = self.runs.fetch_add(1, Ordering::SeqCst);
-        let pass = *lock(&self.fixed) || (*lock(&self.flaky) && n % 2 == 1);
+        // A rule's hidden check that never passes.
+        let pass =
+            check.name != "rule R1" && (*lock(&self.fixed) || (*lock(&self.flaky) && n % 2 == 1));
         CheckRun {
             name: check.name.clone(),
             command: check.command_line(),
@@ -89,9 +91,17 @@ struct Fixture {
 }
 
 fn fixture(max_blocks: u32) -> Fixture {
+    fixture_with(max_blocks, None)
+}
+
+fn fixture_with(max_blocks: u32, rules: Option<Arc<dyn RuleChecks>>) -> Fixture {
     let source = Arc::new(FakeSource::new(max_blocks));
     let checker = Arc::new(FakeChecker::default());
     let (keeper, rx) = GateKeeper::new(source.clone(), checker.clone());
+    let keeper = match rules {
+        Some(rules) => keeper.with_rules(rules),
+        None => keeper,
+    };
     let store = Rc::new(InMemoryStore::default());
     let session = Session::new(SessionId::random(), "demo", "/w".into(), "sonnet", 0).unwrap();
     SessionRepository::insert(&*store, &session).unwrap();
@@ -404,6 +414,7 @@ fn the_fence_denies_protected_writes_through_the_policy() {
                 subject: subject.into(),
                 input: String::new(),
                 cwd: "/w".into(),
+                content: String::new(),
             })
             .0
     };
@@ -633,4 +644,72 @@ fn verify_with_nothing_to_run_does_not_pass() {
     let state = f.service.state(f.job).unwrap();
     assert_eq!(state.outcome, GateOutcome::Escalate);
     assert_eq!(state.digest, "swarmux gate: nothing to check");
+}
+
+/// One hidden gate rule and one shadow lint rule; records what was reported.
+#[derive(Default)]
+struct FakeRules {
+    reports: Mutex<Vec<(String, bool, bool)>>,
+}
+
+impl RuleChecks for FakeRules {
+    fn checks(&self, _job: JobId, mission: bool) -> Vec<RuleCheck> {
+        let id = |s: &str| swarmux_domain::knowledge::ItemId::parse(s).unwrap();
+        let mut out = vec![RuleCheck {
+            rule: id("R2"),
+            check: GateCheck::new("rule R2: lint", "lint", &[]),
+            hidden: false,
+            shadow: true,
+        }];
+        if mission {
+            out.push(RuleCheck {
+                rule: id("R1"),
+                check: GateCheck::new("rule R1", "psql", &["-f", "anon.sql"]),
+                hidden: true,
+                shadow: false,
+            });
+        }
+        out
+    }
+
+    fn report(
+        &self,
+        _job: JobId,
+        rule: &swarmux_domain::knowledge::ItemId,
+        passed: bool,
+        shadow: bool,
+    ) {
+        lock(&self.reports).push((rule.to_string(), passed, shadow));
+    }
+}
+
+#[test]
+fn a_failing_gate_rule_blocks_a_mission_without_naming_its_check() {
+    let rules = Arc::new(FakeRules::default());
+    let f = fixture_with(3, Some(rules.clone()));
+    f.start();
+    f.edit();
+    // Not a mission's job: only the shadow lint runs, and passes nothing.
+    f.fix();
+    assert_eq!(f.stop(HookEvent::Stop, "done"), StopAnswer::Allow);
+    assert_eq!(lock(&rules.reports).len(), 1);
+    assert!(lock(&rules.reports)[0].2, "shadow");
+
+    // A mission's job: the hidden rule check runs after the visible ones.
+    f.keeper.assign(f.job, MissionGate::default());
+    f.edit();
+    let answer = f.stop(HookEvent::Stop, "done");
+    let StopAnswer::Block { reason } = answer else {
+        panic!("{answer:?}")
+    };
+    assert!(reason.contains("hidden"), "{reason}");
+    assert!(
+        !reason.contains("psql") && !reason.contains("anon.sql"),
+        "{reason}"
+    );
+    assert!(
+        lock(&rules.reports)
+            .iter()
+            .any(|(r, passed, shadow)| r == "R1" && !passed && !shadow)
+    );
 }

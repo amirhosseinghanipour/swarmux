@@ -244,6 +244,7 @@ fn responders_answer_the_events_claude_code_waits_for() {
         Responders {
             stop: Arc::new(Blocker),
             session_start: Arc::new(Context),
+            ..Responders::default()
         },
     )
     .unwrap();

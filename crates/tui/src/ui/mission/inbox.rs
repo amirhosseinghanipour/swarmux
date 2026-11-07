@@ -207,6 +207,7 @@ fn kind_icon(kind: AttentionKind) -> Icon {
         AttentionKind::Drift => Icon::Concerns,
         AttentionKind::Merge => Icon::Concerns,
         AttentionKind::BoardQuestion => Icon::Question,
+        AttentionKind::Knowledge => Icon::Concerns,
     }
 }
 

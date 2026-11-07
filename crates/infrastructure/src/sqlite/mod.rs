@@ -9,6 +9,7 @@ mod decisions;
 mod evidence;
 mod governor;
 mod jobs;
+mod knowledge;
 mod ledger;
 mod missions;
 mod plans;
@@ -384,6 +385,32 @@ ALTER TABLE worktrees_sets RENAME TO worktrees;
 CREATE UNIQUE INDEX worktrees_slot ON worktrees(slot) WHERE removed_at IS NULL AND seq = 0;
 ";
 
+/// Knowledge (v20): every change of a rule, fact or decision is an event,
+/// kept append-only; `knowledge_items` is the projection folded from them,
+/// rebuildable at any time (`swarmux knowledge rebuild`).
+const SCHEMA_KNOWLEDGE: &str = "
+CREATE TABLE knowledge_events (
+    seq INTEGER PRIMARY KEY AUTOINCREMENT,
+    at INTEGER NOT NULL,
+    item TEXT NOT NULL,
+    actor TEXT NOT NULL,
+    change TEXT NOT NULL,
+    ledger_seq INTEGER
+);
+CREATE TRIGGER knowledge_events_no_update BEFORE UPDATE ON knowledge_events
+BEGIN SELECT RAISE(ABORT, 'knowledge events are append-only'); END;
+CREATE TRIGGER knowledge_events_no_delete BEFORE DELETE ON knowledge_events
+BEGIN SELECT RAISE(ABORT, 'knowledge events are append-only'); END;
+CREATE TABLE knowledge_items (
+    id TEXT PRIMARY KEY,
+    home TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    status TEXT NOT NULL,
+    item TEXT NOT NULL
+);
+CREATE INDEX knowledge_items_home ON knowledge_items(home);
+";
+
 /// Migrations in order; index + 1 is the resulting `user_version`.
 const MIGRATIONS: &[&str] = &[
     SCHEMA_V1,
@@ -405,6 +432,7 @@ const MIGRATIONS: &[&str] = &[
     SCHEMA_ANCHORS,
     SCHEMA_WORKSPACES,
     SCHEMA_WORKTREE_SETS,
+    SCHEMA_KNOWLEDGE,
 ];
 
 /// Maps adapter errors into the application's error type.

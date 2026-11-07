@@ -8,6 +8,30 @@ follows [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Knowledge: rules, facts and decisions per workspace (or repository), each
+  with a why, a scope (repositories, path globs, task classes), anchors with
+  content hashes, a status (proposed, shadow, enforced, advisory, stale,
+  retired), its source and trust. Every change is a ledger event and the
+  items are rebuilt from them (`swarmux knowledge rebuild`; schema v20).
+  Anchors are hashed again on rescan, at job start and after a delivery;
+  stale items are withheld and listed in one P3 inbox item.
+- Rules with enforcers: `guard` (deny, a P1 approval that shows the rule, or
+  a warning, on tool calls matched by tool, path and pattern; rules only
+  forbid and fail closed), `gate` (a hidden check the done-gate runs for
+  missions), `lint` (a visible check) and `prompt`. New acting rules start in
+  shadow and log what they would have done. `swarmux rules` shows the
+  registry: rules, enforced, failing, advisory-only.
+- Knowledge reaches agents small and late: the workspace map and prompt
+  rules at session start and again after each compaction (cache-stable),
+  and the items a file is scoped or anchored to when an agent reads or edits
+  it (`PreToolUse` `additionalContext`, 300 tokens, once per item per job).
+  Every injection is on the ledger.
+- `swarmux knowledge list|show|add|edit|promote|confirm|retire|trust|recheck|export|import`,
+  and `swarmux knowledge init <workspace>`, which drafts the one-page map
+  from the scan and opens it in your editor.
+- The Knowledge screen (`8`): items by standing, the registry, stale items
+  to confirm and shadow rules' hits; add, edit, promote, confirm, retire.
+
 - Workspaces: `swarmux workspace add|list|show|rescan|rm` records a folder of
   several git repositories (two levels down; the folder need not be one),
   with each repository's default branch, stacks (Flutter, Dart, Node, Rust,

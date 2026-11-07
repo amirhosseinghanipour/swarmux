@@ -12,6 +12,11 @@
 //! FAKE_CLAUDE_GRANDCHILDREN=n starts n long-lived copies of this program.
 //! FAKE_CLAUDE_CONTENTION=n with FAKE_CLAUDE_COUNTER_FILE makes the first n
 //! starts fail as if another session held `.claude.json`.
+//! FAKE_CLAUDE_HOOKS names a file of hook calls, one JSON line each
+//! (`{"event":"PreToolUse","input":{...}}`, `{cwd}` in strings replaced by
+//! the working folder), made through swarmux's hook client in order before
+//! the fixture is printed; what each printed goes to FAKE_CLAUDE_HOOKS_OUT,
+//! one line per call (`-` for nothing).
 
 use std::io::{Read, Write};
 
@@ -25,6 +30,35 @@ fn append_line(var: &str, line: &str) {
             .unwrap();
         // One write, so lines from different processes never interleave.
         file.write_all(format!("{line}\n").as_bytes()).unwrap();
+    }
+}
+
+/// Makes the hook calls the file at `path` lists, as Claude Code would.
+fn run_hooks(path: &str) {
+    let cwd = std::env::current_dir()
+        .unwrap()
+        .to_string_lossy()
+        .replace('\\', "/");
+    let pipe = std::env::var("SWARMUX_HOOK_PIPE").ok();
+    let job = std::env::var("SWARMUX_JOB_ID").ok();
+    for line in std::fs::read_to_string(path).unwrap().lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let call: serde_json::Value = serde_json::from_str(&line.replace("{cwd}", &cwd)).unwrap();
+        let event = swarmux_domain::HookEvent::parse(call["event"].as_str().unwrap()).unwrap();
+        let mut input = call["input"].clone();
+        input["cwd"] = cwd.clone().into();
+        let out = swarmux_infrastructure::hook::run_hook(
+            event,
+            &input.to_string(),
+            pipe.as_deref(),
+            job.as_deref(),
+        );
+        append_line(
+            "FAKE_CLAUDE_HOOKS_OUT",
+            &out.unwrap_or_else(|| "-".into()).replace('\n', " "),
+        );
     }
 }
 
@@ -91,6 +125,9 @@ fn main() {
             "added_dirs_claude_md": std::env::var("CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD").ok(),
         });
         std::fs::write(path, echo.to_string()).unwrap();
+    }
+    if let Ok(path) = std::env::var("FAKE_CLAUDE_HOOKS") {
+        run_hooks(&path);
     }
     if let Ok(path) = std::env::var("FAKE_CLAUDE_FIXTURE") {
         let text = std::fs::read_to_string(path).unwrap();

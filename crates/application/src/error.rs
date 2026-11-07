@@ -42,6 +42,9 @@ pub enum AppError {
     /// The mission can't take that step now.
     #[error("{0}")]
     Mission(String),
+    /// A knowledge item can't be added or changed as asked.
+    #[error("{0}")]
+    Knowledge(String),
     /// The background service could not be reached, or went away.
     #[error("background service: {0}")]
     Service(String),

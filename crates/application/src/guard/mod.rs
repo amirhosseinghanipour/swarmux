@@ -6,6 +6,7 @@ use std::collections::VecDeque;
 use std::rc::Rc;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
+use swarmux_domain::knowledge::is_rule_reason;
 use swarmux_domain::{Decision, JobId, LoopTrip, Millis, Pattern, Verdict};
 
 use crate::ports::{
@@ -54,6 +55,8 @@ impl GuardStats {
 #[derive(Clone, Debug, PartialEq)]
 pub struct PendingApproval {
     pub request: HookRequest,
+    /// The knowledge rule that asked, when one did (shown with the call).
+    pub rule: Option<String>,
     /// Seconds until it is denied for lack of an answer.
     pub secs_left: u64,
 }
@@ -81,6 +84,8 @@ struct Held {
     asked_at: Millis,
     /// JEV is being asked; the user isn't shown the call yet.
     consulting: bool,
+    /// The knowledge rule that asked; such calls are the owner's alone.
+    rule: Option<String>,
 }
 
 /// How a held call ended, for the log.
@@ -191,11 +196,14 @@ impl GuardService {
             };
             let outcome = Outcome::from(decision.verdict);
             if decision.verdict == Verdict::Ask {
-                let consulting = self.consult(&item.request);
+                // A rule that asks wants the owner, not a model.
+                let rule = decision.rule.clone().filter(|r| is_rule_reason(r));
+                let consulting = rule.is_none() && self.consult(&item.request);
                 self.held.push(Held {
                     request: item.request.clone(),
                     asked_at: self.clock.now(),
                     consulting,
+                    rule,
                 });
             }
             let result = self.log(&item.request, outcome, decision.rule, latency);
@@ -249,6 +257,7 @@ impl GuardService {
             .filter(|h| !h.consulting)
             .map(|h| PendingApproval {
                 request: h.request.clone(),
+                rule: h.rule.clone(),
                 secs_left: u64::try_from((h.asked_at + self.timeout_ms - now).max(0) / 1000)
                     .unwrap_or(0),
             })
@@ -341,6 +350,7 @@ impl GuardService {
             subject: trip.summary.clone(),
             input: String::new(),
             cwd: String::new(),
+            content: String::new(),
         };
         let record = self.record_for(&request, Outcome::Stop, Some(trip.reason()), 0);
         self.save(DecisionRecord {

@@ -163,6 +163,11 @@ impl AttentionService {
                     .map(|w| w.worry),
             };
             let mut item = AttentionItem::approval_scored(&call, &ctx, since, deadline);
+            if let Some(rule) = &a.rule {
+                // The owner asked to see these: always first.
+                item.priority = swarmux_domain::Priority::P1;
+                item.detail = rule.clone();
+            }
             if let Some(sig) = &item.signature
                 && tally.should_suggest(sig.tier)
             {
@@ -467,6 +472,7 @@ mod tests {
         secs_left: u64,
     ) -> PendingApproval {
         PendingApproval {
+            rule: None,
             request: HookRequest {
                 request_id,
                 job_id: Some(JobId(job)),
@@ -474,6 +480,7 @@ mod tests {
                 subject: subject.into(),
                 input: String::new(),
                 cwd: "C:/work".into(),
+                content: String::new(),
             },
             secs_left,
         }

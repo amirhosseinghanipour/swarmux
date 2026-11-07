@@ -79,6 +79,7 @@ impl Plant {
         let request_id = self.next;
         self.next += 1;
         self.held.push(PendingApproval {
+            rule: None,
             request: HookRequest {
                 request_id,
                 job_id: Some(JobId(100 + request_id as i64)),
@@ -86,6 +87,7 @@ impl Plant {
                 subject: subject.into(),
                 input: String::new(),
                 cwd: CWD.into(),
+                content: String::new(),
             },
             secs_left: 600,
         });
