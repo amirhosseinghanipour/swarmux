@@ -4,6 +4,7 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::{Component, Path, PathBuf};
 use std::process::Output;
+use std::sync::{Mutex, MutexGuard};
 use std::thread::sleep;
 use std::time::Duration;
 
@@ -27,6 +28,19 @@ pub const TASK_MARKER: &str = ".swarmux-task";
 const ROOT_INSTRUCTIONS: [&str; 2] = ["CLAUDE.md", "CLAUDE.local.md"];
 /// Tries for operations that git or Windows may briefly refuse.
 const TRIES: u32 = 6;
+
+/// Held while git adds or prunes worktree registrations. While one
+/// `git worktree add` is half done, another one (or a prune) can read or
+/// delete its unfinished `.git/worktrees/<name>` entry and fail, so these
+/// steps run one at a time in this process.
+static REGISTRY: Mutex<()> = Mutex::new(());
+
+fn registry() -> MutexGuard<'static, ()> {
+    // A panic while holding the lock leaves nothing to repair.
+    REGISTRY
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 /// Identity for snapshot commits when git has none configured.
 const FALLBACK_NAME: &str = "swarmux";
 const FALLBACK_EMAIL: &str = "swarmux@localhost";
@@ -156,6 +170,7 @@ impl Worktrees for GitWorktrees {
             fs::create_dir_all(long(parent))
                 .map_err(|e| AppError::Workspace(format!("{}: {e}", parent.display())))?;
         }
+        let registering = registry();
         // Registrations of folders that vanished would block their branches.
         let _ = self.run_locked(&req.repo, &["worktree", "prune"]);
         let path = req.path.to_string_lossy().into_owned();
@@ -170,6 +185,7 @@ impl Worktrees for GitWorktrees {
             }
             self.run_locked(&req.repo, &args)?;
         }
+        drop(registering);
         let copied = copy_listed(&req.repo, &req.path, &req.copy);
         if !copied.is_empty() {
             let meta = self.meta_dir(&req.path)?;
@@ -221,11 +237,12 @@ impl Worktrees for GitWorktrees {
             let target = path.to_string_lossy().into_owned();
             let mut gone = false;
             for attempt in 0..TRIES {
-                if self
-                    .run(repo, &["worktree", "remove", "--force", &target])
-                    .is_ok()
-                    || !path.exists()
-                {
+                let removed_now = {
+                    let _registering = registry();
+                    self.run(repo, &["worktree", "remove", "--force", &target])
+                        .is_ok()
+                };
+                if removed_now || !path.exists() {
                     gone = true;
                     break;
                 }
@@ -237,7 +254,10 @@ impl Worktrees for GitWorktrees {
                 remove_dir_retrying(path)?;
             }
         }
-        let _ = self.run_locked(repo, &["worktree", "prune"]);
+        {
+            let _registering = registry();
+            let _ = self.run_locked(repo, &["worktree", "prune"]);
+        }
         removed.branch_deleted = self.succeeds(repo, &["branch", "-d", branch]);
         Ok(removed)
     }
