@@ -1,6 +1,7 @@
 //! Composition root: the only place that wires concrete adapters to use cases.
 
 mod audit;
+mod contracts;
 mod daemon;
 mod demo;
 mod dist;
@@ -151,6 +152,9 @@ enum Command {
         #[command(subcommand)]
         action: Box<knowledge::Action>,
     },
+    /// Contracts between a workspace's repositories: what each provides
+    /// (tables, columns, functions, endpoints, env keys) and who consumes it.
+    Contracts(contracts::ContractsArgs),
     /// The rule registry: how many rules, enforced, failing, advisory-only.
     Rules {
         #[command(flatten)]
@@ -435,6 +439,7 @@ fn main() -> anyhow::Result<ExitCode> {
         },
         Some(Command::Workspace { action }) => workspace::run(action),
         Some(Command::Knowledge { action }) => knowledge::run(*action),
+        Some(Command::Contracts(args)) => contracts::run(args),
         Some(Command::Rules { home }) => knowledge::rules(home),
         Some(Command::Worktree { action }) => match action {
             WorktreeAction::List => worktree::list(),
@@ -561,10 +566,15 @@ fn build_app(
     // and lint rules add checks, and sessions get what is in scope.
     let knowledge = Rc::new(knowledge::service(store.clone(), ledger.clone())?);
     let hub = knowledge.hub();
+    // Contracts between repositories: who consumes what a job touches, and
+    // the cross-repo check of a mission's gate.
+    let contracts = Rc::new(contracts::service(store.clone()).with_ledger(ledger.clone()));
+    let contract_hub = contracts.hub();
     let keeper = Arc::new(
         keeper
             .with_verifier(holdout::verifier(&paths, checker))
-            .with_rules(hub.clone()),
+            .with_rules(hub.clone())
+            .with_contracts(contract_hub.clone()),
     );
     let guard_settings = &settings.guard;
     // Watchdog nudges reach an agent as the reason its next call is not run.
@@ -591,7 +601,10 @@ fn build_app(
     let responders = Responders {
         stop: keeper.clone(),
         session_start: hub.clone(),
-        tool_context: hub,
+        tool_context: Arc::new(swarmux_application::PullContext {
+            knowledge: hub,
+            contracts: contract_hub,
+        }),
     };
     let server = Rc::new(
         HookServer::start_with(rt.handle(), &pipe, policy.clone(), responders)
@@ -682,7 +695,10 @@ fn build_app(
             worktrees.clone(),
             claims.clone(),
         );
-    let missions = missions.with_watch(knowledge.clone());
+    let missions = missions.with_watch(Rc::new(swarmux_application::WatchFan(vec![
+        knowledge.clone(),
+        contracts.clone(),
+    ])));
     let mut missions = match &board_hub {
         Some(hub) => missions.with_board(hub.clone()),
         None => missions,
@@ -771,7 +787,10 @@ fn build_app(
         .with_execution_log(Rc::new(keeper))
         .with_worktrees(worktrees)
         .with_governor(governor)
-        .with_starts(knowledge.clone());
+        .with_starts(Rc::new(swarmux_application::StartFan(vec![
+            knowledge.clone(),
+            contracts.clone(),
+        ])));
     if let Some(hub) = &board_hub {
         jobs = jobs.with_board(hub.clone());
     }
@@ -791,6 +810,7 @@ fn build_app(
     .with_workspaces(workspaces)
     .with_board(board_service.zip(Some(board_inbox)))
     .with_knowledge(Some(knowledge))
+    .with_contracts(Some(contracts))
     .with_hook_bus(hook_bus)
     .with_gate(gate)
     .with_watchdog(watchdog)

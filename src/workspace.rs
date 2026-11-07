@@ -74,6 +74,7 @@ pub fn run(action: Action) -> anyhow::Result<()> {
             }
             print!("{}", show(&w));
             crate::knowledge::recheck_workspace(w.id)?;
+            crate::contracts::rescan_workspace(w.id)?;
             Ok(())
         }
         Action::Rm { name } => {
@@ -93,6 +94,7 @@ fn add(svc: &WorkspaceService, dir: &Path, name: Option<&str>) -> anyhow::Result
     anyhow::ensure!(root.is_dir(), "{} is not a folder", root.display());
     let w = svc.add(&root, name)?;
     print!("{}", show(&w));
+    crate::contracts::rescan_workspace(w.id)?;
     if w.repos.is_empty() {
         println!("no git repositories found: swarmux looks at the folder, its folders and theirs");
     }
