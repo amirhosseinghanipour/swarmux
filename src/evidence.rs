@@ -175,6 +175,22 @@ pub fn print_brief(hours: i64) -> anyhow::Result<()> {
         .filter(|c| c.outcome == RunOutcome::Delivered)
         .count();
     println!("{delivered} delivered in all");
+    let in_window: Vec<_> = cards
+        .iter()
+        .filter(|c| c.at >= since && c.at <= now)
+        .collect();
+    let met = in_window
+        .iter()
+        .filter(|c| {
+            c.evidence
+                .as_ref()
+                .is_some_and(|e| e.checks_total > 0 && e.checks_passed == e.checks_total)
+        })
+        .count();
+    // A broken config or database here must not hide the brief above.
+    if let Err(e) = crate::followup::brief_section(in_window.len(), met) {
+        println!("follow-ups: {e}");
+    }
     Ok(())
 }
 

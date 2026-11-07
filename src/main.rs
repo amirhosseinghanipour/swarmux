@@ -7,6 +7,7 @@ mod dist;
 mod doctor;
 mod evidence;
 mod fetch;
+mod followup;
 mod gate;
 mod holdout;
 mod jev;
@@ -36,8 +37,9 @@ use swarmux_infrastructure::hook::{self, HookServer, Responders};
 use swarmux_infrastructure::{
     BoardMcp, ClaudeCli, ClaudePlanner, ConfigRuleWriter, FilePalette, FsAgentCatalog,
     FsGateSource, GitCli, GitMergeQueue, GitVcs, GitWorktrees, GuardHook, HaikuDiagnoser,
-    HaikuLinter, HaikuRouter, MissionFiles, Paths, SqliteLedger, SqliteStore, SysinfoMonitor,
-    SystemClock, WindowsTerminal, build_notifier_with, load_settings, utc_offset_minutes,
+    HaikuExtractor, HaikuLinter, HaikuRouter, MissionFiles, Paths, SqliteLedger, SqliteStore,
+    SysinfoMonitor, SystemClock, WindowsTerminal, build_notifier_with, load_settings,
+    utc_offset_minutes,
 };
 use swarmux_tui::{App, Launch};
 
@@ -150,6 +152,12 @@ enum Command {
     Knowledge {
         #[command(subcommand)]
         action: Box<knowledge::Action>,
+    },
+    /// What agents left behind when they finished: the follow-ups waiting for
+    /// you, approve/decline/defer them, the brief and the standing orders.
+    Followup {
+        #[command(subcommand)]
+        action: followup::FollowAction,
     },
     /// The rule registry: how many rules, enforced, failing, advisory-only.
     Rules {
@@ -435,6 +443,7 @@ fn main() -> anyhow::Result<ExitCode> {
         },
         Some(Command::Workspace { action }) => workspace::run(action),
         Some(Command::Knowledge { action }) => knowledge::run(*action),
+        Some(Command::Followup { action }) => followup::run(action),
         Some(Command::Rules { home }) => knowledge::rules(home),
         Some(Command::Worktree { action }) => match action {
             WorktreeAction::List => worktree::list(),
@@ -694,6 +703,23 @@ fn build_app(
                 .map(|s| Rc::new(s.with_claims(claims.clone())))
         })
         .transpose()?;
+    // Follow-through: what finished agents leave behind, the owner's
+    // standing orders and the brief. A small model only reads each finished
+    // job's last message (`extract = false` turns even that off).
+    let followups = settings.followups.enabled.then(|| {
+        let extractor = settings.followups.extract.then(|| {
+            HaikuExtractor::new(doctor::claude_bin(), rt.handle().clone())
+                .with_model(&settings.followups.extract_model)
+                .with_bare(std::env::var_os("ANTHROPIC_API_KEY").is_some())
+        });
+        Rc::new(followup::build(
+            &settings,
+            store.clone(),
+            ledger.clone(),
+            clock.clone(),
+            extractor,
+        ))
+    });
     // Stuck agents: detectors on every job, and a ladder of recoveries,
     // cheapest first, before the inbox.
     let mut watchdog = Watchdog::new(
@@ -790,6 +816,7 @@ fn build_app(
     .with_clock(Rc::new(SystemClock))
     .with_workspaces(workspaces)
     .with_board(board_service.zip(Some(board_inbox)))
+    .with_followups(followups)
     .with_knowledge(Some(knowledge))
     .with_hook_bus(hook_bus)
     .with_gate(gate)
