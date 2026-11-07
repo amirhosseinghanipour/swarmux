@@ -36,6 +36,7 @@ mod terminal;
 pub mod testing;
 pub mod verifier;
 pub mod watchdog;
+pub mod workspace;
 pub mod worktree;
 
 pub use attention::{
@@ -102,7 +103,8 @@ pub use watchdog::{
     HookMessenger, NoMessenger, Nudge, NudgeBoard, NudgeGate, SessionMessenger, WatchReport,
     WatchStats, Watchdog, WatchdogSettings,
 };
+pub use workspace::{Rescan, ScannedRepo, WorkspaceScanner, WorkspaceService, WorkspaceStore};
 pub use worktree::{
-    AddWorktree, Added, GcReport, Prepared, Removed, WorktreeService, WorktreeStore, WorktreeView,
-    Worktrees,
+    AddWorktree, Added, GcReport, Prepared, PreparedSet, Removed, WorktreeService, WorktreeStore,
+    WorktreeView, Worktrees,
 };

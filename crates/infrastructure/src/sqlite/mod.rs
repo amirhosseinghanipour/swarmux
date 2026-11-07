@@ -15,6 +15,7 @@ mod plans;
 mod prompts;
 mod sessions;
 mod telemetry;
+mod workspaces;
 mod worktrees;
 
 use std::path::Path;
@@ -324,6 +325,65 @@ CREATE TRIGGER ledger_anchors_no_delete BEFORE DELETE ON ledger_anchors
 BEGIN SELECT RAISE(ABORT, 'checkpoints are append-only'); END;
 ";
 
+/// Workspaces (v18): a product folder and the git repositories in it. A
+/// repository is keyed by its workspace and its name (kept across
+/// rescans), which is what knowledge, rules and contracts about it refer
+/// to. Sessions and missions can belong to a workspace; a mission's
+/// landing is how its repositories were merged.
+const SCHEMA_WORKSPACES: &str = "
+CREATE TABLE workspaces (
+    id TEXT PRIMARY KEY,
+    slug TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    root TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+CREATE TABLE workspace_repos (
+    workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    path TEXT NOT NULL,
+    git_root TEXT NOT NULL,
+    default_branch TEXT,
+    stacks TEXT NOT NULL DEFAULT '',
+    commands TEXT NOT NULL DEFAULT '[]',
+    ord INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (workspace_id, name)
+);
+ALTER TABLE sessions ADD COLUMN workspace_id TEXT;
+ALTER TABLE missions ADD COLUMN workspace_id TEXT;
+ALTER TABLE missions ADD COLUMN landing TEXT;
+";
+
+/// Worktree sets (v19): a workspace job has one worktree per repository it
+/// touches (`seq` 0, 1, ...), all in one task folder and one port slot.
+/// A job of a repository has one, `seq` 0, as before.
+const SCHEMA_WORKTREE_SETS: &str = "
+CREATE TABLE worktrees_sets (
+    job_id INTEGER NOT NULL,
+    seq INTEGER NOT NULL DEFAULT 0,
+    session_id TEXT NOT NULL,
+    repo TEXT NOT NULL,
+    path TEXT NOT NULL,
+    branch TEXT NOT NULL,
+    slot INTEGER NOT NULL,
+    port_base INTEGER NOT NULL,
+    port_count INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    removed_at INTEGER,
+    repo_name TEXT,
+    task_dir TEXT,
+    PRIMARY KEY (job_id, seq)
+);
+INSERT INTO worktrees_sets (job_id, seq, session_id, repo, path, branch, slot, port_base,
+    port_count, created_at, removed_at)
+SELECT job_id, 0, session_id, repo, path, branch, slot, port_base, port_count, created_at,
+    removed_at FROM worktrees;
+DROP TABLE worktrees;
+ALTER TABLE worktrees_sets RENAME TO worktrees;
+CREATE UNIQUE INDEX worktrees_slot ON worktrees(slot) WHERE removed_at IS NULL AND seq = 0;
+";
+
 /// Migrations in order; index + 1 is the resulting `user_version`.
 const MIGRATIONS: &[&str] = &[
     SCHEMA_V1,
@@ -343,6 +403,8 @@ const MIGRATIONS: &[&str] = &[
     SCHEMA_BOARD,
     SCHEMA_CACHE_CREATION,
     SCHEMA_ANCHORS,
+    SCHEMA_WORKSPACES,
+    SCHEMA_WORKTREE_SETS,
 ];
 
 /// Maps adapter errors into the application's error type.

@@ -952,17 +952,36 @@ impl crate::worktree::WorktreeStore for InMemoryWorktrees {
         let mut records = self.records.borrow_mut();
         if records
             .iter()
-            .any(|r| r.removed_at.is_none() && r.slot == record.slot)
+            .any(|r| r.removed_at.is_none() && r.slot == record.slot && r.job != record.job)
         {
             return Err(AppError::Storage("slot taken".into()));
         }
-        records.retain(|r| r.job != record.job);
+        let seq = |r: &swarmux_domain::WorktreeRecord| r.member.as_ref().map(|m| m.seq);
+        records.retain(|r| r.job != record.job || seq(r) != seq(record));
         records.push(record.clone());
         Ok(())
     }
 
     fn get(&self, job: JobId) -> AppResult<Option<swarmux_domain::WorktreeRecord>> {
-        Ok(self.records.borrow().iter().find(|r| r.job == job).cloned())
+        Ok(self
+            .records
+            .borrow()
+            .iter()
+            .filter(|r| r.job == job)
+            .min_by_key(|r| r.member.as_ref().map_or(0, |m| m.seq))
+            .cloned())
+    }
+
+    fn set(&self, job: JobId) -> AppResult<Vec<swarmux_domain::WorktreeRecord>> {
+        let mut out: Vec<_> = self
+            .records
+            .borrow()
+            .iter()
+            .filter(|r| r.job == job)
+            .cloned()
+            .collect();
+        out.sort_by_key(|r| r.member.as_ref().map_or(0, |m| m.seq));
+        Ok(out)
     }
 
     fn active(&self) -> AppResult<Vec<swarmux_domain::WorktreeRecord>> {
@@ -977,13 +996,17 @@ impl crate::worktree::WorktreeStore for InMemoryWorktrees {
 
     fn rebind(&self, from: JobId, to: JobId) -> AppResult<bool> {
         let mut records = self.records.borrow_mut();
-        let Some(r) = records
+        let mut moved = false;
+        for r in records
             .iter_mut()
-            .find(|r| r.job == from && r.removed_at.is_none())
-        else {
+            .filter(|r| r.job == from && r.removed_at.is_none())
+        {
+            r.job = to;
+            moved = true;
+        }
+        if !moved {
             return Ok(false);
-        };
-        r.job = to;
+        }
         for c in self.checkpoints.borrow_mut().iter_mut() {
             if c.job == from {
                 c.job = to;
@@ -1518,6 +1541,12 @@ pub struct FakeMergeQueue {
     pub attempts: Cell<u32>,
     /// Worktrees brought up to a branch.
     pub forwarded: RefCell<Vec<(PathBuf, String)>>,
+    /// Branches merged, by the folder their integration branch is in.
+    pub merged_in: RefCell<Vec<(PathBuf, String)>>,
+    /// Integration folders whose merges conflict.
+    pub conflict_in: RefCell<Vec<PathBuf>>,
+    /// Integration folders put back, and to what.
+    pub resets: RefCell<Vec<(PathBuf, String)>>,
 }
 
 impl FakeMergeQueue {
@@ -1536,7 +1565,11 @@ impl crate::missions::MergeQueue for FakeMergeQueue {
         self.opened
             .borrow_mut()
             .push((repo.to_path_buf(), branch.to_string()));
-        Ok(PathBuf::from("/wt/integration"))
+        let name = repo
+            .file_name()
+            .map(|n| n.to_os_string())
+            .unwrap_or_default();
+        Ok(PathBuf::from("/wt/integration").join(name))
     }
 
     fn changed(&self, _: &Path, branch: &str) -> AppResult<Vec<String>> {
@@ -1548,8 +1581,18 @@ impl crate::missions::MergeQueue for FakeMergeQueue {
             .unwrap_or_default())
     }
 
-    fn merge(&self, _: &Path, branch: &str, _: &str) -> AppResult<crate::missions::MergeOutcome> {
+    fn merge(
+        &self,
+        workdir: &Path,
+        branch: &str,
+        _: &str,
+    ) -> AppResult<crate::missions::MergeOutcome> {
         self.attempts.set(self.attempts.get() + 1);
+        if self.conflict_in.borrow().iter().any(|w| w == workdir) {
+            return Ok(crate::missions::MergeOutcome::Conflict {
+                files: vec!["lib/api.dart".into()],
+            });
+        }
         if let Some((left, files)) = self.conflicts.borrow_mut().get_mut(branch)
             && *left > 0
         {
@@ -1558,6 +1601,9 @@ impl crate::missions::MergeQueue for FakeMergeQueue {
                 files: files.clone(),
             });
         }
+        self.merged_in
+            .borrow_mut()
+            .push((workdir.to_path_buf(), branch.to_string()));
         self.merged.borrow_mut().push(branch.to_string());
         let files = self.changed(Path::new(""), branch)?;
         self.landed.borrow_mut().extend(files);
@@ -1566,8 +1612,43 @@ impl crate::missions::MergeQueue for FakeMergeQueue {
         })
     }
 
-    fn contains(&self, _: &Path, branch: &str) -> AppResult<bool> {
-        Ok(self.merged.borrow().iter().any(|b| b == branch))
+    fn contains(&self, workdir: &Path, branch: &str) -> AppResult<bool> {
+        // Branches of one name live in many repositories: only this
+        // folder's merges count.
+        Ok(self
+            .merged_in
+            .borrow()
+            .iter()
+            .any(|(w, b)| w == workdir && b == branch))
+    }
+
+    fn head(&self, workdir: &Path) -> AppResult<String> {
+        let n = self
+            .merged_in
+            .borrow()
+            .iter()
+            .filter(|(w, _)| w == workdir)
+            .count();
+        Ok(format!("head-{n}"))
+    }
+
+    fn reset(&self, workdir: &Path, commit: &str) -> AppResult<()> {
+        let keep: usize = commit
+            .strip_prefix("head-")
+            .and_then(|n| n.parse().ok())
+            .ok_or_else(|| AppError::Workspace(format!("no commit {commit}")))?;
+        let mut seen = 0;
+        self.merged_in.borrow_mut().retain(|(w, _)| {
+            if w != workdir {
+                return true;
+            }
+            seen += 1;
+            seen <= keep
+        });
+        self.resets
+            .borrow_mut()
+            .push((workdir.to_path_buf(), commit.to_string()));
+        Ok(())
     }
 
     fn fast_forward(&self, worktree: &Path, branch: &str) -> AppResult<()> {
@@ -1642,5 +1723,81 @@ impl crate::board::BoardInbox for FakeBoardInbox {
 
     fn respond(&self, call: u64, reply: crate::board::BoardReply) {
         self.replies.borrow_mut().push((call, reply));
+    }
+}
+
+/// Workspaces kept in memory.
+#[derive(Default)]
+pub struct InMemoryWorkspaces {
+    all: RefCell<Vec<swarmux_domain::Workspace>>,
+}
+
+impl crate::workspace::WorkspaceStore for InMemoryWorkspaces {
+    fn save(&self, workspace: &swarmux_domain::Workspace) -> AppResult<()> {
+        let mut all = self.all.borrow_mut();
+        match all.iter_mut().find(|w| w.id == workspace.id) {
+            Some(w) => *w = workspace.clone(),
+            None => all.push(workspace.clone()),
+        }
+        Ok(())
+    }
+
+    fn list(&self) -> AppResult<Vec<swarmux_domain::Workspace>> {
+        let mut all = self.all.borrow().clone();
+        all.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(all)
+    }
+
+    fn get(&self, id: swarmux_domain::WorkspaceId) -> AppResult<Option<swarmux_domain::Workspace>> {
+        Ok(self.all.borrow().iter().find(|w| w.id == id).cloned())
+    }
+
+    fn remove(&self, id: swarmux_domain::WorkspaceId) -> AppResult<()> {
+        self.all.borrow_mut().retain(|w| w.id != id);
+        Ok(())
+    }
+}
+
+/// A disk with the repositories a test puts on it, by root.
+#[derive(Default)]
+pub struct FakeScanner {
+    pub found: RefCell<HashMap<PathBuf, Vec<crate::workspace::ScannedRepo>>>,
+}
+
+impl FakeScanner {
+    /// Puts a repository at `path` below `root`, with these files.
+    pub fn put(&self, root: &str, path: &str, files: &[&str]) {
+        let root = PathBuf::from(root);
+        let git_root = if path == "." {
+            root.clone()
+        } else {
+            root.join(path)
+        };
+        self.found
+            .borrow_mut()
+            .entry(root)
+            .or_default()
+            .push(crate::workspace::ScannedRepo {
+                path: path.to_string(),
+                git_root,
+                default_branch: Some("main".into()),
+                listing: swarmux_domain::workspace::RepoListing {
+                    files: files.iter().map(|f| f.to_string()).collect(),
+                    texts: Vec::new(),
+                },
+            });
+    }
+
+    /// Takes the repository at `path` away.
+    pub fn drop_repo(&self, root: &str, path: &str) {
+        if let Some(v) = self.found.borrow_mut().get_mut(Path::new(root)) {
+            v.retain(|s| s.path != path);
+        }
+    }
+}
+
+impl crate::workspace::WorkspaceScanner for FakeScanner {
+    fn scan(&self, root: &Path) -> AppResult<Vec<crate::workspace::ScannedRepo>> {
+        Ok(self.found.borrow().get(root).cloned().unwrap_or_default())
     }
 }

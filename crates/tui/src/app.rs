@@ -14,6 +14,7 @@ use swarmux_application::{
     GateService, GuardService, HistoryService, HookBus, JobService, MissionService, NotifyService,
     PaletteSource, PendingApproval, PromptService, QueueEntry, QueueStats, RoutingService,
     SessionService, SessionTerminal, TelemetryService, TelemetrySettings, UiSettings,
+    WorkspaceService,
 };
 use swarmux_domain::alarm::{Breakpoint, LoadMeter};
 use swarmux_domain::evidence::{brief, heat_strip};
@@ -119,6 +120,8 @@ pub enum InputPurpose {
     BoardAnswer,
     /// The ledger search; applied as it is typed.
     Search,
+    /// The workspace a new session works on.
+    WorkspaceSession,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -138,6 +141,10 @@ pub struct App {
     pub quit: bool,
     pub mode: Mode,
     pub sessions: Vec<Session>,
+    /// The workspaces sessions can work on, by name.
+    pub workspaces: Vec<swarmux_domain::Workspace>,
+    /// Where workspaces are read from; none, none are shown.
+    workspace_service: Option<WorkspaceService>,
     /// Index of the selected session in `sessions`; always re-resolved from
     /// `selected_id` when the list changes.
     pub selected: usize,
@@ -291,6 +298,8 @@ impl App {
             quit: false,
             mode: Mode::Normal,
             sessions: Vec::new(),
+            workspaces: Vec::new(),
+            workspace_service: None,
             selected: 0,
             selected_id: None,
             error: None,
@@ -418,6 +427,18 @@ impl App {
     }
 
     /// Records the agents' lifecycle events and shows what they say.
+    /// Shows workspaces (sessions grouped by them, their repositories on
+    /// the wall) and lets the Sessions screen open a session on one.
+    pub fn with_workspaces(mut self, workspaces: WorkspaceService) -> App {
+        self.set_workspaces(workspaces);
+        self
+    }
+
+    pub(crate) fn set_workspaces(&mut self, workspaces: WorkspaceService) {
+        self.workspace_service = Some(workspaces);
+        self.refresh_sessions(None);
+    }
+
     pub fn with_hook_bus(mut self, bus: HookBus) -> App {
         self.engine.hooks = Some(bus);
         self
@@ -1107,6 +1128,7 @@ impl App {
                         InputPurpose::PlanNote => self.submit_plan_note(&text),
                         InputPurpose::BoardAnswer => self.submit_board_answer(&text),
                         InputPurpose::Search => Ok(()),
+                        InputPurpose::WorkspaceSession => self.create_workspace_session(&text),
                     };
                     self.show(result);
                 }
@@ -1292,6 +1314,16 @@ impl App {
             KeyCode::Char('n') if self.screen == Screen::Sessions => {
                 self.mode = Mode::Input(InputPurpose::NewSession, Input::default());
             }
+            KeyCode::Char('w') if self.screen == Screen::Sessions => {
+                if self.workspaces.is_empty() {
+                    self.error =
+                        Some("no workspaces: add one with `swarmux workspace add <folder>`".into());
+                } else {
+                    let first = self.workspaces[0].name.clone();
+                    self.mode =
+                        Mode::Input(InputPurpose::WorkspaceSession, Input::with_text(&first));
+                }
+            }
             KeyCode::Char('l') if self.screen == Screen::Sessions => {
                 let result = self.toggle_lean();
                 self.show(result);
@@ -1465,7 +1497,8 @@ impl App {
             None => {
                 let session = session.ok_or(AppError::SessionNotFound)?;
                 let root = session.cwd.display().to_string();
-                let slug = service.create(contract, &root, Some(session.id))?;
+                let slug =
+                    service.create_in(contract, &root, Some(session.id), session.workspace)?;
                 composer.slug = Some(slug.clone());
                 slug
             }
@@ -1593,14 +1626,29 @@ impl App {
             .iter()
             .filter_map(|a| a.request.job_id)
             .collect();
-        wall_tiles(
+        let mut tiles = wall_tiles(
             &self.sessions,
             &self.mission.facts,
             &self.mission.gates,
             &held,
             self.mission.usage(),
             self.now(),
-        )
+        );
+        for tile in &mut tiles {
+            let ws = self
+                .sessions
+                .iter()
+                .find(|s| s.id == tile.session)
+                .and_then(|s| crate::workspaces::find(&self.workspaces, s.workspace));
+            tile.workspace = ws.map(crate::workspaces::label);
+        }
+        crate::workspaces::group_tiles(&mut tiles);
+        tiles
+    }
+
+    /// The workspace of the session, when it works on one swarmux knows.
+    pub(crate) fn workspace_of(&self, session: &Session) -> Option<&swarmux_domain::Workspace> {
+        crate::workspaces::find(&self.workspaces, session.workspace)
     }
 
     fn move_wall(&mut self, delta: isize) {
@@ -2035,6 +2083,20 @@ impl App {
         Ok(())
     }
 
+    /// A new session on the workspace called `name`, named after it.
+    fn create_workspace_session(&mut self, name: &str) -> AppResult<()> {
+        let service = self
+            .workspace_service
+            .as_ref()
+            .ok_or_else(|| AppError::WorkspaceNotFound(name.trim().to_string()))?;
+        let workspace = service.find(name)?;
+        let session = self
+            .session_service
+            .create_in_workspace(&workspace.name, &workspace)?;
+        self.refresh_sessions(Some(&session));
+        Ok(())
+    }
+
     fn dispatch(&mut self, prompt: &str) -> AppResult<()> {
         let session = self
             .selected_session()
@@ -2055,6 +2117,13 @@ impl App {
             Ok(list) => self.sessions = list,
             Err(e) => self.error = Some(e.to_string()),
         }
+        if let Some(service) = &self.workspace_service {
+            match service.list() {
+                Ok(list) => self.workspaces = list,
+                Err(e) => self.error = Some(e.to_string()),
+            }
+        }
+        crate::workspaces::group_sessions(&mut self.sessions);
         if let Some(target) = select {
             self.selected_id = Some(target.id);
         }

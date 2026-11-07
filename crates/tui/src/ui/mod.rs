@@ -307,6 +307,14 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App, t: &Theme) {
         Mode::Input(purpose, input) => {
             let prompt = match purpose {
                 InputPurpose::NewSession => "session name".to_string(),
+                InputPurpose::WorkspaceSession => format!(
+                    "workspace ({})",
+                    app.workspaces
+                        .iter()
+                        .map(|w| w.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
                 InputPurpose::Prompt => format!(
                     "prompt → {}",
                     app.selected_session().map_or("?", |s| s.name.as_str())
@@ -429,7 +437,9 @@ pub(crate) fn hints(app: &App) -> &'static str {
         Screen::Prompts => {
             " n new · e edit · x delete · d dispatch · D route · ↑↓ select · 0-7 screens · q quit"
         }
-        Screen::Sessions => " n new session · l lean on/off · ↑↓ select · 0-7 screens · q quit",
+        Screen::Sessions => {
+            " n new session · w on a workspace · l lean on/off · ↑↓ select · 0-7 screens · q quit"
+        }
         Screen::Board => " ↑↓ select · r answer a question · x close it · 0-7 screens · q quit",
     }
 }

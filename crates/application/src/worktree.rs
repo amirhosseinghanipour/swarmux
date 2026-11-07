@@ -9,7 +9,8 @@ use std::sync::Arc;
 
 use swarmux_domain::ledger::{hex, sha256};
 use swarmux_domain::{
-    Checkpoint, Handoff, JobId, Millis, Session, WorktreeRecord, branch_name, slug,
+    Checkpoint, Handoff, JobId, Millis, Repo, Session, SetMember, Workspace, WorktreeRecord,
+    branch_name, slug,
 };
 
 use crate::checkpoint::HandoffBoard;
@@ -75,17 +76,31 @@ pub trait Worktrees {
     /// Writes `handoff.json` where the worktree's own metadata lives, out
     /// of reach of `git add`.
     fn write_handoff(&self, path: &Path, handoff: &Handoff) -> AppResult<PathBuf>;
+    /// Finishes the task folder of a worktree set once its worktrees are
+    /// in it: marks it as one (so the gate takes it for the root) and
+    /// copies the workspace root's own instructions (`CLAUDE.md`) that
+    /// are not there yet. Returns what was copied.
+    fn finish_task_dir(&self, _task_dir: &Path, _workspace_root: &Path) -> AppResult<Vec<String>> {
+        Ok(Vec::new())
+    }
 }
 
 /// Where worktrees and checkpoints are kept.
 pub trait WorktreeStore {
+    /// Stores a worktree. The members of one job's set share its port slot.
     fn insert(&self, record: &WorktreeRecord) -> AppResult<()>;
+    /// The job's worktree: the first of its set, when it has one.
     fn get(&self, job: JobId) -> AppResult<Option<WorktreeRecord>>;
+    /// Every worktree of the job, reclaimed or not, in set order.
+    fn set(&self, job: JobId) -> AppResult<Vec<WorktreeRecord>> {
+        Ok(self.get(job)?.into_iter().collect())
+    }
     /// Worktrees whose folder has not been reclaimed, oldest first.
     fn active(&self) -> AppResult<Vec<WorktreeRecord>>;
-    /// Hands a worktree to the job that continues the work. False when
-    /// `from` had none.
+    /// Hands a worktree (or all of a set) to the job that continues the
+    /// work. False when `from` had none.
     fn rebind(&self, from: JobId, to: JobId) -> AppResult<bool>;
+    /// Marks every worktree of the job reclaimed.
     fn mark_removed(&self, job: JobId, now: Millis) -> AppResult<()>;
     /// Stores the checkpoint and returns it with its id.
     fn insert_checkpoint(&self, checkpoint: &Checkpoint) -> AppResult<i64>;
@@ -103,6 +118,16 @@ pub struct Prepared {
     pub cwd: PathBuf,
     pub env: Vec<(String, String)>,
     pub record: WorktreeRecord,
+}
+
+/// A workspace job's worktree set, ready to run in.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PreparedSet {
+    /// The task folder the worktrees are laid out under.
+    pub cwd: PathBuf,
+    pub env: Vec<(String, String)>,
+    /// One per repository the job touches, the shallowest first.
+    pub records: Vec<WorktreeRecord>,
 }
 
 /// One row of `swarmux worktree list`.
@@ -190,10 +215,12 @@ impl WorktreeService {
     }
 
     /// Whether jobs of `session` get a worktree: what the session says, else
-    /// whether its folder is in a git repository.
+    /// whether it is a workspace's (a set of them) or its folder is in a
+    /// git repository.
     pub fn enabled_for(&self, session: &Session) -> bool {
         match session.worktree {
             Some(on) => on,
+            None if session.workspace.is_some() => true,
             None => matches!(self.git.repository(&session.cwd), Ok(Some(_))),
         }
     }
@@ -203,9 +230,138 @@ impl WorktreeService {
         self.bases.borrow_mut().insert(job, base.to_string());
     }
 
-    /// The worktree of `job`, if it has one that was not reclaimed.
+    /// The worktree of `job`, if it has one that was not reclaimed (the
+    /// first of its set, when it has a set).
     pub fn record_for(&self, job: JobId) -> AppResult<Option<WorktreeRecord>> {
         Ok(self.store.get(job)?.filter(|r| r.removed_at.is_none()))
+    }
+
+    /// The worktrees of `job`'s set that were not reclaimed, the
+    /// shallowest first: one for a job of a repository, none without.
+    pub fn set_for(&self, job: JobId) -> AppResult<Vec<WorktreeRecord>> {
+        let mut set: Vec<WorktreeRecord> = self
+            .store
+            .set(job)?
+            .into_iter()
+            .filter(|r| r.removed_at.is_none())
+            .collect();
+        set.sort_by_key(|r| r.member.as_ref().map_or(0, |m| m.seq));
+        Ok(set)
+    }
+
+    /// Where `job` works: its task folder when it has a set, else its
+    /// worktree.
+    pub fn workdir_of(&self, job: JobId) -> AppResult<Option<PathBuf>> {
+        Ok(self.record_for(job)?.map(|r| match r.member {
+            Some(m) => m.task_dir,
+            None => r.path,
+        }))
+    }
+
+    /// The worktree set a workspace job runs in: the one it has (folders
+    /// that vanished made again), or a new one with a worktree per
+    /// repository in `repos`, laid out under a task folder the way they
+    /// sit in the workspace. Files of the workspace root that are not in
+    /// a repository are not copied, except its `CLAUDE.md`. `None` when
+    /// worktrees are off for the session or `repos` is empty.
+    pub fn prepare_set(
+        &self,
+        job: JobId,
+        session: &Session,
+        workspace: &Workspace,
+        repos: &[Repo],
+    ) -> AppResult<Option<PreparedSet>> {
+        let have = self.set_for(job)?;
+        if let Some(lead) = have.first() {
+            for record in &have {
+                if !self.git.present(&record.path) {
+                    self.git.add(&AddWorktree {
+                        repo: record.repo.clone(),
+                        path: record.path.clone(),
+                        branch: record.branch.clone(),
+                        copy: self.settings.copy.clone(),
+                        base: None,
+                    })?;
+                }
+            }
+            let task_dir = lead
+                .member
+                .as_ref()
+                .map_or_else(|| lead.path.clone(), |m| m.task_dir.clone());
+            self.git.finish_task_dir(&task_dir, &workspace.root)?;
+            self.publish_handoff(job);
+            return Ok(Some(self.ready_set(task_dir, have)));
+        }
+        self.bases.borrow_mut().remove(&job);
+        if !self.enabled_for(session) || repos.is_empty() {
+            return Ok(None);
+        }
+        let used: Vec<u32> = self.store.active()?.iter().map(|r| r.slot).collect();
+        let plan = self.settings.ports;
+        let slot = plan
+            .lowest_free(&used)
+            .ok_or_else(|| AppError::Workspace("no free port block left for a worktree".into()))?;
+        let port_base = plan
+            .port_base(slot)
+            .ok_or_else(|| AppError::Workspace("port plan is out of range".into()))?;
+        let task_dir = self.folder_for(&workspace.root, &session.name, job);
+        let branch = branch_name(&session.name, job);
+        // The shallowest first: a repository at the root holds the others.
+        let mut order: Vec<&Repo> = repos.iter().collect();
+        order.sort_by_key(|r| r.depth());
+        let mut records = Vec::new();
+        for (seq, repo) in order.into_iter().enumerate() {
+            let path = repo.under(&task_dir);
+            self.git.add(&AddWorktree {
+                repo: repo.git_root.clone(),
+                path: path.clone(),
+                branch: branch.clone(),
+                copy: self.settings.copy.clone(),
+                base: None,
+            })?;
+            let record = WorktreeRecord {
+                job,
+                session: session.id,
+                repo: repo.git_root.clone(),
+                path,
+                branch: branch.clone(),
+                slot,
+                port_base,
+                port_count: plan.block,
+                created_at: self.clock.now(),
+                removed_at: None,
+                member: Some(SetMember {
+                    repo: repo.name.clone(),
+                    task_dir: task_dir.clone(),
+                    seq: u32::try_from(seq).unwrap_or(u32::MAX),
+                }),
+            };
+            self.store.insert(&record)?;
+            if let Some(ledger) = &self.ledger {
+                ledger.record_worktree(&record, "created", None, self.clock.now())?;
+            }
+            records.push(record);
+        }
+        self.git.finish_task_dir(&task_dir, &workspace.root)?;
+        Ok(Some(self.ready_set(task_dir, records)))
+    }
+
+    fn ready_set(&self, task_dir: PathBuf, records: Vec<WorktreeRecord>) -> PreparedSet {
+        let mut env = Vec::new();
+        if let Some(lead) = records.first() {
+            env = vec![
+                (ENV_PORT_BASE.to_string(), lead.port_base.to_string()),
+                (ENV_PORT_COUNT.to_string(), lead.port_count.to_string()),
+                (ENV_WORKTREE.to_string(), task_dir.display().to_string()),
+                (ENV_BRANCH.to_string(), lead.branch.clone()),
+                (ENV_JOB.to_string(), lead.job.to_string()),
+            ];
+        }
+        PreparedSet {
+            cwd: task_dir,
+            env,
+            records,
+        }
     }
 
     /// The worktree `job` runs in: the one it has (made again if its folder
@@ -259,6 +415,7 @@ impl WorktreeService {
             port_count: plan.block,
             created_at: self.clock.now(),
             removed_at: None,
+            member: None,
         };
         self.store.insert(&record)?;
         if let Some(ledger) = &self.ledger {
@@ -378,7 +535,24 @@ impl WorktreeService {
     pub fn gc(&self, dry_run: bool) -> AppResult<GcReport> {
         let now = self.clock.now();
         let mut report = GcReport::default();
-        for record in self.store.active()? {
+        let mut active = self.store.active()?;
+        // The worktrees of a set go together, the deepest first: one may
+        // sit inside another.
+        let mut first_seen: Vec<JobId> = Vec::new();
+        for r in &active {
+            if !first_seen.contains(&r.job) {
+                first_seen.push(r.job);
+            }
+        }
+        active.sort_by_key(|r| {
+            let at = first_seen.iter().position(|j| *j == r.job).unwrap_or(0);
+            (
+                at,
+                std::cmp::Reverse(r.member.as_ref().map_or(0, |m| m.seq)),
+            )
+        });
+        let mut failed: Vec<JobId> = Vec::new();
+        for record in active {
             let present = self.git.present(&record.path);
             if present && !self.is_stale(&record, now)? {
                 report.kept += 1;
@@ -392,10 +566,18 @@ impl WorktreeService {
                 }
                 continue;
             }
+            // A set whose deeper worktree could not go keeps the rest.
+            if failed.contains(&record.job) {
+                report.kept += 1;
+                continue;
+            }
+            // The set is marked reclaimed with its first worktree, the last
+            // to go.
+            let mark = record.member.as_ref().is_none_or(|m| m.seq == 0);
             if present {
                 match self.git.remove(&record.repo, &record.path, &record.branch) {
                     Ok(removed) => {
-                        self.finish_removal(&record, &removed, now, &mut report);
+                        self.finish_removal(&record, &removed, mark, now, &mut report);
                         report.reclaimed.push(record);
                     }
                     Err(e) => {
@@ -403,10 +585,11 @@ impl WorktreeService {
                             .errors
                             .push(format!("{}: {e}", record.path.display()));
                         report.kept += 1;
+                        failed.push(record.job);
                     }
                 }
             } else {
-                self.finish_removal(&record, &Removed::default(), now, &mut report);
+                self.finish_removal(&record, &Removed::default(), mark, now, &mut report);
                 report.forgotten.push(record);
             }
         }
@@ -417,10 +600,11 @@ impl WorktreeService {
         &self,
         record: &WorktreeRecord,
         removed: &Removed,
+        mark: bool,
         now: Millis,
         report: &mut GcReport,
     ) {
-        if let Err(e) = self.store.mark_removed(record.job, now) {
+        if mark && let Err(e) = self.store.mark_removed(record.job, now) {
             report.errors.push(e.to_string());
             return;
         }

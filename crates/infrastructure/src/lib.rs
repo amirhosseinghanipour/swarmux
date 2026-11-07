@@ -36,6 +36,7 @@ pub mod process;
 pub mod sqlite;
 pub mod telemetry;
 pub mod terminal;
+pub mod workspace;
 pub mod worktree;
 
 pub use agents::FsAgentCatalog;
@@ -64,4 +65,5 @@ pub use paths::Paths;
 pub use sqlite::{SqliteLedger, SqliteStore};
 pub use telemetry::localtime::utc_offset_minutes;
 pub use terminal::WindowsTerminal;
+pub use workspace::FsWorkspaceScanner;
 pub use worktree::GitWorktrees;

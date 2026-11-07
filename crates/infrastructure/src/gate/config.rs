@@ -199,13 +199,22 @@ fn modified(path: &Path) -> Option<SystemTime> {
     fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
-/// The repository `dir` lies in: the nearest folder with a `gates.toml`,
-/// else the nearest with `.git`, else `dir`.
+/// The repository `dir` lies in: a worktree set's task folder, else the
+/// nearest folder with a `gates.toml`, else the nearest with `.git`, else
+/// `dir`.
 ///
 /// The root is written the way `dir` is (not canonicalised), so paths the
 /// agent's tools name relative to their working folder compare with it.
 fn root_of(dir: &Path) -> PathBuf {
     let dir = std::path::absolute(dir).unwrap_or_else(|_| dir.to_path_buf());
+    // A workspace job's task folder holds a worktree per repository: it
+    // is the root its checks run from.
+    if let Some(task) = dir
+        .ancestors()
+        .find(|a| a.join(crate::worktree::TASK_MARKER).is_file())
+    {
+        return task.to_path_buf();
+    }
     if let Some(found) = dir.ancestors().find(|a| a.join(GATES_FILE).is_file()) {
         return found.to_path_buf();
     }

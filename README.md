@@ -77,6 +77,7 @@ Twelve built-in themes, plus `wal`, base16 and matugen imports. List them with
 ```sh
 swarmux --demo         # a scripted demo: no Claude Code, no account, nothing of yours is touched
 swarmux                # the TUI: 1-7 switch screens (1 Mission control, 2 Missions, 7 Board), 0 Focus, p sends a prompt, q detaches
+swarmux workspace add ~/product  # a folder of several git repositories, worked on as one
 swarmux daemon status  # the background service that keeps the work going with no window open
 swarmux doctor         # checks Claude Code, the settings, the Guard hook and telemetry
 swarmux fetch          # a neofetch-style card of your sessions, spend and limits
@@ -94,6 +95,10 @@ From a checkout, use `cargo run` and `cargo run -- doctor`. See
   anything is built and see how far the build strayed from it
 - **Mission control**: what needs you, who is doing what, and whether you will
   hit a limit, on one screen
+- **Workspaces**: a folder of several repositories (an app, its backend, an
+  admin site) worked on as one: a job sees every repository it touches, in
+  a worktree per repository, and a mission lands in each of them in order,
+  or in none
 - **Background service**: close the window and the work goes on; `swarmux`
   attaches again from any terminal, several windows at once, and a restart
   picks missions and jobs up where they were
@@ -153,6 +158,7 @@ Single Rust binary. Windows, macOS, Linux. Works with Claude Code only.
 - [Done-gate](guide/done-gate.md)
 - [Independent verifier, hidden checks and review](guide/verifier.md)
 - [Worktrees and checkpoints](guide/worktrees.md)
+- [Workspaces: several repositories worked on as one](guide/workspaces.md)
 - [Usage governor](guide/governor.md)
 - [Watchdog and recovery ladder](guide/watchdog.md)
 - [Notifications](guide/notifications.md)

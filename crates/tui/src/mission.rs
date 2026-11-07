@@ -375,6 +375,8 @@ pub struct Tile {
     pub todos: Option<(u32, u32)>,
     /// Done-gate, review and guard state as short chips.
     pub chips: Vec<Chip>,
+    /// The session's workspace and its repositories, when it has one.
+    pub workspace: Option<String>,
 }
 
 /// How a chip reads.
@@ -549,6 +551,7 @@ pub fn wall_tiles(
                 chips: latest
                     .map(|f| chips_of(f, gates.get(&f.job_id), state == TileState::Waiting))
                     .unwrap_or_default(),
+                workspace: None,
             }
         })
         .collect()

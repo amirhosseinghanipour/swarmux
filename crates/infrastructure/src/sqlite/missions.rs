@@ -5,15 +5,15 @@ use rusqlite::{Row, params};
 use serde_json::{Value, json};
 use swarmux_application::{AppResult, MissionStore};
 use swarmux_domain::mission::{
-    Finding, FindingKind, LintReport, Mission, MissionState, Question, Severity, Spend,
+    Finding, FindingKind, Landing, LintReport, Mission, MissionState, Question, Severity, Spend,
 };
-use swarmux_domain::{JobId, SessionId};
+use swarmux_domain::{JobId, SessionId, WorkspaceId};
 
 use super::{OrStorage, SqliteStore};
 use crate::mission::{parse_contract, render_contract};
 
-const COLS: &str =
-    "slug, root, session_id, contract, state, job_id, lint, spend, note, created_at, updated_at";
+const COLS: &str = "slug, root, session_id, contract, state, job_id, lint, spend, note, \
+                    created_at, updated_at, workspace_id, landing";
 
 fn lint_to_json(l: &LintReport) -> String {
     json!({
@@ -118,6 +118,14 @@ fn from_row(r: &Row) -> rusqlite::Result<Mission> {
         note: r.get(8)?,
         created_at: r.get(9)?,
         updated_at: r.get(10)?,
+        workspace: r
+            .get::<_, Option<String>>(11)?
+            .as_deref()
+            .and_then(WorkspaceId::parse),
+        landing: r
+            .get::<_, Option<String>>(12)?
+            .as_deref()
+            .and_then(Landing::from_json),
     })
 }
 
@@ -127,7 +135,7 @@ impl MissionStore for SqliteStore {
             .execute(
                 &format!(
                     "INSERT INTO missions ({COLS})
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
                      ON CONFLICT(slug) DO UPDATE SET
                         root = excluded.root,
                         session_id = excluded.session_id,
@@ -137,7 +145,9 @@ impl MissionStore for SqliteStore {
                         lint = excluded.lint,
                         spend = excluded.spend,
                         note = excluded.note,
-                        updated_at = excluded.updated_at"
+                        updated_at = excluded.updated_at,
+                        workspace_id = excluded.workspace_id,
+                        landing = excluded.landing"
                 ),
                 params![
                     m.slug,
@@ -151,6 +161,8 @@ impl MissionStore for SqliteStore {
                     m.note,
                     m.created_at,
                     m.updated_at,
+                    m.workspace.map(|w| w.to_string()),
+                    m.landing.as_ref().map(Landing::to_json),
                 ],
             )
             .or_storage()?;
@@ -199,6 +211,13 @@ mod tests {
         a.note = Some("why".into());
         a.lint.as_mut().unwrap().problem = Some("offline".into());
         a.updated_at = 9;
+        a.workspace = Some(WorkspaceId::random());
+        a.landing = Some(Landing::new(
+            "swarmux/a/integration",
+            &[("app".into(), "swarmux/s/1".into())],
+            9,
+        ));
+        a.contract.repos = vec!["app".into()];
         s.save(&a).unwrap();
         let all = s.list().unwrap();
         assert_eq!(all, [b, a], "oldest first, one row each");

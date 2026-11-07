@@ -322,6 +322,7 @@ pub(crate) mod fixtures {
             job: None,
             todos: None,
             chips: Vec::new(),
+            workspace: None,
         }
     }
 

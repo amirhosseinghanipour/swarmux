@@ -8,6 +8,20 @@ follows [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Workspaces: `swarmux workspace add|list|show|rescan|rm` records a folder of
+  several git repositories (two levels down; the folder need not be one),
+  with each repository's default branch, stacks (Flutter, Dart, Node, Rust,
+  Python, Go, Supabase, Ruby, .NET, Unity, Godot) and commands (scripts, make
+  targets, just recipes). A session on a workspace (`w` on the Sessions
+  screen) runs its jobs from the root with each repository it touches added
+  with `--add-dir` and its `CLAUDE.md` loaded; with worktrees on, each job
+  gets a worktree per repository, laid out like the workspace. Sessions and
+  wall cards are grouped by workspace.
+- Workspace missions: `repos = [...]` names the repositories a mission
+  touches, producers first, and `repo: command` checks (or
+  `[acceptance.by_repo]`) run in each. Once the gate passes the mission lands
+  in every repository in that order, or in none: a repository that can't take
+  its merge puts back the ones before it and goes to your inbox.
 - The done-gate reads a job's diff for weakened tests (deleted or switched-off
   tests, dropped or loosened assertions, edited snapshots, wider tolerances,
   relaxed CI) and blocks the stop as *tests weakened* with the evidence lines;
@@ -22,7 +36,6 @@ follows [Semantic Versioning](https://semver.org/).
   signed checkpoint (cut short, rewritten), `audit export-checkpoints`; a
   checkpoint is taken when a mission is delivered and kept in its evidence
   bundle. The signing key is an ed25519 minisign key in the OS keychain.
-
 - Mission control, the home screen: an alarm-grade inbox of what needs you
   (ranked by urgency, with batches, shelving and focus mode), a wall of session
   cards and a strip of limits and data health, scaled to the window size.

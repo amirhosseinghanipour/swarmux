@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use uuid::Uuid;
 
-use crate::{DomainError, Millis};
+use crate::{DomainError, Millis, WorkspaceId};
 
 pub const DEFAULT_MODEL: &str = "sonnet";
 pub const DEFAULT_PERMISSION_MODE: &str = "default";
@@ -46,6 +46,9 @@ pub struct Session {
     /// Run each job in its own git worktree. `None` follows the folder:
     /// on in a git repository, off elsewhere.
     pub worktree: Option<bool>,
+    /// The workspace it works on: its folder is the workspace's root and
+    /// its jobs see every repository of it.
+    pub workspace: Option<WorkspaceId>,
 }
 
 impl Session {
@@ -75,6 +78,7 @@ impl Session {
             archived: false,
             lean: false,
             worktree: None,
+            workspace: None,
         })
     }
 

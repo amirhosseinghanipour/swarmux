@@ -16,9 +16,9 @@ use swarmux_domain::budget::Reservation;
 use swarmux_domain::gate::GateOutcome;
 use swarmux_domain::mission::{
     BadTransition, Clarification, Contract, Finding, LintReport, Mission, MissionPhase,
-    MissionState, Question, Severity, Signal, apply_fixes, compile, lint_report,
+    MissionState, Question, Severity, Signal, apply_fixes, lint_report,
 };
-use swarmux_domain::{JobId, JobStatus, Millis, SessionId, slug};
+use swarmux_domain::{JobId, JobStatus, Millis, SessionId, WorkspaceId, slug};
 
 use crate::evidence::EvidenceService;
 use crate::gate::{GateState, JobGates};
@@ -28,6 +28,7 @@ use crate::ports::Clock;
 use crate::{AppError, AppResult};
 
 mod graph;
+mod land;
 mod plan;
 pub use graph::{Claim, MAX_RESUMES, MergeOutcome, MergeQueue, ScopeClaims, ScopeDenial};
 pub use plan::{
@@ -104,6 +105,8 @@ pub struct MissionService {
     graphs: graph::GraphState,
     /// The board the mission's jobs are put on.
     board: Option<Arc<crate::Board>>,
+    /// The workspaces of workspace missions.
+    workspaces: Option<Rc<dyn crate::workspace::WorkspaceStore>>,
 }
 
 impl MissionService {
@@ -127,6 +130,7 @@ impl MissionService {
             plans: plan::PlanState::new(),
             graphs: graph::GraphState::default(),
             board: None,
+            workspaces: None,
         })
     }
 
@@ -218,12 +222,26 @@ impl MissionService {
         root: &str,
         session: Option<SessionId>,
     ) -> AppResult<String> {
+        self.create_in(contract, root, session, None)
+    }
+
+    /// Like [`MissionService::create`], for a mission of `workspace` (the
+    /// session's): it runs across the repositories it names and lands in
+    /// each of them.
+    pub fn create_in(
+        &mut self,
+        contract: Contract,
+        root: &str,
+        session: Option<SessionId>,
+        workspace: Option<WorkspaceId>,
+    ) -> AppResult<String> {
         if contract.goal.trim().is_empty() {
             return Err(AppError::Mission("a mission needs a goal".into()));
         }
         let slug = self.fresh_slug(&contract);
         let mut mission = Mission::new(&slug, root, contract, self.clock.now());
         mission.session = session;
+        mission.workspace = workspace;
         self.store.save(&mission)?;
         self.missions.push(mission);
         self.record(&slug, MissionState::Draft)?;
@@ -261,7 +279,11 @@ impl MissionService {
             question: c.question.clone(),
             why: String::new(),
         }));
-        let report = lint_report(&self.missions[i].contract).with_questions(asked);
+        let mut report = lint_report(&self.missions[i].contract);
+        report
+            .findings
+            .extend(self.repo_findings(&self.missions[i])?);
+        let report = report.with_questions(asked);
         let m = &mut self.missions[i];
         let from = m
             .apply(
@@ -360,8 +382,7 @@ impl MissionService {
         if let Some(why) = self.plan_blocks(slug) {
             return Err(AppError::Mission(why));
         }
-        let m = &self.missions[i];
-        let compiled = match compile(&m.contract) {
+        let compiled = match self.compiled(i) {
             Ok(c) => c,
             Err(blocking) => {
                 let why = blocking
@@ -377,6 +398,7 @@ impl MissionService {
                 return Err(AppError::Mission(format!("{slug} refused: {why}")));
             }
         };
+        let m = &self.missions[i];
         let session = m
             .session
             .ok_or_else(|| AppError::Mission(format!("{slug} has no session to run in")))?;
@@ -394,7 +416,12 @@ impl MissionService {
             prompt.push_str("\n\n");
             prompt.push_str(plan.trim_end());
         }
-        let job = jobs.dispatch_capped(session, &prompt, cap)?;
+        let job = if m.workspace.is_some() {
+            let repos = m.contract.repos.clone();
+            jobs.dispatch_scoped(session, &prompt, cap, &repos)?
+        } else {
+            jobs.dispatch_capped(session, &prompt, cap)?
+        };
         if let Some(board) = &self.board {
             board.join(job, slug, None);
         }
@@ -495,7 +522,7 @@ impl MissionService {
             changed = true;
         }
         jobs.adopt(job)?;
-        if let (Some(gates), Ok(compiled)) = (&self.gates, compile(&self.missions[i].contract)) {
+        if let (Some(gates), Ok(compiled)) = (&self.gates, self.compiled(i)) {
             gates.assign(job, compiled.gate);
         }
         if let Some(board) = &self.board {
@@ -585,6 +612,15 @@ impl MissionService {
         let since = fact.started_at.unwrap_or(fact.created_at);
         let verdict = gate.filter(|g| g.at >= since).map(|g| g.outcome);
         match verdict {
+            // A workspace mission is delivered once all its repositories
+            // landed; when one can't, none has and the user decides.
+            Some(GateOutcome::Pass) if self.missions[i].workspace.is_some() => {
+                match self.land(i, fact.job_id) {
+                    Ok(None) => self.take(i, Signal::Gate(GateOutcome::Pass), now),
+                    Ok(Some(why)) => self.escalate(i, why, now),
+                    Err(e) => self.escalate(i, format!("landing failed: {e}"), now),
+                }
+            }
             Some(outcome @ (GateOutcome::Pass | GateOutcome::Escalate)) => {
                 self.take(i, Signal::Gate(outcome), now)
             }
@@ -596,7 +632,14 @@ impl MissionService {
                 if !self.verifying.insert(m.slug.clone()) {
                     return Ok(false);
                 }
-                match gates.verify(job, Path::new(&m.root)) {
+                // A workspace job's checks run in its task folder, which
+                // its worktree set is laid out under.
+                let dir = match (&m.workspace, &self.graphs.worktrees) {
+                    (Some(_), Some(w)) => w.workdir_of(job)?,
+                    _ => None,
+                }
+                .unwrap_or_else(|| Path::new(&m.root).to_path_buf());
+                match gates.verify(job, &dir) {
                     Ok(()) => Ok(false),
                     Err(why) => {
                         let changed = self.take(i, Signal::Gate(GateOutcome::Escalate), now)?;
@@ -606,6 +649,13 @@ impl MissionService {
                 }
             }
         }
+    }
+
+    /// Escalates the mission with `why` as its note.
+    fn escalate(&mut self, i: usize, why: String, now: Millis) -> AppResult<bool> {
+        let changed = self.take(i, Signal::Gate(GateOutcome::Escalate), now)?;
+        self.missions[i].note = Some(why);
+        Ok(changed)
     }
 
     /// Why the mission's budget is spent, once it is.

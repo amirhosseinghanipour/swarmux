@@ -20,6 +20,11 @@ const META_DIR: &str = "swarmux";
 /// Paths copied into the worktree, one per line; snapshots leave them out.
 const COPIED_FILE: &str = "copied.txt";
 const HANDOFF_FILE: &str = "handoff.json";
+/// Marks a worktree set's task folder: the gate takes it for the root.
+pub const TASK_MARKER: &str = ".swarmux-task";
+/// What a workspace root's own instructions are called; they are copied
+/// into a task folder, which is not in any repository.
+const ROOT_INSTRUCTIONS: [&str; 2] = ["CLAUDE.md", "CLAUDE.local.md"];
 /// Tries for operations that git or Windows may briefly refuse.
 const TRIES: u32 = 6;
 /// Identity for snapshot commits when git has none configured.
@@ -246,6 +251,32 @@ impl Worktrees for GitWorktrees {
         fs::write(long(&file), handoff.to_json())
             .map_err(|e| AppError::Workspace(format!("{}: {e}", file.display())))?;
         Ok(file)
+    }
+
+    fn finish_task_dir(&self, task_dir: &Path, workspace_root: &Path) -> AppResult<Vec<String>> {
+        let marker = task_dir.join(TASK_MARKER);
+        if !long(&marker).exists() {
+            fs::write(
+                long(&marker),
+                "A swarmux task folder: one git worktree per repository of a workspace.\n",
+            )
+            .map_err(|e| AppError::Workspace(format!("{}: {e}", marker.display())))?;
+        }
+        let listed: Vec<String> = ROOT_INSTRUCTIONS.iter().map(|s| s.to_string()).collect();
+        let copied = copy_listed(workspace_root, task_dir, &listed);
+        // When the workspace root is a repository itself, the task folder
+        // is its worktree: what swarmux put there stays out of its commits.
+        if task_dir.join(".git").exists() {
+            let meta = self.meta_dir(task_dir)?;
+            let mut known = self.copied(task_dir);
+            known.push(TASK_MARKER.to_string());
+            known.extend(copied.iter().cloned());
+            known.sort();
+            known.dedup();
+            fs::write(long(&meta.join(COPIED_FILE)), known.join("\n"))
+                .map_err(|e| AppError::Workspace(format!("{}: {e}", meta.display())))?;
+        }
+        Ok(copied)
     }
 }
 

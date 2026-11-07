@@ -13,6 +13,7 @@ mod jev;
 mod stats;
 mod telemetry;
 mod theme;
+mod workspace;
 mod worktree;
 
 use std::path::PathBuf;
@@ -136,6 +137,12 @@ enum Command {
     /// Ask GitHub what became of each delivered branch (merged, reverted
     /// within seven days) and record it.
     Labels,
+    /// Workspaces: a product folder of several git repositories, worked on
+    /// as one (a session from its root sees every repository).
+    Workspace {
+        #[command(subcommand)]
+        action: workspace::Action,
+    },
     /// Per-job git worktrees, their port blocks and checkpoints.
     Worktree {
         #[command(subcommand)]
@@ -413,6 +420,7 @@ fn main() -> anyhow::Result<ExitCode> {
             HoldoutAction::List { repo } => holdout::list(repo.as_deref()),
             HoldoutAction::Rm { repo, check } => holdout::rm(&repo, &check),
         },
+        Some(Command::Workspace { action }) => workspace::run(action),
         Some(Command::Worktree { action }) => match action {
             WorktreeAction::List => worktree::list(),
             WorktreeAction::Gc { dry_run } => worktree::gc(dry_run),
@@ -621,7 +629,12 @@ fn build_app(
                 .map_or_else(|| root.to_path_buf(), |w| w.path)
         })
     };
-    let missions = MissionService::new(Rc::new(MissionFiles::new(store.clone())), clock.clone())?
+    // A workspace's missions are kept in swarmux's folder: its root is often
+    // not a repository.
+    let mission_files =
+        MissionFiles::new(store.clone()).with_workspace_dir(paths.data_dir.join("workspaces"));
+    let missions = MissionService::new(Rc::new(mission_files), clock.clone())?
+        .with_workspaces(store.clone())
         .with_linter(Rc::new(linter))
         .with_gates(Rc::new(keeper.clone()))
         .with_ledger(ledger.clone())
@@ -714,7 +727,9 @@ fn build_app(
     let telemetry = telemetry::start(&settings, &paths, store.clone(), clock.clone())
         .with_truth(truth, statuslines);
     let alarm_store = store.clone();
+    let workspaces = workspace::service(store.clone());
     let mut jobs = JobService::new(store.clone(), jobs_log, runner, clock)
+        .with_workspaces(store.clone())
         .with_telemetry_store(store)
         .with_limits(settings.limits())
         .with_loop_repeats(
@@ -744,6 +759,7 @@ fn build_app(
         std::env::current_dir()?,
     )
     .with_clock(Rc::new(SystemClock))
+    .with_workspaces(workspaces)
     .with_board(board_service.zip(Some(board_inbox)))
     .with_hook_bus(hook_bus)
     .with_gate(gate)

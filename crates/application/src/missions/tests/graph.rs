@@ -130,6 +130,7 @@ fn contract() -> Contract {
             ..Budget::default()
         },
         clarifications: Vec::new(),
+        repos: Vec::new(),
     }
 }
 

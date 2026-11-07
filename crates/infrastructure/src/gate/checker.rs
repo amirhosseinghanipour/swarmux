@@ -91,13 +91,18 @@ impl Checker for ProcessChecker {
             output: String::new(),
             flaky: false,
         };
-        let Some(program) = resolve(&check.program, root) else {
+        let dir = check.workdir(root);
+        if !dir.is_dir() {
+            run.spawn_error = Some(format!("{} is not a folder", dir.display()));
+            return run;
+        }
+        let Some(program) = resolve(&check.program, &dir) else {
             run.spawn_error = Some(format!("{} was not found", check.program));
             return run;
         };
         let mut cmd = Command::new(&program);
         cmd.args(&check.args)
-            .current_dir(root)
+            .current_dir(&dir)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

@@ -34,6 +34,7 @@ pub mod telemetry;
 mod template;
 mod tokens;
 pub mod verifier;
+pub mod workspace;
 mod worktree;
 
 pub use attention::{
@@ -62,8 +63,9 @@ pub use session::{DEFAULT_MODEL, DEFAULT_PERMISSION_MODE, Session, SessionId};
 pub use subagent::{Subagent, SubagentStatus, ToolOutcome};
 pub use template::{render, variables};
 pub use tokens::{TokenTally, cache_read_ratio, estimate_tokens};
+pub use workspace::{Repo, RepoRef, Stack, Workspace, WorkspaceId};
 pub use worktree::{
-    Checkpoint, CheckpointReason, Handoff, PortPlan, WorktreeRecord, branch_name, slug,
+    Checkpoint, CheckpointReason, Handoff, PortPlan, SetMember, WorktreeRecord, branch_name, slug,
 };
 
 /// Unix time in milliseconds.

@@ -73,6 +73,7 @@ fn contract(checks: &[&str], protected: &[&str]) -> Contract {
             ..Budget::default()
         },
         clarifications: Vec::new(),
+        repos: Vec::new(),
     }
 }
 
@@ -613,3 +614,4 @@ fn missions_delivered_before_bundles_existed_get_one() {
 
 mod graph;
 mod plan_first;
+mod workspace;

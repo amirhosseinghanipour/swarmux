@@ -570,6 +570,7 @@ impl MissionService {
             }
         }
         out.extend(self.graph_items());
+        out.extend(self.landing_items());
         out
     }
 }

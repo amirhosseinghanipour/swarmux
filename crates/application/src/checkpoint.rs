@@ -103,6 +103,10 @@ impl CheckpointService {
 
     /// Commits the job's worktree, writes the handoff and records the
     /// checkpoint in the ledger. `None` when the job has no worktree.
+    ///
+    /// A workspace job's set is checkpointed repository by repository:
+    /// every worktree gets its commit and its own checkpoint, the first of
+    /// the set last, so it is the job's latest.
     pub fn take(
         &self,
         job: JobId,
@@ -110,9 +114,25 @@ impl CheckpointService {
         reason: CheckpointReason,
         notes: &Notes,
     ) -> AppResult<Option<Checkpoint>> {
-        let Some(record) = self.worktrees.record_for(job)? else {
+        let set = self.worktrees.set_for(job)?;
+        let Some((record, rest)) = set.split_first() else {
             return Ok(None);
         };
+        for member in rest.iter().rev() {
+            self.take_one(job, member, claude_session, reason, notes)?;
+        }
+        self.take_one(job, record, claude_session, reason, notes)
+            .map(Some)
+    }
+
+    fn take_one(
+        &self,
+        job: JobId,
+        record: &WorktreeRecord,
+        claude_session: &str,
+        reason: CheckpointReason,
+        notes: &Notes,
+    ) -> AppResult<Checkpoint> {
         let git = self.worktrees.git();
         let commit = git.snapshot(
             &record.path,
@@ -149,7 +169,7 @@ impl CheckpointService {
         if let (Some(board), Some(handoff)) = (&self.board, &checkpoint.handoff) {
             board.set(job, &handoff.briefing());
         }
-        Ok(Some(checkpoint))
+        Ok(checkpoint)
     }
 
     fn handoff(&self, job: JobId, notes: &Notes) -> AppResult<Handoff> {

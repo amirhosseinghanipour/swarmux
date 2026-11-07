@@ -3,13 +3,15 @@ use std::path::PathBuf;
 use rusqlite::{OptionalExtension, Row, params};
 use swarmux_application::AppResult;
 use swarmux_application::WorktreeStore;
-use swarmux_domain::{Checkpoint, CheckpointReason, Handoff, JobId, Millis, WorktreeRecord};
+use swarmux_domain::{
+    Checkpoint, CheckpointReason, Handoff, JobId, Millis, SetMember, WorktreeRecord,
+};
 
 use super::sessions::session_id_at;
 use super::{OrStorage, SqliteStore};
 
-const WORKTREE_COLS: &str =
-    "job_id, session_id, repo, path, branch, slot, port_base, port_count, created_at, removed_at";
+const WORKTREE_COLS: &str = "job_id, session_id, repo, path, branch, slot, port_base, \
+                             port_count, created_at, removed_at, seq, repo_name, task_dir";
 const CHECKPOINT_COLS: &str =
     "id, job_id, session_id, commit_sha, worktree, branch, reason, ledger_seq, handoff, at";
 
@@ -27,6 +29,17 @@ fn worktree_from_row(r: &Row) -> rusqlite::Result<WorktreeRecord> {
         port_count: r.get(7)?,
         created_at: r.get(8)?,
         removed_at: r.get(9)?,
+        member: match (
+            r.get::<_, Option<String>>(11)?,
+            r.get::<_, Option<String>>(12)?,
+        ) {
+            (Some(repo), Some(task_dir)) => Some(SetMember {
+                repo,
+                task_dir: PathBuf::from(task_dir),
+                seq: r.get(10)?,
+            }),
+            _ => None,
+        },
     })
 }
 
@@ -89,7 +102,7 @@ impl WorktreeStore for SqliteStore {
             .execute(
                 &format!(
                     "INSERT INTO worktrees ({WORKTREE_COLS})
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)"
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)"
                 ),
                 params![
                     w.job.0,
@@ -101,7 +114,12 @@ impl WorktreeStore for SqliteStore {
                     w.port_base,
                     w.port_count,
                     w.created_at,
-                    w.removed_at
+                    w.removed_at,
+                    w.member.as_ref().map_or(0, |m| m.seq),
+                    w.member.as_ref().map(|m| m.repo.clone()),
+                    w.member
+                        .as_ref()
+                        .map(|m| m.task_dir.to_string_lossy().into_owned()),
                 ],
             )
             .or_storage()?;
@@ -111,7 +129,9 @@ impl WorktreeStore for SqliteStore {
     fn get(&self, job: JobId) -> AppResult<Option<WorktreeRecord>> {
         self.conn
             .query_row(
-                &format!("SELECT {WORKTREE_COLS} FROM worktrees WHERE job_id = ?1"),
+                &format!(
+                    "SELECT {WORKTREE_COLS} FROM worktrees WHERE job_id = ?1 ORDER BY seq LIMIT 1"
+                ),
                 [job.0],
                 worktree_from_row,
             )
@@ -119,12 +139,23 @@ impl WorktreeStore for SqliteStore {
             .or_storage()
     }
 
+    fn set(&self, job: JobId) -> AppResult<Vec<WorktreeRecord>> {
+        let mut stmt = self
+            .conn
+            .prepare(&format!(
+                "SELECT {WORKTREE_COLS} FROM worktrees WHERE job_id = ?1 ORDER BY seq"
+            ))
+            .or_storage()?;
+        let rows = stmt.query_map([job.0], worktree_from_row).or_storage()?;
+        rows.collect::<Result<_, _>>().or_storage()
+    }
+
     fn active(&self) -> AppResult<Vec<WorktreeRecord>> {
         let mut stmt = self
             .conn
             .prepare(&format!(
                 "SELECT {WORKTREE_COLS} FROM worktrees WHERE removed_at IS NULL
-                 ORDER BY created_at, job_id"
+                 ORDER BY created_at, job_id, seq"
             ))
             .or_storage()?;
         let rows = stmt.query_map([], worktree_from_row).or_storage()?;
@@ -228,7 +259,71 @@ mod tests {
             port_count: 20,
             created_at: 5,
             removed_at: None,
+            member: None,
         }
+    }
+
+    fn member(job: i64, seq: u32, repo: &str) -> WorktreeRecord {
+        WorktreeRecord {
+            path: format!("/t/{job}/{repo}").into(),
+            repo: format!("/p/{repo}").into(),
+            member: Some(SetMember {
+                repo: repo.into(),
+                task_dir: format!("/t/{job}").into(),
+                seq,
+            }),
+            ..record(job, 4)
+        }
+    }
+
+    #[test]
+    fn a_set_shares_its_slot_and_moves_and_goes_together() {
+        let s = SqliteStore::open_in_memory().unwrap();
+        let a = member(1, 0, "backend");
+        let b = member(1, 1, "app");
+        s.insert(&b).unwrap();
+        s.insert(&a).unwrap();
+        assert_eq!(
+            s.get(JobId(1)).unwrap(),
+            Some(a.clone()),
+            "the first of the set"
+        );
+        assert_eq!(s.set(JobId(1)).unwrap(), [a.clone(), b.clone()]);
+        assert!(
+            s.insert(&record(2, 4)).is_err(),
+            "another job can't take the slot"
+        );
+        assert!(s.rebind(JobId(1), JobId(3)).unwrap());
+        assert_eq!(s.set(JobId(3)).unwrap().len(), 2);
+        s.mark_removed(JobId(3), 9).unwrap();
+        assert!(s.active().unwrap().is_empty());
+        assert!(
+            s.set(JobId(3))
+                .unwrap()
+                .iter()
+                .all(|r| r.removed_at == Some(9))
+        );
+    }
+
+    #[test]
+    fn worktrees_of_an_older_schema_become_sets_of_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("old.db");
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        for sql in &super::super::MIGRATIONS[..17] {
+            conn.execute_batch(sql).unwrap();
+        }
+        conn.pragma_update(None, "user_version", 17).unwrap();
+        conn.execute_batch(
+            "INSERT INTO worktrees VALUES (7, '00000000-0000-4000-8000-000000000001', '/repo',
+             '/wt/7', 'swarmux/s/7', 2, 20040, 20, 5, NULL);",
+        )
+        .unwrap();
+        drop(conn);
+        let s = SqliteStore::open(&path).unwrap();
+        let r = s.get(JobId(7)).unwrap().unwrap();
+        assert_eq!((r.slot, r.member), (2, None));
+        assert_eq!(s.set(JobId(7)).unwrap().len(), 1);
     }
 
     fn checkpoint(job: i64, n: u64) -> Checkpoint {
