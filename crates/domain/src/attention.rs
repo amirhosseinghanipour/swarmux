@@ -357,11 +357,24 @@ impl AttentionItem {
         detail: &str,
         since: Millis,
     ) -> AttentionItem {
+        AttentionItem::gate_escalated_at(job, session, Priority::P2, title, detail, since)
+    }
+
+    /// Like [`AttentionItem::gate_escalated`] with a priority of its own:
+    /// tests weakened under the mission's checks are P1.
+    pub fn gate_escalated_at(
+        job: JobId,
+        session: SessionId,
+        priority: Priority,
+        title: &str,
+        detail: &str,
+        since: Millis,
+    ) -> AttentionItem {
         AttentionItem::of_job(
             job,
             session,
             AttentionKind::GateEscalated,
-            Priority::P2,
+            priority,
             Likelihood::Certain,
             title,
             detail,

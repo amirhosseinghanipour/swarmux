@@ -20,8 +20,10 @@ use swarmux_domain::gate::{
     digest, evidence_gaps, judge, pin_changes, protected_write,
 };
 use swarmux_domain::mission::MissionGate;
-use swarmux_domain::verifier::HiddenTally;
-use swarmux_domain::{AttentionItem, CheckpointReason, HookEvent, JobId, Millis, SessionId};
+use swarmux_domain::verifier::{BaseSuite, HiddenTally};
+use swarmux_domain::{
+    AttentionItem, CheckpointReason, HookEvent, JobId, Millis, Priority, SessionId,
+};
 
 use crate::attention::{Change, ChangeKind};
 use crate::checkpoint::{CheckpointService, Notes};
@@ -178,6 +180,8 @@ struct Checked {
     protected: Vec<PinChange>,
     hidden: Option<HiddenTally>,
     tampering: Vec<String>,
+    checks_weakened: bool,
+    base_suite: Option<BaseSuite>,
     problem: Option<String>,
 }
 
@@ -221,6 +225,8 @@ impl Work<'_> {
                 protected: v.protected,
                 hidden: v.hidden,
                 tampering: v.tampering,
+                checks_weakened: v.checks_weakened,
+                base_suite: v.base_suite,
                 problem: v.problem,
             },
             Err(why) => in_place(Some(format!(
@@ -359,6 +365,8 @@ impl GateKeeper {
             gaps,
             hidden: checked.hidden,
             tampering: checked.tampering,
+            checks_weakened: checked.checks_weakened,
+            base_suite: checked.base_suite,
         };
         let problem = gate.problem.clone().or(checked.problem);
         if !findings.checked() && findings.clean() && problem.is_none() {
@@ -573,6 +581,8 @@ fn verify_now(
         gaps: Vec::new(),
         hidden: found.hidden,
         tampering: found.tampering,
+        checks_weakened: found.checks_weakened,
+        base_suite: found.base_suite,
     };
     let checked = findings.checked();
     let outcome = if checked && findings.clean() {
@@ -613,8 +623,12 @@ pub struct GateState {
     pub evidence_gaps: usize,
     /// How the hidden checks went: counts only.
     pub hidden: Option<HiddenTally>,
-    /// Tests edited or switched off.
+    /// Tests weakened: edited, switched off, deleted, loosened.
     pub tampering: usize,
+    /// Whether any of that touches what the checks run (inbox: P1, else P2).
+    pub checks_weakened: bool,
+    /// The base-suite check: `Some(true)` it passed, `Some(false)` it failed.
+    pub base_suite: Option<bool>,
     pub digest: String,
     pub problem: Option<String>,
     pub at: Millis,
@@ -690,6 +704,8 @@ impl GateService {
                     evidence_gaps: r.findings.gaps.len(),
                     hidden: r.findings.hidden,
                     tampering: r.findings.tampering.len(),
+                    checks_weakened: r.findings.checks_weakened,
+                    base_suite: r.findings.base_suite.as_ref().map(BaseSuite::clean),
                     digest: r.digest.clone(),
                     problem: r.problem.clone(),
                     at: now,
@@ -766,9 +782,15 @@ impl GateService {
                     .nth(1)
                     .unwrap_or("checks still failing")
                     .to_string();
-                Some(AttentionItem::gate_escalated(
+                let priority = if s.tampering > 0 && s.checks_weakened {
+                    Priority::P1
+                } else {
+                    Priority::P2
+                };
+                Some(AttentionItem::gate_escalated_at(
                     *job,
                     f.session_id,
+                    priority,
                     title,
                     &detail,
                     s.at,
@@ -799,7 +821,10 @@ fn headline(f: &GateFindings) -> String {
         return format!("protected {} {}", change.path(), change.verb());
     }
     if let Some(t) = f.tampering.first() {
-        return format!("tests tampered with: {t}");
+        return format!("tests weakened: {t}");
+    }
+    if let Some(b) = f.base_suite.as_ref().filter(|b| !b.clean()) {
+        return b.text();
     }
     if let Some(h) = f.hidden.filter(|h| !h.clean()) {
         return format!("{} of {} hidden checks failed", h.failed(), h.ran);

@@ -117,6 +117,10 @@ struct Copies {
     made: AtomicUsize,
     dropped: Arc<AtomicUsize>,
     broken: Mutex<bool>,
+    /// What the copies were asked to put back, with the base commit.
+    restored: Mutex<Vec<(String, Vec<String>)>>,
+    /// Once files are put back, this check starts failing.
+    fail_on_restore: Mutex<Option<(Arc<Checks>, String)>>,
 }
 
 struct Copy {
@@ -124,6 +128,7 @@ struct Copy {
     dropped: Arc<AtomicUsize>,
     diff: String,
     bases: Arc<Mutex<Vec<Option<String>>>>,
+    owner: Arc<Copies>,
 }
 
 impl CleanCopy for Copy {
@@ -138,6 +143,14 @@ impl CleanCopy for Copy {
     fn diff_from(&self, base: Option<&str>) -> AppResult<String> {
         lock(&self.bases).push(base.map(str::to_string));
         Ok(self.diff.clone())
+    }
+
+    fn restore(&self, base: &str, paths: &[String]) -> AppResult<()> {
+        lock(&self.owner.restored).push((base.to_string(), paths.to_vec()));
+        if let Some((checks, name)) = &*lock(&self.owner.fail_on_restore) {
+            checks.fail(name);
+        }
+        Ok(())
     }
 }
 
@@ -168,6 +181,7 @@ impl CleanCheckout for SharedCopies {
             dropped: self.0.dropped.clone(),
             diff: lock(&self.0.diff).clone(),
             bases: self.1.clone(),
+            owner: self.0.clone(),
         }))
     }
 
@@ -493,4 +507,95 @@ fn fenced_folders_match_by_their_last_two_parts() {
     assert!(fenced_folder(&fenced, "cat /home/u/.swarmux/holdouts", "/w").is_some());
     assert!(fenced_folder(&fenced, "cat /home/u/.swarmux/config.toml", "/w").is_none());
     assert!(fenced_folder(&[PathBuf::new()], "anything", "/w").is_none());
+}
+
+const MODIFIED_TEST: &str = "diff --git a/tests/a.rs b/tests/a.rs\n--- a/tests/a.rs\n+++ b/tests/a.rs\n@@ -1 +1 @@\n-    assert_eq!(f(), 42);\n+    assert_eq!(f(), 41);\n";
+
+#[test]
+fn the_original_tests_are_put_back_and_the_checks_run_again_against_them() {
+    let w = world();
+    // The weakening scan would block this edit on its own; look at the
+    // base-suite step by itself.
+    lock(&w.source.spec).verifier.block_test_edits = false;
+    *lock(&w.copies.diff) = MODIFIED_TEST.into();
+    *lock(&w.copies.fail_on_restore) = Some((w.checks.clone(), "cargo test".into()));
+    w.start();
+    let (answer, record) = w.stop();
+    let StopAnswer::Block { reason } = answer else {
+        panic!("code that only passes the edited test must block");
+    };
+    assert!(
+        reason.contains("base suite: 1 original test file put back"),
+        "{reason}"
+    );
+    assert!(reason.contains("referee"), "{reason}");
+    let record = record.unwrap();
+    let base = record.findings.base_suite.expect("the step ran");
+    assert_eq!(base.restored, ["tests/a.rs"]);
+    assert_eq!(base.failed.len(), 1);
+    assert_eq!(
+        *lock(&w.copies.restored),
+        [("base-sha".to_string(), vec!["tests/a.rs".to_string()])]
+    );
+    // The visible checks, then the same checks over the original tests.
+    assert_eq!(
+        w.checks.roots().first(),
+        w.checks.roots().get(w.checks.roots().len() - 1)
+    );
+}
+
+#[test]
+fn a_change_that_passes_the_original_tests_too_passes_the_step() {
+    let w = world();
+    lock(&w.source.spec).verifier.block_test_edits = false;
+    *lock(&w.copies.diff) = MODIFIED_TEST.into();
+    w.start();
+    let (answer, record) = w.stop();
+    assert_eq!(answer, StopAnswer::Allow);
+    let base = record.unwrap().findings.base_suite.expect("the step ran");
+    assert!(base.clean());
+    assert_eq!(
+        base.text(),
+        "base suite: 1 original test file put back, checks still pass"
+    );
+}
+
+#[test]
+fn no_changed_tests_means_no_step_and_allowed_tests_are_not_put_back() {
+    let w = world();
+    *lock(&w.copies.diff) = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1 +1 @@\n-a\n+b\n".into();
+    w.start();
+    let (_, record) = w.stop();
+    assert_eq!(record.unwrap().findings.base_suite, None);
+    assert!(lock(&w.copies.restored).is_empty());
+
+    lock(&w.source.spec).verifier.block_test_edits = false;
+    lock(&w.source.spec).allow_test_changes = vec!["tests/a.rs".into()];
+    *lock(&w.copies.diff) = MODIFIED_TEST.into();
+    let (_, record) = w.stop();
+    assert_eq!(
+        record.unwrap().findings.base_suite,
+        None,
+        "allowed on purpose"
+    );
+}
+
+#[test]
+fn tests_weakened_in_any_way_block_with_the_evidence_and_say_whether_the_checks_are_affected() {
+    let w = world();
+    *lock(&w.copies.diff) = "diff --git a/tests/a.rs b/tests/a.rs\ndeleted file mode 100644\n--- a/tests/a.rs\n+++ /dev/null\n@@ -1,2 +0,0 @@\n-#[test]\n-fn a() { assert_eq!(f(), 1); }\n".into();
+    w.start();
+    let (answer, record) = w.stop();
+    let StopAnswer::Block { reason } = answer else {
+        panic!("a deleted test must block");
+    };
+    assert!(
+        reason.contains("tests weakened: tests/a.rs: test file deleted"),
+        "{reason}"
+    );
+    let record = record.unwrap();
+    assert!(
+        record.findings.checks_weakened,
+        "a cargo test check runs it"
+    );
 }

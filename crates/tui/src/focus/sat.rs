@@ -197,7 +197,10 @@ fn confidence(s: &Signals) -> (Confidence, Vec<String>) {
             low.push(format!("{} protected file(s) changed", g.protected_changed));
         }
         if g.tampering > 0 {
-            low.push(format!("{} test file(s) tampered with", g.tampering));
+            low.push(format!("{} way(s) the tests were weakened", g.tampering));
+        }
+        if g.base_suite == Some(false) {
+            low.push("the original tests fail against the new code".into());
         }
         if let Some(h) = g.hidden.filter(|h| !h.clean()) {
             low.push(format!("{} of {} hidden checks failed", h.failed(), h.ran));
@@ -265,6 +268,8 @@ mod tests {
             evidence_gaps: 0,
             hidden: None,
             tampering: 0,
+            checks_weakened: false,
+            base_suite: None,
             digest: String::new(),
             problem: None,
             at: 0,
