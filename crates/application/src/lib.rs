@@ -14,6 +14,7 @@ pub mod dist;
 pub mod engine;
 mod error;
 pub mod evidence;
+pub mod followup;
 pub mod gate;
 pub mod governor;
 mod guard;
@@ -52,6 +53,11 @@ pub use checkpoint::{CheckpointService, HandoffBoard, Notes};
 pub use decision::{DecisionRecord, Outcome, Source};
 pub use engine::{Engine, EngineReport, MissionsPump};
 pub use error::{AppError, AppResult};
+pub use followup::{
+    BriefChannel, ExtractReply, ExtractRequest, ExtractSink, Extracted, Extractor, FollowPump,
+    FollowSettings, FollowStore, FollowUpService, Intent, IntentStore, OwnerReply, Reply,
+    ReplySource,
+};
 pub use evidence::{
     Checkout, Checkouts, EvidenceService, EvidenceStore, HashSigner, HeadFacts, OutcomeProbe,
     ProbeReply, ProbeRequest, ProbeSink, Rerunner, Signer, Stored, Vcs, build_cards,
