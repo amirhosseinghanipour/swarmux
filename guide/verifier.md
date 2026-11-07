@@ -24,11 +24,16 @@ gate's checks are not run where the agent works.
   copy is compared with the commit the job started from, so a committed edit
   or a protected file moved away counts too. Each hidden check's files are
   pinned by SHA-256 when added; a file that no longer matches fails its check.
-- **Tamper scan.** The change since the job started is read for lines of
-  existing tests removed or changed (moved lines don't count, new tests are
-  fine) and for tests switched off in code: `#[ignore]`, `@pytest.mark.skip`,
-  `t.Skip`, `it.skip`, `.only`, `@Disabled` and the like. Either blocks the
-  stop unless `[verifier] test_edits = "allow"`.
+- **Test-weakening detector.** See the section below. It blocks the stop as
+  *tests weakened* unless `[verifier] test_edits = "allow"`.
+- **Base suite.** After the checks pass, the files the job changed that are
+  tests or protected are put back in the clean copy as the job's starting
+  commit had them, and the checks run again over the agent's code. If the
+  code only passes its own edited tests, this fails. The wall card shows
+  `base suite ok` or `base suite failed`, and the result is its own entry in
+  the audit ledger (`base_suite`). It runs only when the job changed such a
+  file and everything else passed; `[verifier] base_suite = false` turns it
+  off.
 - **Told up front.** A mission's prompt says how it will be judged: no
   editing or weakening tests, no skips, no special-casing, and that some
   checks are hidden.
@@ -50,6 +55,44 @@ repository) or the repository's folder name, lowercased. Keep the source of a
 hidden file out of the repository: anything in the worktree, the agent can
 read.
 
+
+## Test-weakening detector
+
+An agent graded by tests can make the tests easier instead of the code
+better. The detector reads the job's diff against the commit it started from
+(no model, no tokens) and names what it finds, each with the line that shows
+it:
+
+| Finding | What it looks for |
+| --- | --- |
+| test file deleted | a test file removed, unless its lines live on elsewhere |
+| tests removed | fewer test declarations in a file than before (`#[test]`, `def test_`, `it(`, `func Test`, `testWidgets(`, `@Test`) |
+| existing tests changed | lines of an existing test removed or changed |
+| a test was switched off | `#[ignore]`, `@pytest.mark.skip`/`xfail`, `it.skip`/`.only`/`xit`, `t.Skip`, Dart `skip:`, `@Disabled`, and the like |
+| assertions dropped | fewer assertions in a changed test file |
+| assertion loosened | `assert!(true)`, `assert True`, `toBeTruthy`, `expect.anything()` and similar added |
+| snapshot or golden file changed | `.snap`, `__snapshots__`, `golden`, `.golden` files edited or deleted (new ones are fine) |
+| tolerance relaxed | `abs_tol`, `rtol`, `atol`, `epsilon`, `delta`, `approx(.., abs=)` made larger |
+| test or CI configuration changed | a test step removed from a workflow, `continue-on-error`, `\|\| true`, a lowered `fail_under`, a changed `"test"` script |
+
+It is a heuristic over text, tuned to stay quiet on honest work: a renamed
+file, a new test, a test moved to another file and an assertion rewritten
+with the same strength are not findings. It will not catch everything; the
+base suite and the hidden checks are the other layers.
+
+When the gate gives up, the item in *Needs you* is **P1** if the finding
+touches what the mission's checks run (a protected path, a path a check
+names, or any test file when checks exist), else **P2** (for instance only
+CI configuration).
+
+Say that a test change is intended in `.swarmux/gates.toml`, which agents
+cannot write. Matching paths are not reported and not put back for the base
+suite:
+
+```toml
+[verifier]
+allow_test_changes = ["tests/legacy/**", "old_api_test.go"]
+```
 
 ## Review step
 

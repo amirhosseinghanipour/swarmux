@@ -16,6 +16,14 @@ and `SubagentStop` hooks; when the agent tries to finish, swarmux:
 3. **Looks for evidence**: if the last message says the tests pass or names a
    test command, that command's latest run in the job's stream must have
    succeeded.
+4. **Reads the diff for weakened tests**: deleted tests, switched-off tests,
+   looser assertions, edited snapshots, wider tolerances, relaxed CI. A
+   finding blocks the stop as *tests weakened*, with the lines that show it
+   (see [Independent verifier](verifier.md#test-weakening-detector)).
+5. **Runs the checks against the original tests**: the test and protected
+   files the job changed are put back as the job's starting commit had them,
+   and the checks run again. Passing requires the tests that existed when
+   the job began, unmodified (*base suite*).
 
 Anything wrong blocks the stop: the agent continues with a short digest (the
 failing check, its first failing lines verbatim, the changed protected files,
@@ -60,7 +68,9 @@ run = ["cargo", "clippy", "--", "-D", "warnings"]
 
 [verifier]
 clean = true              # run the checks in a clean copy (false: in the worktree)
-test_edits = "block"      # "block": edited or switched-off tests block the stop; "allow"
+test_edits = "block"      # "block": weakened tests block the stop; "allow"
+base_suite = true         # run the checks again against the original tests
+allow_test_changes = ["tests/legacy/**"]   # test changes that are intended: not reported, not put back
 ```
 
 The repository root is the nearest folder with a `.swarmux/gates.toml`, else
