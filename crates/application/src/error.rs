@@ -32,6 +32,11 @@ pub enum AppError {
     /// A notification could not be delivered.
     #[error("notification failed: {0}")]
     Notify(String),
+    #[error("no workspace {0}: `swarmux workspace list` shows them")]
+    WorkspaceNotFound(String),
+    /// A workspace can't be added or used as asked.
+    #[error("{0}")]
+    Workspaces(String),
     #[error("mission {0} not found")]
     MissionNotFound(String),
     /// The mission can't take that step now.

@@ -121,6 +121,9 @@ pub struct RunRequest {
     pub max_budget_usd: Option<f64>,
     /// Register the `swarmux-board` MCP server for the run.
     pub board: bool,
+    /// Folders beyond `cwd` the run works in, with their own instructions
+    /// loaded: the repositories of a workspace job.
+    pub add_dirs: Vec<PathBuf>,
 }
 
 /// What a running job reports back.

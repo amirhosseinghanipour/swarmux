@@ -23,6 +23,7 @@ use crate::ports::{
     AgentCatalog, AgentRunner, Clock, JobRepository, NewJob, RunRequest, RunSink, RunnerMsg,
     SessionRepository, SystemMonitor, TelemetryStore, Workspace,
 };
+use crate::workspace::WorkspaceStore;
 use crate::worktree::WorktreeService;
 use crate::{AppError, AppResult, RenderedPrompt, ReviewSettings, Settings};
 
@@ -216,6 +217,18 @@ pub struct JobService {
     board: Option<Arc<crate::Board>>,
     /// swarmux is stopping: nothing new starts.
     draining: bool,
+    /// Where the workspaces of workspace sessions are looked up.
+    workspaces: Option<Rc<dyn WorkspaceStore>>,
+    /// The repositories each workspace job touches (all when absent).
+    scopes: HashMap<JobId, Vec<String>>,
+}
+
+/// Where a job runs.
+struct Workdir {
+    cwd: PathBuf,
+    env: Vec<(String, String)>,
+    /// The repositories of a workspace job, for `--add-dir`.
+    add_dirs: Vec<PathBuf>,
 }
 
 /// Where a queued job comes from, and what it may spend.
@@ -230,6 +243,8 @@ struct Lineage {
     /// The branch a new worktree of the job starts from, instead of the
     /// repository's HEAD.
     base: Option<String>,
+    /// The repositories of its workspace the job touches.
+    repos: Option<Vec<String>>,
 }
 
 /// How often stale worktrees are looked for.
@@ -280,7 +295,17 @@ impl JobService {
             tapped: Vec::new(),
             board: None,
             draining: false,
+            workspaces: None,
+            scopes: HashMap::new(),
         }
+    }
+
+    /// Runs the jobs of workspace sessions from the workspace's root (or
+    /// a worktree set laid out like it), with every repository they touch
+    /// added to the run.
+    pub fn with_workspaces(mut self, workspaces: Rc<dyn WorkspaceStore>) -> JobService {
+        self.workspaces = Some(workspaces);
+        self
     }
 
     /// Reports every agent event in [`PumpReport::events`], for the watchdog.
@@ -566,6 +591,31 @@ impl JobService {
         self.enqueue(session_id, prompt, None, None, false, lineage)
     }
 
+    /// Like [`JobService::dispatch_capped`], for a job of a workspace
+    /// session that touches only `repos` of its workspace (producers
+    /// first); empty means all of them.
+    pub fn dispatch_scoped(
+        &mut self,
+        session_id: SessionId,
+        prompt: &str,
+        cap: Option<f64>,
+        repos: &[String],
+    ) -> AppResult<JobId> {
+        let lineage = Lineage {
+            wants_review: self.review_next(),
+            cap,
+            repos: Some(repos.to_vec()),
+            ..Lineage::default()
+        };
+        self.enqueue(session_id, prompt, None, None, false, lineage)
+    }
+
+    /// The repositories a workspace job touches, as it was told; empty
+    /// for all of them, or for a job of a repository.
+    pub fn scope(&self, id: JobId) -> &[String] {
+        self.scopes.get(&id).map_or(&[], Vec::as_slice)
+    }
+
     /// The session, as stored.
     pub fn session(&self, id: SessionId) -> AppResult<Option<Session>> {
         self.sessions.get(id)
@@ -585,6 +635,7 @@ impl JobService {
         session.lean = original.lean;
         session.permission_mode = original.permission_mode.clone();
         session.worktree = original.worktree;
+        session.workspace = original.workspace;
         self.sessions.insert(&session)?;
         Ok(session)
     }
@@ -654,6 +705,7 @@ impl JobService {
             inherits: Some(id),
             cap: self.caps.get(&id).copied(),
             base: None,
+            repos: None,
         };
         self.enqueue(
             job.session_id,
@@ -720,6 +772,7 @@ impl JobService {
         session.lean = original.lean;
         session.permission_mode = original.permission_mode.clone();
         session.worktree = original.worktree;
+        session.workspace = original.workspace;
         self.sessions.insert(&session)?;
         if let Some(g) = &mut self.governor {
             g.forget(id)?;
@@ -730,6 +783,7 @@ impl JobService {
             inherits: Some(id),
             cap: self.caps.get(&id).copied(),
             base: None,
+            repos: None,
         };
         let model = restart.model.unwrap_or(job.model);
         let new = self.enqueue(
@@ -1076,6 +1130,7 @@ impl JobService {
             inherits: (job.status == JobStatus::Interrupted && !fork).then_some(id),
             cap: self.caps.get(&id).copied(),
             base: None,
+            repos: self.scopes.get(&id).cloned(),
         };
         self.enqueue(
             job.session_id,
@@ -1102,6 +1157,7 @@ impl JobService {
             inherits,
             cap,
             base,
+            repos,
         } = lineage;
         let prompt = prompt.trim();
         if prompt.is_empty() {
@@ -1142,6 +1198,11 @@ impl JobService {
             },
             &session.name,
         );
+        // The repositories it touches: as told, else those of the job whose
+        // work it continues.
+        if let Some(repos) = repos.or_else(|| inherits.and_then(|f| self.scopes.get(&f).cloned())) {
+            self.scopes.insert(id, repos);
+        }
         // Before it can start: the job continues the other one's worktree.
         if let (Some(from), Some(worktrees)) = (inherits, &self.worktrees) {
             worktrees.rebind(from, id)?;
@@ -1153,22 +1214,92 @@ impl JobService {
         Ok(id)
     }
 
-    /// Where the job runs, and with which extra environment.
-    fn workdir(&self, i: usize, session: &Session) -> AppResult<(PathBuf, Vec<(String, String)>)> {
-        let own = || (session.cwd.clone(), Vec::new());
+    /// Where the job runs, with which extra environment and folders.
+    fn workdir(&self, i: usize, session: &Session) -> AppResult<Workdir> {
+        let job = &self.tracked[i].job;
+        if let Some(id) = session.workspace {
+            return self.workspace_workdir(job, session, id);
+        }
+        let own = || Workdir {
+            cwd: session.cwd.clone(),
+            env: Vec::new(),
+            add_dirs: Vec::new(),
+        };
         let Some(worktrees) = &self.worktrees else {
             return Ok(own());
         };
-        let job = &self.tracked[i].job;
         if let Some(audited) = job.review_of {
             // A reviewer reads the worktree of the job it audits.
             return Ok(worktrees
                 .record_for(audited)?
-                .map_or_else(own, |r| (r.path, Vec::new())));
+                .map_or_else(own, |r| Workdir {
+                    cwd: r.path,
+                    env: Vec::new(),
+                    add_dirs: Vec::new(),
+                }));
         }
         Ok(worktrees
             .prepare(job.id, session)?
-            .map_or_else(own, |p| (p.cwd, p.env)))
+            .map_or_else(own, |p| Workdir {
+                cwd: p.cwd,
+                env: p.env,
+                add_dirs: Vec::new(),
+            }))
+    }
+
+    /// A workspace job runs in its worktree set's task folder, or at the
+    /// workspace's root without worktrees, with each repository it
+    /// touches added to the run.
+    fn workspace_workdir(
+        &self,
+        job: &Job,
+        session: &Session,
+        id: swarmux_domain::WorkspaceId,
+    ) -> AppResult<Workdir> {
+        let workspace = match &self.workspaces {
+            Some(store) => store.get(id)?,
+            None => None,
+        };
+        let Some(workspace) = workspace else {
+            // Forgotten since: the session works in its folder like any.
+            return Ok(Workdir {
+                cwd: session.cwd.clone(),
+                env: Vec::new(),
+                add_dirs: Vec::new(),
+            });
+        };
+        let owner = job.review_of.unwrap_or(job.id);
+        let touched = workspace
+            .touched(self.scope(owner))
+            .map_err(|e| AppError::Workspaces(e.to_string()))?;
+        if let Some(worktrees) = &self.worktrees {
+            let set = match job.review_of {
+                // A reviewer reads the set of the job it audits.
+                Some(audited) => {
+                    let records = worktrees.set_for(audited)?;
+                    records.first().and_then(|r| r.member.clone()).map(|m| {
+                        crate::worktree::PreparedSet {
+                            cwd: m.task_dir,
+                            env: Vec::new(),
+                            records,
+                        }
+                    })
+                }
+                None => worktrees.prepare_set(job.id, session, &workspace, &touched)?,
+            };
+            if let Some(set) = set {
+                return Ok(Workdir {
+                    cwd: set.cwd,
+                    env: set.env,
+                    add_dirs: set.records.into_iter().map(|r| r.path).collect(),
+                });
+            }
+        }
+        Ok(Workdir {
+            add_dirs: touched.iter().map(|r| r.under(&workspace.root)).collect(),
+            cwd: workspace.root,
+            env: Vec::new(),
+        })
     }
 
     /// Starts every queued job the scheduling rule allows. True if any started.
@@ -1286,7 +1417,7 @@ impl JobService {
             return Ok(());
         };
         let resume = self.sessions.has_started(session_id)?;
-        let (cwd, env) = match self.workdir(i, &session) {
+        let Workdir { cwd, env, add_dirs } = match self.workdir(i, &session) {
             Ok(dir) => dir,
             Err(e) => {
                 if let Some(result) = self.tracked[i].progress.fail(&format!("worktree: {e}"), 0) {
@@ -1351,6 +1482,7 @@ impl JobService {
             env,
             max_budget_usd: cap,
             board: self.board.as_ref().is_some_and(|b| b.is_member(id)),
+            add_dirs,
         };
         t.progress.command = self.runner.command_line(&request);
         let tx = self.tx.clone();
@@ -1596,6 +1728,7 @@ impl JobService {
             self.clock.now(),
         )?;
         session.lean = original.lean;
+        session.workspace = original.workspace;
         self.sessions.insert(&session)?;
         let t = &mut self.tracked[i];
         self.jobs.set_session(t.job.id, new_id)?;
@@ -1610,3 +1743,6 @@ mod tests;
 
 #[cfg(test)]
 mod worktree_tests;
+
+#[cfg(test)]
+mod workspace_tests;
