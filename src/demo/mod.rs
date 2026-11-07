@@ -162,6 +162,7 @@ pub fn build(options: &Options) -> anyhow::Result<App> {
                 ..Budget::default()
             },
             clarifications: Vec::new(),
+            repos: Vec::new(),
         },
         &api.cwd.display().to_string(),
         Some(api.id),

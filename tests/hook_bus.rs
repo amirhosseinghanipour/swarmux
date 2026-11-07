@@ -174,6 +174,7 @@ fn a_real_job_records_session_start_tool_use_and_stop() {
             env: Vec::new(),
             max_budget_usd: None,
             board: false,
+            add_dirs: Vec::new(),
         },
         Box::new(move |m| {
             let _ = tx.send(m);
