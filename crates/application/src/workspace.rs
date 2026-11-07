@@ -10,9 +10,9 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use swarmux_domain::workspace::{RepoListing, detect, repo_names};
-use swarmux_domain::{Repo, Session, SessionId, Workspace, WorkspaceId};
+use swarmux_domain::{Repo, Workspace, WorkspaceId};
 
-use crate::ports::{Clock, SessionRepository};
+use crate::ports::Clock;
 use crate::{AppError, AppResult};
 
 /// Where workspaces are kept.
@@ -168,27 +168,6 @@ impl WorkspaceService {
         let workspace = self.find(name)?;
         self.store.remove(workspace.id)?;
         Ok(workspace)
-    }
-
-    /// A new session on the workspace: it works from the workspace's root
-    /// and its jobs see every repository.
-    pub fn open_session(
-        &self,
-        sessions: &dyn SessionRepository,
-        workspace: &Workspace,
-        name: &str,
-        model: &str,
-    ) -> AppResult<Session> {
-        let mut session = Session::new(
-            SessionId::random(),
-            name,
-            workspace.root.clone(),
-            model,
-            self.clock.now(),
-        )?;
-        session.workspace = Some(workspace.id);
-        sessions.insert(&session)?;
-        Ok(session)
     }
 
     fn scan(&self, root: &Path, name: &str) -> AppResult<Vec<Repo>> {

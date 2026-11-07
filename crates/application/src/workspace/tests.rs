@@ -3,11 +3,10 @@ use std::path::Path;
 use swarmux_domain::Stack;
 
 use super::*;
-use crate::testing::{FakeScanner, FixedClock, InMemoryStore, InMemoryWorkspaces};
+use crate::testing::{FakeScanner, FixedClock, InMemoryWorkspaces};
 
 struct Rig {
     scanner: Rc<FakeScanner>,
-    sessions: Rc<InMemoryStore>,
     service: WorkspaceService,
 }
 
@@ -20,11 +19,7 @@ fn rig() -> Rig {
         scanner.clone(),
         Rc::new(FixedClock::new(1_000)),
     );
-    Rig {
-        scanner,
-        sessions: Rc::new(InMemoryStore::default()),
-        service,
-    }
+    Rig { scanner, service }
 }
 
 #[test]
@@ -37,7 +32,7 @@ fn add_finds_the_repositories_and_what_they_are_built_with() {
     assert_eq!(w.repos[0].stacks, [Stack::Dart]);
     assert_eq!(w.repos[1].stacks, [Stack::Node, Stack::Supabase]);
     assert_eq!(w.repos[1].git_root, Path::new("/p").join("backend"));
-    assert_eq!(r.service.list().unwrap(), [w.clone()]);
+    assert_eq!(r.service.list().unwrap(), std::slice::from_ref(&w));
     assert_eq!(r.service.find("P").unwrap().id, w.id);
 }
 
@@ -72,16 +67,10 @@ fn rescan_reports_what_changed_and_keeps_names() {
 }
 
 #[test]
-fn remove_forgets_and_sessions_open_on_the_root() {
+fn remove_forgets_the_workspace() {
     let r = rig();
     let w = r.service.add(Path::new("/p"), None).unwrap();
-    let s = r
-        .service
-        .open_session(&*r.sessions, &w, "product", "sonnet")
-        .unwrap();
-    assert_eq!(s.workspace, Some(w.id));
-    assert_eq!(s.cwd, Path::new("/p"));
-    assert_eq!(r.sessions.get(s.id).unwrap(), Some(s));
+    assert_eq!(r.service.get(w.id).unwrap().map(|x| x.id), Some(w.id));
     assert_eq!(r.service.remove("p").unwrap().id, w.id);
     assert!(r.service.list().unwrap().is_empty());
 }

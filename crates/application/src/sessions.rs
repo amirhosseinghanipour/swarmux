@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::rc::Rc;
 
-use swarmux_domain::{DEFAULT_MODEL, Session, SessionId};
+use swarmux_domain::{DEFAULT_MODEL, Session, SessionId, Workspace};
 
 use crate::ports::{Clock, SessionRepository};
 use crate::{AppError, AppResult};
@@ -36,6 +36,21 @@ impl SessionService {
             &self.default_model,
             self.clock.now(),
         )?;
+        self.repo.insert(&session)?;
+        Ok(session)
+    }
+
+    /// A session on `workspace`: it works from the workspace's root and
+    /// its jobs see every repository of it.
+    pub fn create_in_workspace(&self, name: &str, workspace: &Workspace) -> AppResult<Session> {
+        let mut session = Session::new(
+            SessionId::random(),
+            name,
+            workspace.root.clone(),
+            &self.default_model,
+            self.clock.now(),
+        )?;
+        session.workspace = Some(workspace.id);
         self.repo.insert(&session)?;
         Ok(session)
     }
@@ -79,6 +94,21 @@ mod tests {
         svc.create("b", "/w".into()).unwrap();
         let names: Vec<_> = svc.list().unwrap().into_iter().map(|s| s.name).collect();
         assert_eq!(names, ["b", "a"]);
+    }
+
+    #[test]
+    fn a_workspace_session_works_from_its_root() {
+        let (svc, _) = service();
+        let w = Workspace::new(
+            swarmux_domain::WorkspaceId::random(),
+            "Product",
+            "/p".into(),
+            0,
+        )
+        .unwrap();
+        let s = svc.create_in_workspace("product", &w).unwrap();
+        assert_eq!((s.workspace, s.cwd.clone()), (Some(w.id), "/p".into()));
+        assert_eq!(svc.list().unwrap(), [s]);
     }
 
     #[test]
