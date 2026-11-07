@@ -96,9 +96,11 @@ fn sigil_span(t: &Theme, tile: &Tile) -> Span<'static> {
     )
 }
 
-/// `Sonnet 4.5 · lean · acceptEdits`
+/// `Sonnet 4.5 · lean · acceptEdits`, after the workspace and its
+/// repositories for a workspace's session.
 fn badge(tile: &Tile) -> String {
-    let mut parts = vec![display_name(&tile.model)];
+    let mut parts: Vec<String> = tile.workspace.iter().cloned().collect();
+    parts.push(display_name(&tile.model));
     if tile.lean {
         parts.push("lean".into());
     }

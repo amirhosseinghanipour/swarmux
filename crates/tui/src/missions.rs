@@ -25,7 +25,9 @@ impl MissionsScreen {
 }
 
 /// The composer's fields, top to bottom; answers follow them.
-pub const FIELDS: [&str; 6] = ["title", "goal", "checks", "work in", "protect", "budget"];
+pub const FIELDS: [&str; 7] = [
+    "title", "goal", "checks", "work in", "protect", "budget", "repos",
+];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ComposerAction {
@@ -43,7 +45,7 @@ pub enum ComposerAction {
 pub struct Composer {
     /// The mission once saved.
     pub slug: Option<String>,
-    pub inputs: [Input; 6],
+    pub inputs: [Input; 7],
     /// One per question of the lint, in order.
     pub answers: Vec<Input>,
     /// Index into the fields, then into the answers.
@@ -71,6 +73,7 @@ impl Composer {
                 Input::with_text(&c.constraints.paths_rw.join(", ")),
                 Input::with_text(&c.constraints.protected.join(", ")),
                 Input::with_text(&budget_text(&c.budget)),
+                Input::with_text(&c.repos.join(", ")),
             ],
             answers: Vec::new(),
             focus: 1,
@@ -128,7 +131,7 @@ impl Composer {
     /// The contract the fields describe, with `asked`'s questions answered
     /// from the answer fields.
     pub fn contract(&self, asked: &[Clarification]) -> Result<Contract, String> {
-        let [title, goal, checks, rw, protect, budget] = &self.inputs;
+        let [title, goal, checks, rw, protect, budget, repos] = &self.inputs;
         let goal = goal.text.trim();
         if goal.is_empty() {
             return Err("a mission needs a goal".into());
@@ -145,6 +148,7 @@ impl Composer {
                 protected: split(&protect.text, ','),
             },
             budget: parse_budget(&budget.text)?,
+            repos: split(&repos.text, ','),
             clarifications: asked
                 .iter()
                 .enumerate()

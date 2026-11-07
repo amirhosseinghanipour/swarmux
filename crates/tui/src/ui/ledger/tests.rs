@@ -211,6 +211,7 @@ fn contract(title: &str, goal: &str, checks: &[&str], usd: f64) -> Contract {
             ..Budget::default()
         },
         clarifications: Vec::new(),
+        repos: Vec::new(),
     }
 }
 
