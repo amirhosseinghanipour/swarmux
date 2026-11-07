@@ -11,66 +11,10 @@ use swarmux_domain::ledger::LedgerKind;
 use swarmux_domain::{JobId, JobStatus, Millis, SessionId};
 
 use super::*;
-use crate::testing::{FixedClock, InMemoryLedger};
+use crate::testing::{FixedClock, InMemoryFollowups, InMemoryLedger};
 
 const H: Millis = 3_600_000;
 const DAY0: Millis = 20_000 * 24 * H;
-
-#[derive(Default)]
-struct Mem {
-    items: RefCell<Vec<FollowUp>>,
-    state: RefCell<HashMap<String, i64>>,
-    intents: RefCell<Vec<Intent>>,
-}
-
-impl FollowStore for Mem {
-    fn insert(&self, f: &FollowUp) -> AppResult<i64> {
-        let mut v = self.items.borrow_mut();
-        let mut f = f.clone();
-        f.id = v.len() as i64 + 1;
-        v.push(f.clone());
-        Ok(f.id)
-    }
-    fn update(&self, f: &FollowUp) -> AppResult<()> {
-        let mut v = self.items.borrow_mut();
-        if let Some(x) = v.iter_mut().find(|x| x.id == f.id) {
-            *x = f.clone();
-        }
-        Ok(())
-    }
-    fn get(&self, id: i64) -> AppResult<Option<FollowUp>> {
-        Ok(self.items.borrow().iter().find(|f| f.id == id).cloned())
-    }
-    fn all(&self) -> AppResult<Vec<FollowUp>> {
-        Ok(self.items.borrow().clone())
-    }
-    fn state(&self, key: &str) -> AppResult<Option<i64>> {
-        Ok(self.state.borrow().get(key).copied())
-    }
-    fn set_state(&self, key: &str, value: i64) -> AppResult<()> {
-        self.state.borrow_mut().insert(key.into(), value);
-        Ok(())
-    }
-}
-
-impl IntentStore for Mem {
-    fn add(&self, i: &Intent) -> AppResult<i64> {
-        let mut v = self.intents.borrow_mut();
-        let mut i = i.clone();
-        i.id = v.len() as i64 + 1;
-        v.push(i.clone());
-        Ok(i.id)
-    }
-    fn list(&self) -> AppResult<Vec<Intent>> {
-        Ok(self.intents.borrow().clone())
-    }
-    fn mark_mission(&self, id: i64, slug: &str) -> AppResult<()> {
-        if let Some(i) = self.intents.borrow_mut().iter_mut().find(|i| i.id == id) {
-            i.mission = Some(slug.into());
-        }
-        Ok(())
-    }
-}
 
 #[derive(Default)]
 struct FakeExtractor {
@@ -102,7 +46,7 @@ impl BriefChannel for Sent {
 
 struct Fx {
     svc: FollowUpService,
-    mem: Rc<Mem>,
+    mem: Rc<InMemoryFollowups>,
     clock: Rc<FixedClock>,
     ledger: Rc<InMemoryLedger>,
     extractor: Rc<FakeExtractor>,
@@ -110,7 +54,7 @@ struct Fx {
 }
 
 fn fx(settings: FollowSettings) -> Fx {
-    let mem = Rc::new(Mem::default());
+    let mem = Rc::new(InMemoryFollowups::default());
     let clock = Rc::new(FixedClock::new(DAY0 + 6 * H));
     let ledger = Rc::new(InMemoryLedger::default());
     let extractor = Rc::new(FakeExtractor::default());
@@ -247,10 +191,25 @@ fn a_finished_job_is_read_once_and_its_follow_ups_are_deduplicated() {
     let t = f.clock.now();
     pump(&f, &[], &[]); // starts the clock for "finished since"
     let jobs = vec![
-        fact(1, JobStatus::Done, Some(t + 10_000), "Done. Also fix the typo in README."),
-        fact(2, JobStatus::Done, Some(t + 12_000), "Done. I'd also fix the typo in README"),
+        fact(
+            1,
+            JobStatus::Done,
+            Some(t + 10_000),
+            "Done. Also fix the typo in README.",
+        ),
+        fact(
+            2,
+            JobStatus::Done,
+            Some(t + 12_000),
+            "Done. I'd also fix the typo in README",
+        ),
         fact(3, JobStatus::Failed, Some(t + 12_000), "boom"),
-        fact(4, JobStatus::Done, Some(t - 5 * H), "old job, before swarmux looked"),
+        fact(
+            4,
+            JobStatus::Done,
+            Some(t - 5 * H),
+            "old job, before swarmux looked",
+        ),
     ];
     pump(&f, &jobs, &[]);
     assert_eq!(f.extractor.asked.borrow().len(), 2, "jobs 1 and 2 only");
@@ -329,7 +288,12 @@ fn a_parked_follow_up_stays_out_of_the_brief() {
         orders: vec![park],
         ..FollowSettings::default()
     });
-    let p = FollowUp::new(FollowKind::SuggestedTask, "someday rewrite", Source::default(), 0);
+    let p = FollowUp::new(
+        FollowKind::SuggestedTask,
+        "someday rewrite",
+        Source::default(),
+        0,
+    );
     f.svc.ingest(p, false).unwrap();
     assert!(f.svc.waiting().unwrap().is_empty());
     assert_eq!(f.svc.all().unwrap()[0].status, FollowStatus::Deferred);
@@ -380,7 +344,12 @@ fn nothing_waiting_and_nothing_finished_sends_no_brief() {
 #[test]
 fn approving_leaves_an_intent_and_a_question_cannot_be_approved() {
     let f = fx(FollowSettings::default());
-    let t = FollowUp::new(FollowKind::SuggestedTask, "add retries", Source::default(), 0);
+    let t = FollowUp::new(
+        FollowKind::SuggestedTask,
+        "add retries",
+        Source::default(),
+        0,
+    );
     let id = f.svc.ingest(t, false).unwrap();
     let intent = f.svc.reply(id, Reply::Approve).unwrap().unwrap();
     assert_eq!(intent.text, "add retries");
@@ -389,7 +358,10 @@ fn approving_leaves_an_intent_and_a_question_cannot_be_approved() {
     assert_eq!(got.status, FollowStatus::Approved);
     assert_eq!(got.decided_by, Some(DecidedBy::Owner));
     f.svc.intent_became(intent.id, "retries").unwrap();
-    assert_eq!(f.svc.intents().unwrap()[0].mission.as_deref(), Some("retries"));
+    assert_eq!(
+        f.svc.intents().unwrap()[0].mission.as_deref(),
+        Some("retries")
+    );
 
     let q = FollowUp::new(FollowKind::Question, "which db?", Source::default(), 0);
     let qid = f.svc.ingest(q, false).unwrap();
@@ -400,7 +372,12 @@ fn approving_leaves_an_intent_and_a_question_cannot_be_approved() {
 #[test]
 fn deferring_hides_it_until_later_and_declining_keeps_it_from_returning() {
     let f = fx(FollowSettings::default());
-    let a = FollowUp::new(FollowKind::SuggestedTask, "add retries", Source::default(), 0);
+    let a = FollowUp::new(
+        FollowKind::SuggestedTask,
+        "add retries",
+        Source::default(),
+        0,
+    );
     let id = f.svc.ingest(a.clone(), false).unwrap();
     f.svc.reply(id, Reply::Defer).unwrap();
     assert!(f.svc.waiting().unwrap().is_empty());
@@ -440,7 +417,11 @@ fn only_urgent_follow_ups_reach_the_inbox() {
     pump(&f, &[running], &[]);
     let items = f.svc.urgent_items();
     assert_eq!(items.len(), 2);
-    assert!(items.iter().any(|i| i.priority == swarmux_domain::Priority::P1));
+    assert!(
+        items
+            .iter()
+            .any(|i| i.priority == swarmux_domain::Priority::P1)
+    );
     // The blocker stops being urgent when its job is no longer running.
     pump(&f, &[], &[]);
     assert_eq!(f.svc.urgent_items().len(), 1);
@@ -502,7 +483,12 @@ fn outside_replies_are_applied() {
     let id = f
         .svc
         .ingest(
-            FollowUp::new(FollowKind::SuggestedTask, "add retries", Source::default(), 0),
+            FollowUp::new(
+                FollowKind::SuggestedTask,
+                "add retries",
+                Source::default(),
+                0,
+            ),
             false,
         )
         .unwrap();
@@ -512,6 +498,9 @@ fn outside_replies_are_applied() {
     }])));
     f.svc = f.svc.with_replies(chat);
     pump(&f, &[], &[]);
-    assert_eq!(f.svc.get(id).unwrap().unwrap().status, FollowStatus::Declined);
+    assert_eq!(
+        f.svc.get(id).unwrap().unwrap().status,
+        FollowStatus::Declined
+    );
     let _ = &f.mem;
 }

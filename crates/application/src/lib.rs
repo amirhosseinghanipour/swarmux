@@ -53,14 +53,14 @@ pub use checkpoint::{CheckpointService, HandoffBoard, Notes};
 pub use decision::{DecisionRecord, Outcome, Source};
 pub use engine::{Engine, EngineReport, MissionsPump};
 pub use error::{AppError, AppResult};
+pub use evidence::{
+    Checkout, Checkouts, EvidenceService, EvidenceStore, HashSigner, HeadFacts, OutcomeProbe,
+    ProbeReply, ProbeRequest, ProbeSink, Rerunner, Signer, Stored, Vcs, build_cards,
+};
 pub use followup::{
     BriefChannel, ExtractReply, ExtractRequest, ExtractSink, Extracted, Extractor, FollowPump,
     FollowSettings, FollowStore, FollowUpService, Intent, IntentStore, OwnerReply, Reply,
     ReplySource,
-};
-pub use evidence::{
-    Checkout, Checkouts, EvidenceService, EvidenceStore, HashSigner, HeadFacts, OutcomeProbe,
-    ProbeReply, ProbeRequest, ProbeSink, Rerunner, Signer, Stored, Vcs, build_cards,
 };
 pub use gate::{
     Checker, ExecutionLog, GateKeeper, GateRecord, GateService, GateSource, GateState, JobGates,

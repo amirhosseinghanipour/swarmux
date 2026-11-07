@@ -10,7 +10,9 @@ mod brief;
 mod order;
 mod stamp;
 
-pub use brief::{BriefInput, BriefSlots, Card, OwnerBrief, compose, due_slot, pick, reason_to_decline};
+pub use brief::{
+    BriefInput, BriefSlots, Card, OwnerBrief, compose, due_slot, pick, reason_to_decline,
+};
 pub use order::{Matched, OrderAction, PROTECTED_GLOBS, StandingOrder, decide, touches_protected};
 pub use stamp::{
     RUBBER_STAMP_MIN, RUBBER_STAMP_RATE, RUBBER_STAMP_WINDOW, Stamped, rubber_stamped,

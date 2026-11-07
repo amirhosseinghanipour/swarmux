@@ -6,8 +6,8 @@
 //! reflex.
 
 use super::{FollowKind, FollowUp, Stamped};
-use crate::board::clean;
 use crate::Millis;
+use crate::board::clean;
 
 const MINUTE: i64 = 60_000;
 const DAY: i64 = 24 * 60 * MINUTE;
@@ -200,7 +200,11 @@ impl OwnerBrief {
         } else {
             format!(
                 "{finished}; {n} {} you",
-                if n == 1 { "decision needs" } else { "decisions need" }
+                if n == 1 {
+                    "decision needs"
+                } else {
+                    "decisions need"
+                }
             )
         }
     }

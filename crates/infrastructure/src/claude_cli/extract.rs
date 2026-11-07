@@ -196,7 +196,12 @@ fn item(v: &Value) -> Option<Extracted> {
     if text.is_empty() {
         return None;
     }
-    let field = |k: &str| v.get(k).and_then(Value::as_str).map(cut).unwrap_or_default();
+    let field = |k: &str| {
+        v.get(k)
+            .and_then(Value::as_str)
+            .map(cut)
+            .unwrap_or_default()
+    };
     Some(Extracted {
         kind,
         text,
@@ -304,6 +309,10 @@ mod tests {
             parse_extraction(&err).result,
             Err("claude: rate limited".to_string())
         );
-        assert!(parse_extraction(&json!({"result": "{}"}).to_string()).result.is_err());
+        assert!(
+            parse_extraction(&json!({"result": "{}"}).to_string())
+                .result
+                .is_err()
+        );
     }
 }

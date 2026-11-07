@@ -97,16 +97,18 @@ impl StandingOrder {
             && (f.paths.is_empty()
                 || !f.paths.iter().all(|p| {
                     let p = normalize(p).unwrap_or_else(|| p.replace('\\', "/"));
-                    self.paths
-                        .iter()
-                        .any(|g| glob_match(g, &p, is_windows(&p)))
+                    self.paths.iter().any(|g| glob_match(g, &p, is_windows(&p)))
                 }))
         {
             return false;
         }
         if !self.keywords.is_empty() {
             let text = f.text.to_lowercase();
-            if !self.keywords.iter().any(|k| text.contains(&k.to_lowercase())) {
+            if !self
+                .keywords
+                .iter()
+                .any(|k| text.contains(&k.to_lowercase()))
+            {
                 return false;
             }
         }
@@ -161,7 +163,10 @@ pub enum Matched {
     Approve(String),
     /// Matched, but left for the owner (an `always-ask` order, or an
     /// `auto-approve` order that is not allowed to approve this one).
-    Ask { order: String, why: &'static str },
+    Ask {
+        order: String,
+        why: &'static str,
+    },
     Park(String),
 }
 
@@ -241,8 +246,15 @@ mod tests {
 
     #[test]
     fn a_matching_order_approves_a_suggested_task() {
-        let task = f(FollowKind::SuggestedTask, "fix typos", &["docs/a.md", "README.md"]);
-        assert_eq!(decide(&task, &[docs()], false, &[]), Matched::Approve("docs".into()));
+        let task = f(
+            FollowKind::SuggestedTask,
+            "fix typos",
+            &["docs/a.md", "README.md"],
+        );
+        assert_eq!(
+            decide(&task, &[docs()], false, &[]),
+            Matched::Approve("docs".into())
+        );
     }
 
     #[test]
@@ -293,13 +305,19 @@ mod tests {
         ] {
             let item = f(FollowKind::SuggestedTask, "tidy", &[path]);
             assert!(
-                matches!(decide(&item, std::slice::from_ref(&o), false, &[]), Matched::Ask { .. }),
+                matches!(
+                    decide(&item, std::slice::from_ref(&o), false, &[]),
+                    Matched::Ask { .. }
+                ),
                 "{path}"
             );
         }
         let extra = vec!["infra/**".to_string()];
         let item = f(FollowKind::SuggestedTask, "tidy", &["infra/main.tf"]);
-        assert!(matches!(decide(&item, &[o], false, &extra), Matched::Ask { .. }));
+        assert!(matches!(
+            decide(&item, &[o], false, &extra),
+            Matched::Ask { .. }
+        ));
     }
 
     #[test]
@@ -308,7 +326,10 @@ mod tests {
         o.kinds = vec![FollowKind::Blocker];
         o.allow_risky = true;
         let item = f(FollowKind::Blocker, "needs migration", &[]);
-        assert!(matches!(decide(&item, &[o], true, &[]), Matched::Ask { .. }));
+        assert!(matches!(
+            decide(&item, &[o], true, &[]),
+            Matched::Ask { .. }
+        ));
     }
 
     #[test]
@@ -338,16 +359,32 @@ mod tests {
         o.repos = vec!["API".into()];
         o.max_cost_usd = Some(0.50);
         let mut item = f(FollowKind::SuggestedTask, "x", &[]);
-        assert_eq!(decide(&item, std::slice::from_ref(&o), false, &[]), Matched::None, "cost unknown");
+        assert_eq!(
+            decide(&item, std::slice::from_ref(&o), false, &[]),
+            Matched::None,
+            "cost unknown"
+        );
         item.est_cost_usd = Some(0.75);
-        assert_eq!(decide(&item, std::slice::from_ref(&o), false, &[]), Matched::None);
+        assert_eq!(
+            decide(&item, std::slice::from_ref(&o), false, &[]),
+            Matched::None
+        );
         item.est_cost_usd = Some(0.25);
-        assert_eq!(decide(&item, std::slice::from_ref(&o), false, &[]), Matched::Approve("cheap".into()));
+        assert_eq!(
+            decide(&item, std::slice::from_ref(&o), false, &[]),
+            Matched::Approve("cheap".into())
+        );
         item.repo = "web".into();
-        assert_eq!(decide(&item, std::slice::from_ref(&o), false, &[]), Matched::None);
+        assert_eq!(
+            decide(&item, std::slice::from_ref(&o), false, &[]),
+            Matched::None
+        );
         let mut p = StandingOrder::new("later", OrderAction::Park);
         p.keywords = vec!["someday".into()];
         item.text = "Someday rewrite it".into();
-        assert_eq!(decide(&item, &[o, p], false, &[]), Matched::Park("later".into()));
+        assert_eq!(
+            decide(&item, &[o, p], false, &[]),
+            Matched::Park("later".into())
+        );
     }
 }

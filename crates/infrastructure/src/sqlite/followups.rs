@@ -4,9 +4,7 @@ use rusqlite::{OptionalExtension, Row, params};
 use serde_json::{Value, json};
 use swarmux_application::{AppResult, FollowStore, Intent, IntentStore};
 use swarmux_domain::JobId;
-use swarmux_domain::followup::{
-    DecidedBy, FollowKind, FollowStatus, FollowUp, Source, Urgency,
-};
+use swarmux_domain::followup::{DecidedBy, FollowKind, FollowStatus, FollowUp, Source, Urgency};
 
 use super::{OrStorage, SqliteStore};
 

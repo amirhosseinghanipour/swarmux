@@ -498,6 +498,7 @@ mod tests {
                 "evidence",
                 "watchdog",
                 "base_suite",
+                "followup",
                 "knowledge",
             ]
         );

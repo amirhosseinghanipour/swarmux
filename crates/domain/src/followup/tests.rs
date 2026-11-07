@@ -37,12 +37,7 @@ fn the_same_words_with_other_punctuation_are_one_follow_up() {
 fn another_kind_or_other_files_is_another_follow_up() {
     let a = fu(FollowKind::SuggestedTask, "add a retry", &["a.rs"], 1);
     assert!(!a.same_as(&fu(FollowKind::Risk, "add a retry", &["a.rs"], 2)));
-    assert!(!a.same_as(&fu(
-        FollowKind::SuggestedTask,
-        "add a retry",
-        &["b.rs"],
-        2
-    )));
+    assert!(!a.same_as(&fu(FollowKind::SuggestedTask, "add a retry", &["b.rs"], 2)));
     assert!(!a.same_as(&fu(
         FollowKind::SuggestedTask,
         "rename the module",

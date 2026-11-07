@@ -282,7 +282,15 @@ impl FollowUpService {
         if let Some(l) = &self.ledger {
             // The ledger is the record, but a full disk must not lose the
             // follow-up itself: it was stored first.
-            let _ = l.record_followup(event, f.id, f.kind.as_str(), by, detail, f.first_job(), cost);
+            let _ = l.record_followup(
+                event,
+                f.id,
+                f.kind.as_str(),
+                by,
+                detail,
+                f.first_job(),
+                cost,
+            );
         }
     }
 
@@ -308,7 +316,13 @@ impl FollowUpService {
             kept.merge(&f);
             if kept.sources.len() != before {
                 self.store.update(&kept)?;
-                self.note("merged", &kept, "swarmux", &format!("{} sources", kept.sources.len()), 0.0);
+                self.note(
+                    "merged",
+                    &kept,
+                    "swarmux",
+                    &format!("{} sources", kept.sources.len()),
+                    0.0,
+                );
             }
             return Ok(kept.id);
         }
@@ -351,7 +365,13 @@ impl FollowUpService {
     /// Ledgers an automatic decision.
     fn record_decision(&self, f: &FollowUp) {
         let Some(by) = &f.decided_by else { return };
-        self.note(f.status.as_str(), f, &by.to_text(), "decided by standing order", 0.0);
+        self.note(
+            f.status.as_str(),
+            f,
+            &by.to_text(),
+            "decided by standing order",
+            0.0,
+        );
     }
 
     fn make_intent(&self, f: &FollowUp) -> AppResult<Option<Intent>> {
@@ -374,7 +394,11 @@ impl FollowUpService {
     /// Turns the Board's `schedule_followup` and `ask_human` entries into
     /// follow-ups, and closes the questions that were answered there.
     /// A follow-up with `after_minutes` is held until then.
-    pub fn sync_board(&self, entries: &[BoardEntry], running: &dyn Fn(JobId) -> bool) -> AppResult<bool> {
+    pub fn sync_board(
+        &self,
+        entries: &[BoardEntry],
+        running: &dyn Fn(JobId) -> bool,
+    ) -> AppResult<bool> {
         let mut known = self.store.all()?;
         let seen: HashSet<i64> = known
             .iter()
@@ -460,7 +484,9 @@ impl FollowUpService {
             .get(id)?
             .ok_or_else(|| AppError::Mission(format!("no follow-up #{id}")))?;
         if matches!(f.status, FollowStatus::Done) {
-            return Err(AppError::Mission(format!("follow-up #{id} is already done")));
+            return Err(AppError::Mission(format!(
+                "follow-up #{id} is already done"
+            )));
         }
         if reply == Reply::Approve && f.kind == FollowKind::Question {
             return Err(AppError::Mission(format!(
@@ -516,7 +542,11 @@ impl FollowUpService {
                     f.first_job(),
                     if p1 { Priority::P1 } else { Priority::P2 },
                     &f.text,
-                    &format!("{} · {}", f.kind.as_str(), f.sources.first().map_or("—".into(), Source::line)),
+                    &format!(
+                        "{} · {}",
+                        f.kind.as_str(),
+                        f.sources.first().map_or("—".into(), Source::line)
+                    ),
                     f.created,
                 )
             })
@@ -630,13 +660,15 @@ impl FollowUpService {
             let finished = fact.status == JobStatus::Done
                 && fact.review_of.is_none()
                 && fact.finished_at.is_some_and(|t| t >= since);
-            let Some(message) = fact.result.as_deref().filter(|m| finished && !m.trim().is_empty())
+            let Some(message) = fact
+                .result
+                .as_deref()
+                .filter(|m| finished && !m.trim().is_empty())
             else {
                 continue;
             };
             let key = format!("job:{}", fact.job_id);
-            if self.store.state(&key)?.is_some() || self.inflight.borrow().contains(&fact.job_id)
-            {
+            if self.store.state(&key)?.is_some() || self.inflight.borrow().contains(&fact.job_id) {
                 continue;
             }
             self.store.set_state(&key, 1)?;
@@ -680,8 +712,14 @@ impl FollowUpService {
                         if f.text.is_empty() {
                             continue;
                         }
-                        f.rationale = swarmux_domain::board::clean(&x.rationale, swarmux_domain::followup::NOTE_MAX);
-                        f.against = swarmux_domain::board::clean(&x.against, swarmux_domain::followup::NOTE_MAX);
+                        f.rationale = swarmux_domain::board::clean(
+                            &x.rationale,
+                            swarmux_domain::followup::NOTE_MAX,
+                        );
+                        f.against = swarmux_domain::board::clean(
+                            &x.against,
+                            swarmux_domain::followup::NOTE_MAX,
+                        );
                         f.paths = x.paths;
                         f.urgency = x.urgency;
                         f.est_cost_usd = x.est_cost_usd.filter(|c| c.is_finite() && *c >= 0.0);
@@ -775,7 +813,13 @@ impl FollowUpService {
                 spot = Some((id, f.text.clone()));
                 if mark_spot_check {
                     self.store.set_state("spot", now)?;
-                    self.note("spot_check", f, "swarmux", "asked the owner to open the evidence", 0.0);
+                    self.note(
+                        "spot_check",
+                        f,
+                        "swarmux",
+                        "asked the owner to open the evidence",
+                        0.0,
+                    );
                 }
             }
         }
@@ -830,7 +874,11 @@ impl FollowUpService {
             let _ = c.deliver(&brief);
         }
         if let Some(l) = &self.ledger {
-            let _ = l.record_brief(brief.cards.len() + brief.more, brief.finished, brief.met_checks);
+            let _ = l.record_brief(
+                brief.cards.len() + brief.more,
+                brief.finished,
+                brief.met_checks,
+            );
         }
         Ok(Some(brief))
     }

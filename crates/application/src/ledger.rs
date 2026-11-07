@@ -274,7 +274,14 @@ impl LedgerService {
             .str("by", by)
             .text("detail", detail)
             .num("cost_usd", cost_usd);
-        self.append(self.clock.now(), LedgerKind::Followup, SWARMUX, job, None, payload)
+        self.append(
+            self.clock.now(),
+            LedgerKind::Followup,
+            SWARMUX,
+            job,
+            None,
+            payload,
+        )
     }
 
     /// The small-model call that listed a finished job's follow-ups, and
@@ -289,7 +296,14 @@ impl LedgerService {
             .str("event", "extract")
             .text("detail", detail)
             .num("cost_usd", cost_usd);
-        self.append(self.clock.now(), LedgerKind::Followup, SWARMUX, Some(job), None, payload)
+        self.append(
+            self.clock.now(),
+            LedgerKind::Followup,
+            SWARMUX,
+            Some(job),
+            None,
+            payload,
+        )
     }
 
     /// An owner brief was sent.
@@ -299,7 +313,14 @@ impl LedgerService {
             .int("cards", i64::try_from(cards).unwrap_or(i64::MAX))
             .int("finished", i64::try_from(finished).unwrap_or(i64::MAX))
             .int("met_checks", i64::try_from(met).unwrap_or(i64::MAX));
-        self.append(self.clock.now(), LedgerKind::Followup, SWARMUX, None, None, payload)
+        self.append(
+            self.clock.now(),
+            LedgerKind::Followup,
+            SWARMUX,
+            None,
+            None,
+            payload,
+        )
     }
 
     /// An outcome label attached to a delivered mission.

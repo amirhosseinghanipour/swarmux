@@ -82,11 +82,10 @@ pub(crate) fn parse_followups(
     }
     s.protected = raw.protected.unwrap_or_default();
     for (i, o) in raw.order.unwrap_or_default().into_iter().enumerate() {
-        let id = o
-            .id
-            .map(|i| i.trim().to_string())
-            .filter(|i| !i.is_empty())
-            .unwrap_or_else(|| format!("order-{}", i + 1));
+        let id =
+            o.id.map(|i| i.trim().to_string())
+                .filter(|i| !i.is_empty())
+                .unwrap_or_else(|| format!("order-{}", i + 1));
         if s.orders.iter().any(|x| x.id == id) {
             return Err(error("order", &format!("two orders are called \"{id}\"")));
         }
