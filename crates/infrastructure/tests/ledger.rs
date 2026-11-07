@@ -147,6 +147,8 @@ fn existing_database_starts_its_ledger_at_genesis() {
          DROP TABLE pending_resumes;
          DROP TABLE missions;
          DROP TABLE checkpoints; DROP TABLE worktrees;
+         DROP TABLE workspace_repos; DROP TABLE workspaces;
+         ALTER TABLE sessions DROP COLUMN workspace_id;
          ALTER TABLE sessions DROP COLUMN worktree;
          PRAGMA user_version = 7;",
     )
