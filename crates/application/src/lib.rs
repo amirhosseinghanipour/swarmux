@@ -3,8 +3,10 @@
 //! Depends only on the domain. Adapters (SQLite, the `claude` CLI, the TUI)
 //! live in other crates and plug in through the traits in [`ports`].
 
+pub mod anchor;
 pub mod attention;
 pub mod board;
+pub mod cache;
 pub mod checkpoint;
 pub mod daemon;
 mod decision;

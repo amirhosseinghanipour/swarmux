@@ -1,7 +1,9 @@
 //! SQLite adapter for the storage ports.
 
 mod alarms;
+mod anchors;
 mod board;
+mod cache;
 mod consents;
 mod decisions;
 mod evidence;
@@ -297,6 +299,31 @@ CREATE TABLE IF NOT EXISTS board_entries (
 CREATE INDEX IF NOT EXISTS board_entries_mission ON board_entries (mission, id);
 ";
 
+/// Prompt-cache writes per job, next to the cache reads already kept.
+/// Null: unknown (jobs that finished before this was recorded).
+/// TRUST TRACK, migration 16 when written; renumber freely on merge: it
+/// is one self-contained step.
+const SCHEMA_CACHE_CREATION: &str = "
+ALTER TABLE job_results ADD COLUMN cache_creation INTEGER;
+";
+
+/// Signed checkpoints of the audit ledger's head; append only.
+/// TRUST TRACK, migration 17 when written; self-contained.
+const SCHEMA_ANCHORS: &str = "
+CREATE TABLE IF NOT EXISTS ledger_anchors (
+    seq INTEGER NOT NULL,
+    head BLOB NOT NULL,
+    at INTEGER NOT NULL,
+    key TEXT NOT NULL,
+    signature TEXT NOT NULL,
+    PRIMARY KEY (seq, key, at)
+);
+CREATE TRIGGER ledger_anchors_no_update BEFORE UPDATE ON ledger_anchors
+BEGIN SELECT RAISE(ABORT, 'checkpoints are append-only'); END;
+CREATE TRIGGER ledger_anchors_no_delete BEFORE DELETE ON ledger_anchors
+BEGIN SELECT RAISE(ABORT, 'checkpoints are append-only'); END;
+";
+
 /// Migrations in order; index + 1 is the resulting `user_version`.
 const MIGRATIONS: &[&str] = &[
     SCHEMA_V1,
@@ -314,6 +341,8 @@ const MIGRATIONS: &[&str] = &[
     SCHEMA_ALARMS,
     SCHEMA_PLANS,
     SCHEMA_BOARD,
+    SCHEMA_CACHE_CREATION,
+    SCHEMA_ANCHORS,
 ];
 
 /// Maps adapter errors into the application's error type.
@@ -519,6 +548,7 @@ pub(crate) mod tests {
             tokens_in: 4,
             tokens_out: 385,
             cache_read: 49753,
+            cache_creation: Some(1200),
             cost_usd: 0.0108,
             duration_ms: 44116,
             outcome: "success".into(),

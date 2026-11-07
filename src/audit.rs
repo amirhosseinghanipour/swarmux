@@ -1,10 +1,15 @@
 //! `swarmux audit`: checks and shows the ledger.
 
+use std::path::Path;
+use std::rc::Rc;
+
 use anyhow::Context;
+use swarmux_application::anchor::AnchorService;
 use swarmux_application::ledger::{Ledger, VerifyReport, tail, verify_all};
+use swarmux_domain::anchor::Checkpoint;
 use swarmux_domain::iso_minute;
 use swarmux_domain::ledger::{LedgerEntry, hex};
-use swarmux_infrastructure::{Paths, SqliteLedger};
+use swarmux_infrastructure::{MinisignSigner, Paths, SqliteLedger, SqliteStore, SystemClock};
 
 /// Payload characters shown per `tail` line.
 const PAYLOAD_PREVIEW: usize = 100;
@@ -16,20 +21,99 @@ fn open() -> anyhow::Result<SqliteLedger> {
     Ok(SqliteLedger::open(&paths.db)?)
 }
 
-/// Walks the whole chain. Returns false when it is broken.
-pub fn verify() -> anyhow::Result<bool> {
-    let ledger = open()?;
-    let report = verify_all(&ledger)?;
+/// The anchoring service on the database `paths` names: checkpoints are
+/// kept in the same database, the key in the OS keychain (or a file).
+pub fn service(paths: &Paths) -> anyhow::Result<AnchorService> {
+    let store = Rc::new(SqliteStore::open(&paths.db)?);
+    let ledger = Rc::new(SqliteLedger::open(&paths.db)?);
+    let signer = Rc::new(MinisignSigner::open(paths.data_dir.join("audit.key")));
+    Ok(AnchorService::new(
+        ledger,
+        store,
+        signer,
+        Rc::new(SystemClock),
+    ))
+}
+
+fn open_service() -> anyhow::Result<AnchorService> {
+    let paths = Paths::default_home()?;
+    std::fs::create_dir_all(&paths.data_dir)
+        .with_context(|| format!("cannot create {}", paths.data_dir.display()))?;
+    service(&paths)
+}
+
+/// Checkpoints kept elsewhere, one JSON object per line.
+fn read_checkpoints(path: &Path) -> anyhow::Result<Vec<Checkpoint>> {
+    let text =
+        std::fs::read_to_string(path).with_context(|| format!("cannot read {}", path.display()))?;
+    text.lines()
+        .filter(|l| !l.trim().is_empty())
+        .enumerate()
+        .map(|(i, l)| Checkpoint::from_json(l).map_err(|e| anyhow::anyhow!("line {}: {e}", i + 1)))
+        .collect()
+}
+
+/// Walks the whole chain and compares it with every checkpoint (and with
+/// the ones in `extra`, kept elsewhere). Returns false when anything fails.
+pub fn verify(extra: Option<&Path>) -> anyhow::Result<bool> {
+    let extra = extra.map(read_checkpoints).transpose()?.unwrap_or_default();
+    let report = open_service()?.audit(&extra)?;
     println!("verified {} entries", report.entries);
     match report.head {
         Some((seq, hash)) => println!("head    #{seq} {}", hex(&hash)),
         None => println!("head    — (empty ledger)"),
     }
-    match &report.broken {
-        None => println!("OK"),
-        Some(b) => println!("BROKEN at #{}: {}", b.seq, b.reason),
+    if report.checkpoints.is_empty() {
+        println!("anchors — none yet (swarmux audit checkpoint)");
+    }
+    for j in &report.checkpoints {
+        let c = &j.checkpoint;
+        println!(
+            "anchor  #{} {} {}{}",
+            c.seq,
+            iso_minute(c.at),
+            if j.ok() { "ok" } else { "FAILED" },
+            if j.own_key { "" } else { " (other key)" }
+        );
+    }
+    if report.unanchored > 0 && !report.checkpoints.is_empty() {
+        println!(
+            "        {} entries since the last checkpoint are not anchored",
+            report.unanchored
+        );
+    }
+    for problem in report.problems() {
+        println!("BROKEN  {problem}");
+    }
+    if report.is_ok() {
+        println!("OK");
     }
     Ok(report.is_ok())
+}
+
+/// Signs the ledger's head and keeps the checkpoint.
+pub fn checkpoint() -> anyhow::Result<()> {
+    let service = open_service()?;
+    let c = service.checkpoint()?;
+    let (key, protection) = service.key()?;
+    println!(
+        "checkpoint #{} {} {}",
+        c.seq,
+        iso_minute(c.at),
+        hex(&c.head)
+    );
+    println!("key      {key}");
+    println!("held in  {}", protection.text());
+    println!("Keep a copy somewhere an agent cannot write: swarmux audit export-checkpoints");
+    Ok(())
+}
+
+/// Prints every checkpoint, one JSON object per line.
+pub fn export_checkpoints() -> anyhow::Result<()> {
+    for c in open_service()?.list()? {
+        println!("{}", c.to_json());
+    }
+    Ok(())
 }
 
 /// Prints the newest `n` entries, oldest first.
