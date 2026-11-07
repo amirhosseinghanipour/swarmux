@@ -9,6 +9,10 @@ pub const REVIEW_TOOLS: &str = "Read,Grep,Glob";
 const REVIEW_TURNS: &str = "12";
 /// Longest argument shown in full by [`display`].
 const SHOWN_ARG_MAX: usize = 40;
+/// Makes `claude` load the `CLAUDE.md` (and `.claude/CLAUDE.md`, rules and
+/// `CLAUDE.local.md`) of folders added with `--add-dir`, which it skips
+/// by default.
+pub const ENV_ADDED_DIRS_CLAUDE_MD: &str = "CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD";
 
 pub fn build_args(req: &RunRequest) -> Vec<String> {
     if req.review {
@@ -43,7 +47,26 @@ pub fn build_args(req: &RunRequest) -> Vec<String> {
         args.extend(["--setting-sources".into(), "project,local".into()]);
     }
     push_budget(&mut args, req);
+    push_dirs(&mut args, req);
     args
+}
+
+/// `--add-dir` with the folders beyond the working one (a workspace
+/// job's repositories). One flag takes them all.
+fn push_dirs(args: &mut Vec<String>, req: &RunRequest) {
+    if req.add_dirs.is_empty() {
+        return;
+    }
+    args.push("--add-dir".into());
+    args.extend(req.add_dirs.iter().map(|d| d.display().to_string()));
+}
+
+/// The environment `claude` needs for `req`.
+pub fn env_for(req: &RunRequest) -> Vec<(String, String)> {
+    if req.add_dirs.is_empty() {
+        return Vec::new();
+    }
+    vec![(ENV_ADDED_DIRS_CLAUDE_MD.to_string(), "1".to_string())]
 }
 
 /// `--max-budget-usd` when the run has a dollar cap.
@@ -81,6 +104,7 @@ fn review_args(req: &RunRequest) -> Vec<String> {
     .map(String::from)
     .to_vec();
     push_budget(&mut args, req);
+    push_dirs(&mut args, req);
     args
 }
 
@@ -133,6 +157,7 @@ mod tests {
             env: Vec::new(),
             max_budget_usd: None,
             board: false,
+            add_dirs: Vec::new(),
         }
     }
 
@@ -201,6 +226,26 @@ mod tests {
             };
             assert!(!build_args(&none).contains(&"--max-budget-usd".to_string()));
         }
+    }
+
+    #[test]
+    fn workspace_repos_are_added_with_their_instructions() {
+        let plain = req(false, false);
+        assert!(!build_args(&plain).contains(&"--add-dir".to_string()));
+        assert!(env_for(&plain).is_empty());
+        let ws = RunRequest {
+            add_dirs: vec!["/t/backend".into(), "/t/app".into()],
+            ..req(false, false)
+        };
+        let args = build_args(&ws);
+        let at = args.iter().position(|a| a == "--add-dir").unwrap();
+        assert_eq!(args[at + 1..at + 3], ["/t/backend", "/t/app"]);
+        assert_eq!(
+            env_for(&ws),
+            [(ENV_ADDED_DIRS_CLAUDE_MD.to_string(), "1".to_string())]
+        );
+        let review = RunRequest { review: true, ..ws };
+        assert!(build_args(&review).contains(&"--add-dir".to_string()));
     }
 
     #[test]

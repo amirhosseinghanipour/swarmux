@@ -23,7 +23,25 @@
 //! question = "Which corpus?"
 //! answer = "the bench corpus"
 //! ```
+//!
+//! A workspace mission names the repositories it touches, producers
+//! first, and may run checks in each of them, as `repo: command` lines or
+//! as a table by repository (read into the same lines):
+//!
+//! ```toml
+//! repos = ["backend-supabase", "app-flutter"]
+//!
+//! [acceptance]
+//! checks = ["backend-supabase: supabase db lint"]
+//!
+//! [acceptance.by_repo]
+//! app-flutter = ["flutter analyze", "flutter test"]
+//! ```
+//!
+//! A workspace's root is often not a repository, so its missions are kept
+//! in swarmux's own folder (`workspaces/<id>/missions/`) instead.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -42,6 +60,8 @@ struct RawContract {
     title: String,
     goal: String,
     #[serde(default)]
+    repos: Vec<String>,
+    #[serde(default)]
     acceptance: RawAcceptance,
     #[serde(default)]
     constraints: RawConstraints,
@@ -58,6 +78,9 @@ struct RawAcceptance {
     checks: Vec<String>,
     #[serde(default)]
     human_signoff: bool,
+    /// Checks by repository: `app = ["flutter test"]`.
+    #[serde(default)]
+    by_repo: BTreeMap<String, Vec<String>>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -99,11 +122,27 @@ pub fn parse_contract(text: &str) -> Result<Contract, String> {
     {
         return Err(format!("budget.usd must be above 0, not {usd}"));
     }
+    let mut checks = raw.acceptance.checks;
+    for (repo, lines) in raw.acceptance.by_repo {
+        let repo = repo.trim();
+        if repo.is_empty() || repo.contains(char::is_whitespace) {
+            return Err(format!(
+                "acceptance.by_repo: {repo:?} is not a repository name"
+            ));
+        }
+        checks.extend(
+            lines
+                .iter()
+                .filter(|l| !l.trim().is_empty())
+                .map(|l| format!("{repo}: {}", l.trim())),
+        );
+    }
     Ok(Contract {
         title: raw.title,
         goal: raw.goal,
+        repos: raw.repos,
         acceptance: Acceptance {
-            checks: raw.acceptance.checks,
+            checks,
             human_signoff: raw.acceptance.human_signoff,
         },
         constraints: Constraints {
@@ -157,6 +196,9 @@ pub fn render_contract(c: &Contract) -> String {
     let mut out = String::new();
     out.push_str(&format!("title = {}\n", quote(&c.title)));
     out.push_str(&format!("goal = {}\n", quote(&c.goal)));
+    if !c.repos.is_empty() {
+        out.push_str(&format!("repos = {}\n", list(&c.repos)));
+    }
     out.push_str("\n[acceptance]\n");
     out.push_str(&format!("checks = {}\n", list(&c.acceptance.checks)));
     out.push_str(&format!("human_signoff = {}\n", c.acceptance.human_signoff));
@@ -187,16 +229,40 @@ pub fn contract_path(root: &Path, slug: &str) -> PathBuf {
     root.join(MISSIONS_DIR).join(format!("{slug}.toml"))
 }
 
-/// Writes contracts into their repositories, then hands the mission on.
-/// Only a contract that can still change is written: once a mission is out
-/// its file stays as it was when it left.
+/// Where a workspace mission's contract is written: in swarmux's folder
+/// for the workspace, since its root is often not a repository.
+pub fn workspace_contract_path(workspaces: &Path, mission: &Mission) -> Option<PathBuf> {
+    let id = mission.workspace?;
+    Some(
+        workspaces
+            .join(id.to_string())
+            .join("missions")
+            .join(format!("{}.toml", mission.slug)),
+    )
+}
+
+/// Writes contracts into their repositories (a workspace mission's into
+/// swarmux's folder for its workspace), then hands the mission on. Only a
+/// contract that can still change is written: once a mission is out its
+/// file stays as it was when it left.
 pub struct MissionFiles {
     inner: Rc<dyn MissionStore>,
+    /// Where workspaces keep their missions.
+    workspaces: Option<PathBuf>,
 }
 
 impl MissionFiles {
     pub fn new(inner: Rc<dyn MissionStore>) -> MissionFiles {
-        MissionFiles { inner }
+        MissionFiles {
+            inner,
+            workspaces: None,
+        }
+    }
+
+    /// Writes workspace missions under `dir` (`<dir>/<workspace id>/missions/`).
+    pub fn with_workspace_dir(mut self, dir: PathBuf) -> MissionFiles {
+        self.workspaces = Some(dir);
+        self
     }
 }
 
@@ -207,8 +273,12 @@ impl MissionStore for MissionFiles {
             MissionState::Draft | MissionState::Linted | MissionState::Refused
         );
         let root = Path::new(&mission.root);
-        if editable && root.is_dir() {
-            let path = contract_path(root, &mission.slug);
+        let path = match (&self.workspaces, mission.workspace) {
+            (Some(dir), Some(_)) => workspace_contract_path(dir, mission),
+            (None, Some(_)) => None,
+            _ => root.is_dir().then(|| contract_path(root, &mission.slug)),
+        };
+        if let (true, Some(path)) = (editable, path) {
             let write = || -> std::io::Result<()> {
                 if let Some(dir) = path.parent() {
                     fs::create_dir_all(dir)?;
@@ -252,6 +322,7 @@ mod tests {
                 question: "Which corpus?".into(),
                 answer: String::new(),
             }],
+            repos: vec!["backend".into(), "app".into()],
         }
     }
 
@@ -265,6 +336,53 @@ mod tests {
             ..Contract::default()
         };
         assert_eq!(parse_contract(&render_contract(&bare)).unwrap(), bare);
+    }
+
+    #[test]
+    fn checks_by_repository_become_prefixed_lines() {
+        let c = parse_contract(
+            "goal = \"g\"\nrepos = [\"backend\", \"app\"]\n[acceptance]\nchecks = [\"backend: supabase db lint\"]\n[acceptance.by_repo]\napp = [\"flutter analyze\", \" flutter test \", \"\"]\n",
+        )
+        .unwrap();
+        assert_eq!(c.repos, ["backend", "app"]);
+        assert_eq!(
+            c.acceptance.checks,
+            [
+                "backend: supabase db lint",
+                "app: flutter analyze",
+                "app: flutter test"
+            ]
+        );
+        assert_eq!(parse_contract(&render_contract(&c)).unwrap(), c);
+        let bad = parse_contract("goal = \"g\"\n[acceptance.by_repo]\n\"a b\" = [\"x\"]\n");
+        assert!(bad.unwrap_err().contains("by_repo"));
+    }
+
+    #[test]
+    fn workspace_missions_are_kept_in_swarmuxs_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("product");
+        fs::create_dir_all(&root).unwrap();
+        let kept = Rc::new(Kept::default());
+        let files = MissionFiles::new(kept.clone()).with_workspace_dir(dir.path().join("ws"));
+        let mut m = Mission::new("guest", &root.display().to_string(), full(), 1);
+        let id = swarmux_domain::WorkspaceId::random();
+        m.workspace = Some(id);
+        files.save(&m).unwrap();
+        let path = dir
+            .path()
+            .join("ws")
+            .join(id.to_string())
+            .join("missions")
+            .join("guest.toml");
+        assert_eq!(
+            parse_contract(&fs::read_to_string(path).unwrap()).unwrap(),
+            full()
+        );
+        assert!(
+            !root.join(".swarmux").exists(),
+            "nothing in the workspace root"
+        );
     }
 
     #[test]

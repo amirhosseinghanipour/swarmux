@@ -17,7 +17,7 @@ use tokio::process::Command;
 use tokio::runtime::Handle;
 use tokio::task::AbortHandle;
 
-use super::command::{build_args, display, user_message};
+use super::command::{build_args, display, env_for, user_message};
 use super::contention::{self, is_config_contention};
 use super::parse::parse_line;
 use crate::hook::{ENV_JOB, ENV_PIPE, hook_settings};
@@ -140,6 +140,8 @@ impl AgentRunner for ClaudeCli {
         let mut extra_args = Vec::new();
         // Exact idle / running / requires_action instead of guessing.
         env.push((ENV_SESSION_STATE.into(), "1".into()));
+        // A workspace job's repositories load their own instructions.
+        env.extend(env_for(&request));
         if let Some(guard) = &self.guard {
             extra_args.extend(guard.args());
             env.push((ENV_PIPE.into(), guard.pipe.clone()));
