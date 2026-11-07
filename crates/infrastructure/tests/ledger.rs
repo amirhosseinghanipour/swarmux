@@ -150,6 +150,8 @@ fn existing_database_starts_its_ledger_at_genesis() {
          DROP TABLE workspace_repos; DROP TABLE workspaces;
          ALTER TABLE sessions DROP COLUMN workspace_id;
          DROP TABLE ledger_anchors;
+         DROP TRIGGER knowledge_events_no_update; DROP TRIGGER knowledge_events_no_delete;
+         DROP TABLE knowledge_events; DROP TABLE knowledge_items;
          ALTER TABLE job_results DROP COLUMN cache_creation;
          ALTER TABLE sessions DROP COLUMN worktree;
          PRAGMA user_version = 7;",

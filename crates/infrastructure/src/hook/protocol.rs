@@ -70,6 +70,9 @@ pub struct WireReply {
     /// What the hook prints for events other than PreToolUse.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output: Option<String>,
+    /// Text a PreToolUse answer adds to the agent's context.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<String>,
 }
 
 impl WireRequest {
@@ -293,6 +296,7 @@ impl WireReply {
             decision: decision.into(),
             reason,
             output: None,
+            context: None,
         }
     }
 
@@ -302,6 +306,7 @@ impl WireReply {
             decision: if reply.error { "error" } else { "ok" }.into(),
             reason: String::new(),
             output: Some(reply.text.clone()),
+            context: None,
         }
     }
 
@@ -318,6 +323,7 @@ impl WireReply {
             decision: "pass".into(),
             reason: String::new(),
             output: None,
+            context: None,
         }
     }
 
@@ -330,26 +336,28 @@ impl WireReply {
     }
 
     /// What the hook prints: Claude Code's PreToolUse JSON, or nothing to
-    /// leave the call to Claude Code's own rules.
+    /// leave the call to Claude Code's own rules. Context rides along with
+    /// any decision; with none, it is added and the call left to Claude Code.
     pub fn hook_output(&self) -> Option<String> {
         if let Some(out) = &self.output {
             return Some(out.clone());
         }
         let decision = match self.decision.as_str() {
-            "allow" => "allow",
-            "deny" => "deny",
-            _ => return None,
+            "allow" => Some("allow"),
+            "deny" => Some("deny"),
+            _ => None,
         };
-        Some(
-            json!({
-                "hookSpecificOutput": {
-                    "hookEventName": "PreToolUse",
-                    "permissionDecision": decision,
-                    "permissionDecisionReason": self.reason,
-                }
-            })
-            .to_string(),
-        )
+        let mut out = json!({ "hookEventName": "PreToolUse" });
+        if let Some(d) = decision {
+            out["permissionDecision"] = d.into();
+            out["permissionDecisionReason"] = self.reason.clone().into();
+        }
+        match &self.context {
+            Some(text) => out["additionalContext"] = text.clone().into(),
+            None if decision.is_none() => return None,
+            None => {}
+        }
+        Some(json!({ "hookSpecificOutput": out }).to_string())
     }
 }
 
@@ -425,12 +433,40 @@ mod tests {
     }
 
     #[test]
+    fn context_rides_along_with_or_without_a_decision() {
+        let mut pass = WireReply::pass();
+        assert_eq!(pass.hook_output(), None);
+        pass.context = Some("SWARMUX KNOWLEDGE".into());
+        let v: Value = serde_json::from_str(&pass.hook_output().unwrap()).unwrap();
+        assert_eq!(v["hookSpecificOutput"]["hookEventName"], "PreToolUse");
+        assert_eq!(
+            v["hookSpecificOutput"]["additionalContext"],
+            "SWARMUX KNOWLEDGE"
+        );
+        assert!(v["hookSpecificOutput"].get("permissionDecision").is_none());
+        let mut allow = WireReply::from_decision(&Decision::new(Verdict::Allow, None));
+        allow.context = Some("c".into());
+        let v: Value = serde_json::from_str(&allow.hook_output().unwrap()).unwrap();
+        assert_eq!(v["hookSpecificOutput"]["permissionDecision"], "allow");
+        assert_eq!(v["hookSpecificOutput"]["additionalContext"], "c");
+        let wire: WireReply =
+            serde_json::from_str(&serde_json::to_string(&allow).unwrap()).unwrap();
+        assert_eq!(wire, allow);
+    }
+
+    #[test]
     fn written_text_per_tool() {
         let w = |tool: &str, v: Value| written_text(tool, &v);
         assert_eq!(w("Write", json!({"file_path": "a", "content": "x"})), "x");
-        assert_eq!(w("Edit", json!({"old_string": "o", "new_string": "n"})), "n");
         assert_eq!(
-            w("MultiEdit", json!({"edits": [{"new_string": "a"}, {"new_string": "b"}]})),
+            w("Edit", json!({"old_string": "o", "new_string": "n"})),
+            "n"
+        );
+        assert_eq!(
+            w(
+                "MultiEdit",
+                json!({"edits": [{"new_string": "a"}, {"new_string": "b"}]})
+            ),
             "a\nb"
         );
         assert_eq!(w("Bash", json!({"command": "ls"})), "");
