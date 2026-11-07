@@ -91,6 +91,28 @@ pub struct WorktreeRecord {
     pub created_at: Millis,
     /// Set once the folder was reclaimed.
     pub removed_at: Option<Millis>,
+    /// Set when the worktree is one of a workspace job's set.
+    pub member: Option<SetMember>,
+}
+
+/// A worktree that belongs to a set: a workspace job gets one worktree per
+/// repository it touches, laid out under one task folder the way the
+/// repositories sit in the workspace.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SetMember {
+    /// The repository's name in its workspace.
+    pub repo: String,
+    /// The task folder: where the job works.
+    pub task_dir: PathBuf,
+    /// Its place in the set, the shallowest first (0).
+    pub seq: u32,
+}
+
+impl WorktreeRecord {
+    /// The repository's name in its workspace, when it is in a set.
+    pub fn repo_name(&self) -> Option<&str> {
+        self.member.as_ref().map(|m| m.repo.as_str())
+    }
 }
 
 /// Why a checkpoint was taken.

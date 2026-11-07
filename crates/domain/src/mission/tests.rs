@@ -17,6 +17,7 @@ fn contract(goal: &str, checks: &[&str], protected: &[&str]) -> Contract {
             ..Budget::default()
         },
         clarifications: Vec::new(),
+        repos: Vec::new(),
     }
 }
 
@@ -236,6 +237,100 @@ fn failures_and_budgets_escalate_with_a_note() {
     m.state = MissionState::Linted;
     m.apply(Signal::Refuse("no checks".into()), 3).unwrap();
     assert_eq!(m.state, MissionState::Refused);
+}
+
+#[test]
+fn per_repo_checks_run_in_their_folder_and_judge_by_its_files() {
+    let c = contract(
+        GOAL,
+        &[
+            "app-flutter: flutter test",
+            "backend: cargo test",
+            "cargo fmt --check",
+        ],
+        &[],
+    );
+    let compiled = compile(&c).unwrap();
+    let dirs: Vec<Option<&str>> = compiled
+        .gate
+        .checks
+        .iter()
+        .map(|k| k.dir.as_deref())
+        .collect();
+    assert_eq!(dirs, [Some("app-flutter"), Some("backend"), None]);
+    assert_eq!(compiled.gate.checks[0].name, "app-flutter: flutter test");
+    assert_eq!(compiled.gate.checks[0].program, "flutter");
+    assert!(
+        compiled
+            .prompt
+            .contains("- `flutter test` in `app-flutter/`"),
+        "{}",
+        compiled.prompt
+    );
+    assert!(compiled.prompt.contains(
+        "- `cargo fmt --check`
+"
+    ));
+    // The oracle of a repository's runner is that repository's tests.
+    assert_eq!(oracles(&c.acceptance.checks), ["backend/tests/**"]);
+    // A workspace maps a repository's name to its folder.
+    let nested = compile_in(&c, &|d: &str| {
+        (d == "app-flutter").then(|| "apps/mobile".to_string())
+    })
+    .unwrap();
+    let dirs: Vec<Option<&str>> = nested
+        .gate
+        .checks
+        .iter()
+        .map(|k| k.dir.as_deref())
+        .collect();
+    assert_eq!(
+        dirs,
+        [Some("apps/mobile"), None],
+        "an unknown folder drops the check"
+    );
+}
+
+#[test]
+fn workspace_missions_name_only_repositories_they_have() {
+    let known: Vec<String> = ["backend", "app"].map(String::from).to_vec();
+    let mut c = contract(GOAL, &["app: flutter test"], &[]);
+    c.repos = vec!["backend".into(), "app".into()];
+    assert!(lint_repos(&c, Some(&known)).is_empty());
+    c.repos.push("web".into());
+    c.acceptance.checks.push("admin: npm test".into());
+    let f = lint_repos(&c, Some(&known));
+    assert_eq!(
+        kinds(&f),
+        [FindingKind::UnknownRepo, FindingKind::UnknownRepo]
+    );
+    assert!(f[0].detail.contains("\"web\""), "{}", f[0].detail);
+    assert!(f[1].detail.contains("\"admin\""), "{}", f[1].detail);
+    assert_eq!(f[0].severity, Severity::Blocking);
+    c.repos = vec!["app".into(), "app".into()];
+    c.acceptance.checks.clear();
+    assert!(lint_repos(&c, Some(&known))[0].detail.contains("twice"));
+    // Outside a workspace repos make no sense; prefixes are subfolders.
+    assert_eq!(kinds(&lint_repos(&c, None)), [FindingKind::UnknownRepo]);
+    c.repos.clear();
+    c.acceptance.checks = vec!["web: npm test".into()];
+    assert!(lint_repos(&c, None).is_empty());
+    assert_eq!(
+        FindingKind::parse("unknown_repo"),
+        Some(FindingKind::UnknownRepo)
+    );
+}
+
+#[test]
+fn editing_or_queueing_again_forgets_the_landing() {
+    let mut m = Mission::new("m", "/w", contract(GOAL, &["cargo test"], &[]), 1);
+    m.landing = Some(Landing::new("i", &[("app".into(), "b".into())], 1));
+    m.apply(Signal::Edited, 2).unwrap();
+    assert_eq!(m.landing, None);
+    m.apply(Signal::Linted { blocking: false }, 3).unwrap();
+    m.landing = Some(Landing::default());
+    m.apply(Signal::Queued(JobId(4)), 4).unwrap();
+    assert_eq!(m.landing, None);
 }
 
 #[test]

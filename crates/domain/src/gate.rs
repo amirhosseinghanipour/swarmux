@@ -36,6 +36,9 @@ pub struct GateCheck {
     pub program: String,
     pub args: Vec<String>,
     pub timeout_secs: u64,
+    /// The folder it runs in, relative to the gate's root with `/` (a
+    /// repository of a workspace); the root itself when `None`.
+    pub dir: Option<String>,
 }
 
 impl GateCheck {
@@ -45,6 +48,22 @@ impl GateCheck {
             program: program.to_string(),
             args: args.iter().map(|a| a.to_string()).collect(),
             timeout_secs: DEFAULT_CHECK_TIMEOUT_SECS,
+            dir: None,
+        }
+    }
+
+    /// The same check, run in `dir` below the gate's root.
+    pub fn in_dir(mut self, dir: &str) -> GateCheck {
+        let dir = dir.trim().trim_matches('/');
+        self.dir = (!dir.is_empty() && dir != ".").then(|| dir.to_string());
+        self
+    }
+
+    /// The folder it runs in below `root`.
+    pub fn workdir(&self, root: &std::path::Path) -> std::path::PathBuf {
+        match &self.dir {
+            Some(d) => d.split('/').fold(root.to_path_buf(), |p, c| p.join(c)),
+            None => root.to_path_buf(),
         }
     }
 

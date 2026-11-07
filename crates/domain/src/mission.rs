@@ -10,7 +10,11 @@
 use std::fmt;
 
 use crate::gate::{GateCheck, GateOutcome, protected_glob, words_of};
-use crate::{JobId, Millis, SessionId};
+use crate::workspace::split_check;
+use crate::{JobId, Millis, SessionId, WorkspaceId};
+
+mod landing;
+pub use landing::{LandState, Landing, RepoLanding};
 
 /// Where a repository keeps its mission contracts, relative to its root.
 /// swarmux writes them; agents can't (the gate's own folder is protected).
@@ -25,7 +29,9 @@ const CHECK_NAME_MAX: usize = 32;
 /// What proves the outcome.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Acceptance {
-    /// Command lines the gate runs (no shell); all must pass.
+    /// Command lines the gate runs (no shell); all must pass. A line
+    /// `"app: flutter test"` runs in the repository `app` of a workspace
+    /// mission (or the subfolder `app` of a repository's).
     pub checks: Vec<String>,
     /// A person signs off as well, after the checks.
     pub human_signoff: bool,
@@ -88,6 +94,10 @@ pub struct Clarification {
 pub struct Contract {
     pub title: String,
     pub goal: String,
+    /// The repositories of a workspace mission it touches, producers
+    /// first: each gets a worktree and they land in this order. Empty
+    /// means every repository of the workspace.
+    pub repos: Vec<String>,
     pub acceptance: Acceptance,
     pub constraints: Constraints,
     pub budget: Budget,
@@ -300,6 +310,9 @@ pub enum FindingKind {
     NoBudget,
     /// No paths to work in were named.
     Unscoped,
+    /// A repository the workspace does not have, or repositories named
+    /// outside a workspace.
+    UnknownRepo,
 }
 
 impl FindingKind {
@@ -311,6 +324,7 @@ impl FindingKind {
             FindingKind::VagueGoal => "vague_goal",
             FindingKind::NoBudget => "no_budget",
             FindingKind::Unscoped => "unscoped",
+            FindingKind::UnknownRepo => "unknown_repo",
         }
     }
 
@@ -322,6 +336,7 @@ impl FindingKind {
             FindingKind::VagueGoal,
             FindingKind::NoBudget,
             FindingKind::Unscoped,
+            FindingKind::UnknownRepo,
         ]
         .into_iter()
         .find(|k| k.as_str() == s)
@@ -411,18 +426,24 @@ pub fn oracles(checks: &[String]) -> Vec<String> {
         }
     };
     for check in checks {
-        let words = words_of(check);
+        // A check run in a repository judges by that repository's files.
+        let (dir, command) = split_check(check);
+        let at = |g: &str| match dir {
+            Some(d) => format!("{}/{g}", d.trim_end_matches('/')),
+            None => g.to_string(),
+        };
+        let words = words_of(command);
         let line = words.join(" ").to_ascii_lowercase();
         for (runner, globs) in ORACLES {
             if line == runner || line.starts_with(&format!("{runner} ")) {
-                globs.iter().for_each(|g| add(g));
+                globs.iter().for_each(|g| add(&at(g)));
             }
         }
         for w in words.iter().skip(1).filter(|w| !w.starts_with('-')) {
             let w = w.trim_start_matches("./").replace('\\', "/");
             let named_file = ORACLE_FILES.iter().any(|e| w.ends_with(e));
             if named_file || w.starts_with("tests/") {
-                add(&w);
+                add(&at(&w));
             }
         }
     }
@@ -512,6 +533,55 @@ pub fn lint(contract: &Contract) -> Vec<Finding> {
     out
 }
 
+/// What a mission names that its workspace does not have: repositories
+/// in `repos` and in the checks' `repo:` prefixes. Outside a workspace
+/// (`known` is `None`) naming repositories is an error, while a check's
+/// prefix is a subfolder of the repository and is left alone.
+pub fn lint_repos(contract: &Contract, known: Option<&[String]>) -> Vec<Finding> {
+    let mut out = Vec::new();
+    let finding = |detail: String| Finding {
+        kind: FindingKind::UnknownRepo,
+        severity: Severity::Blocking,
+        detail,
+        protect: None,
+    };
+    let Some(known) = known else {
+        if !contract.repos.is_empty() {
+            out.push(finding(format!(
+                "repos = [{}] names repositories, but the mission is not in a workspace",
+                contract.repos.join(", ")
+            )));
+        }
+        return out;
+    };
+    let list = if known.is_empty() {
+        "none".to_string()
+    } else {
+        known.join(", ")
+    };
+    let mut seen: Vec<&str> = Vec::new();
+    for repo in contract.repos.iter().map(|r| r.trim()) {
+        if !known.iter().any(|k| k == repo) {
+            out.push(finding(format!(
+                "repos names {repo:?}, which the workspace does not have (it has {list})"
+            )));
+        } else if seen.contains(&repo) {
+            out.push(finding(format!("repos names {repo:?} twice")));
+        }
+        seen.push(repo);
+    }
+    for check in &contract.acceptance.checks {
+        if let (Some(repo), _) = split_check(check)
+            && !known.iter().any(|k| k == repo)
+        {
+            out.push(finding(format!(
+                "the check {check:?} runs in {repo:?}, which the workspace does not have (it has {list})"
+            )));
+        }
+    }
+    out
+}
+
 /// Questions the findings raise, for when no model is asked.
 pub fn local_questions(findings: &[Finding]) -> Vec<Question> {
     findings
@@ -562,12 +632,32 @@ pub struct MissionGate {
 }
 
 /// A check from a command line, run without a shell.
+///
+/// A `"repo: ..."` line runs in the folder `repo` below the gate's root,
+/// and its name keeps the prefix, so checks of different repositories
+/// stay apart.
 pub fn check_of(line: &str) -> Option<GateCheck> {
-    let words = words_of(line);
+    check_in(line, &|d: &str| Some(d.to_string()))
+}
+
+/// Like [`check_of`], with the `repo:` prefix turned into the folder the
+/// check runs in by `folder` (a workspace repository's name into its
+/// path). `None` when `folder` does not know the prefix.
+pub fn check_in(line: &str, folder: &dyn Fn(&str) -> Option<String>) -> Option<GateCheck> {
+    let (dir, command) = split_check(line);
+    let words = words_of(command);
     let (program, args) = words.split_first()?;
-    let name: String = words.join(" ").chars().take(CHECK_NAME_MAX).collect();
+    let shown = match dir {
+        Some(d) => format!("{d}: {}", words.join(" ")),
+        None => words.join(" "),
+    };
+    let name: String = shown.chars().take(CHECK_NAME_MAX).collect();
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
-    Some(GateCheck::new(&name, program, &args))
+    let check = GateCheck::new(&name, program, &args);
+    match dir {
+        Some(d) => Some(check.in_dir(&folder(d)?)),
+        None => Some(check),
+    }
 }
 
 /// A mission compiled: what the job is told and how it is judged.
@@ -580,6 +670,15 @@ pub struct Compiled {
 /// Compiles a contract into a job's prompt and gate. The blocking findings
 /// when it can't run as written.
 pub fn compile(contract: &Contract) -> Result<Compiled, Vec<Finding>> {
+    compile_in(contract, &|d: &str| Some(d.to_string()))
+}
+
+/// Like [`compile`], with the checks' `repo:` prefixes turned into folders
+/// by `folder` (see [`check_in`]).
+pub fn compile_in(
+    contract: &Contract,
+    folder: &dyn Fn(&str) -> Option<String>,
+) -> Result<Compiled, Vec<Finding>> {
     let blocking: Vec<Finding> = lint(contract)
         .into_iter()
         .filter(|f| f.severity == Severity::Blocking)
@@ -591,14 +690,23 @@ pub fn compile(contract: &Contract) -> Result<Compiled, Vec<Finding>> {
         .acceptance
         .checks
         .iter()
-        .filter_map(|c| check_of(c))
+        .filter_map(|c| check_in(c, folder))
         .collect();
     let c = contract;
     let mut p = String::new();
     p.push_str(c.goal.trim());
     p.push_str("\n\nDone means every one of these passes. swarmux runs them itself when you stop, and you may not stop until they do:\n");
     for check in &checks {
-        p.push_str(&format!("- `{}`\n", check.command_line()));
+        match &check.dir {
+            Some(dir) => p.push_str(&format!("- `{}` in `{dir}/`\n", check.command_line())),
+            None => p.push_str(&format!("- `{}`\n", check.command_line())),
+        }
+    }
+    if !c.repos.is_empty() {
+        p.push_str(&format!(
+            "\nRepositories to change, producers first: {}\n",
+            c.repos.join(", ")
+        ));
     }
     if !c.constraints.paths_rw.is_empty() {
         p.push_str(&format!(
@@ -703,6 +811,11 @@ pub struct Mission {
     /// The folder it runs in (a session's).
     pub root: String,
     pub session: Option<SessionId>,
+    /// The workspace it belongs to: it runs across that workspace's
+    /// repositories and lands in each of them.
+    pub workspace: Option<WorkspaceId>,
+    /// How its repositories landed, once its gate passed.
+    pub landing: Option<Landing>,
     pub contract: Contract,
     pub state: MissionState,
     /// The job it was compiled into, once queued.
@@ -721,6 +834,8 @@ impl Mission {
             slug: slug.to_string(),
             root: root.to_string(),
             session: None,
+            workspace: None,
+            landing: None,
             contract,
             state: MissionState::Draft,
             job: None,
@@ -741,8 +856,12 @@ impl Mission {
                 self.job = None;
                 self.note = None;
                 self.lint = None;
+                self.landing = None;
             }
-            Signal::Queued(job) => self.job = Some(job),
+            Signal::Queued(job) => {
+                self.job = Some(job);
+                self.landing = None;
+            }
             Signal::Exhausted(why) | Signal::Refuse(why) => self.note = Some(why),
             Signal::Finished { ok: false } => {
                 self.note = Some("the job did not finish".into());
