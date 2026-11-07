@@ -80,6 +80,12 @@ pub struct MissionReport {
     pub cancel: Vec<JobId>,
 }
 
+/// Told when a mission's job is launched and when a mission is delivered.
+pub trait MissionWatch {
+    fn launched(&self, job: JobId, mission: &Mission);
+    fn delivered(&self, mission: &Mission) -> AppResult<()>;
+}
+
 /// Writes, lints, launches and follows missions.
 pub struct MissionService {
     store: Rc<dyn MissionStore>,
@@ -87,6 +93,8 @@ pub struct MissionService {
     ledger: Option<Rc<LedgerService>>,
     linter: Option<Rc<dyn MissionLinter>>,
     gates: Option<Rc<dyn JobGates>>,
+    /// Told about launches and deliveries (knowledge).
+    watch: Option<Rc<dyn MissionWatch>>,
     evidence: Option<Rc<EvidenceService>>,
     /// Bundles of missions delivered earlier were looked for.
     backfilled: bool,
@@ -119,6 +127,7 @@ impl MissionService {
             ledger: None,
             linter: None,
             gates: None,
+            watch: None,
             evidence: None,
             backfilled: false,
             missions,
@@ -147,6 +156,12 @@ impl MissionService {
     }
 
     /// Gives each mission's job its checks and protected paths.
+    /// Tells `watch` when a mission's job is launched and when it is delivered.
+    pub fn with_watch(mut self, watch: Rc<dyn MissionWatch>) -> MissionService {
+        self.watch = Some(watch);
+        self
+    }
+
     pub fn with_gates(mut self, gates: Rc<dyn JobGates>) -> MissionService {
         self.gates = Some(gates);
         self
@@ -428,6 +443,9 @@ impl MissionService {
         if let Some(gates) = &self.gates {
             gates.assign(job, compiled.gate);
         }
+        if let Some(watch) = &self.watch {
+            watch.launched(job, &self.missions[i]);
+        }
         let m = &mut self.missions[i];
         let from = m.apply(Signal::Queued(job), now).map_err(refused)?;
         self.verifying.remove(slug);
@@ -693,6 +711,11 @@ impl MissionService {
         self.record(&slug, from)?;
         if self.missions[i].state == MissionState::Delivered {
             self.seal(i, now)?;
+        }
+        if self.missions[i].state == MissionState::Delivered
+            && let Some(watch) = &self.watch
+        {
+            watch.delivered(&self.missions[i])?;
         }
         Ok(true)
     }

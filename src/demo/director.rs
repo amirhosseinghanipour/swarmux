@@ -234,6 +234,7 @@ impl Director {
                     input: format!("{{\"{field}\":\"{subject}\"}}"),
                     subject,
                     cwd,
+                    content: String::new(),
                 };
                 // The transport answers from the policy; a call it asks about
                 // waits for the user. The time deciding took is fixed: the

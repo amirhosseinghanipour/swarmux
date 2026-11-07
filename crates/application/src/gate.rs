@@ -28,9 +28,12 @@ use swarmux_domain::{
 use crate::attention::{Change, ChangeKind};
 use crate::checkpoint::{CheckpointService, Notes};
 use crate::hookbus::{HookNotice, StopAnswer, StopContext, StopPolicy};
+use crate::knowledge::{RuleCheck, RuleChecks};
 use crate::ledger::LedgerService;
 use crate::ports::{Clock, JobRepository};
-use crate::verifier::{Verifier, VerifyRequest, fenced_folder, runs_holdout_command};
+use crate::verifier::{
+    Verifier, VerifyRequest, fenced_folder, runs_holdout_command, runs_knowledge_command,
+};
 use crate::{AppError, AppResult, JobFact};
 
 /// Commands remembered per job for the evidence check.
@@ -170,6 +173,8 @@ pub struct GateKeeper {
     jobs: Mutex<HashMap<JobId, MissionGate>>,
     /// Runs the checks in clean copies, with the hidden ones.
     verifier: Option<Verifier>,
+    /// The checks knowledge rules add, and where their results go.
+    rules: Option<Arc<dyn RuleChecks>>,
 }
 
 /// What running a repository's checks found.
@@ -276,8 +281,26 @@ impl GateKeeper {
             out: Mutex::new(tx),
             jobs: Mutex::default(),
             verifier: None,
+            rules: None,
         };
         (keeper, rx)
+    }
+
+    /// Runs the checks of knowledge rules in scope: lint rules' with the
+    /// visible checks, gate rules' (missions only) after them as hidden
+    /// ones, and shadow rules' for the record only.
+    pub fn with_rules(mut self, rules: Arc<dyn RuleChecks>) -> GateKeeper {
+        self.rules = Some(rules);
+        self
+    }
+
+    /// The rule checks of `job`, hidden ones when it is a mission's.
+    fn rule_checks(&self, job: Option<JobId>) -> Vec<RuleCheck> {
+        let (Some(job), Some(rules)) = (job, &self.rules) else {
+            return Vec::new();
+        };
+        let mission = lock(&self.jobs).contains_key(&job);
+        rules.checks(job, mission)
     }
 
     /// The gate of the repository `dir` lies in, with what `job` was given
@@ -324,7 +347,9 @@ impl GateKeeper {
         if stop.cwd.is_empty() {
             return None;
         }
-        let gate = self.load(stop.job, Path::new(&stop.cwd));
+        let mut gate = self.load(stop.job, Path::new(&stop.cwd));
+        let rules = self.rule_checks(stop.job);
+        add_lint(&mut gate.spec, &rules);
         let key = Key::of(stop.job, &stop.session);
         let subagent = stop.event == HookEvent::SubagentStop;
         let spec = &gate.spec;
@@ -342,7 +367,7 @@ impl GateKeeper {
         // A session that changed nothing since the last pass has nothing
         // for the checks to judge; its claims and pins still are. Hidden
         // checks judge the lead's work, not a subagent's part of it.
-        let checked = if touched && (!subagent || spec.subagent_checks) {
+        let mut checked = if touched && (!subagent || spec.subagent_checks) {
             let work = Work {
                 checker: &*self.checker,
                 verifier: self.verifier.as_ref(),
@@ -351,6 +376,16 @@ impl GateKeeper {
         } else {
             Checked::default()
         };
+        if touched && !subagent {
+            run_rule_checks(
+                &*self.checker,
+                self.rules.as_deref(),
+                stop.job,
+                &rules,
+                &gate.root,
+                &mut checked,
+            );
+        }
         let pins = match &baseline {
             Some((root, before)) if *root == gate.root => pin_findings(
                 Some(before),
@@ -492,6 +527,11 @@ impl WriteFence for GateKeeper {
                 return Some("hidden checks belong to the verifier (gate)".into());
             }
         }
+        if self.rules.is_some() && runs_knowledge_command(tool, subject) {
+            return Some(
+                "the knowledge store and its rules' checks belong to the owner (gate)".into(),
+            );
+        }
         if !changes_files(tool) || cwd.is_empty() {
             return None;
         }
@@ -516,7 +556,10 @@ impl JobGates for GateKeeper {
         let dir = baseline
             .as_ref()
             .map_or_else(|| dir.to_path_buf(), |(root, _)| root.clone());
-        let gate = self.load(Some(job), &dir);
+        let mut gate = self.load(Some(job), &dir);
+        let rules = self.rule_checks(Some(job));
+        add_lint(&mut gate.spec, &rules);
+        let provider = self.rules.clone();
         let source = self.source.clone();
         let checker = self.checker.clone();
         let verifier = self.verifier.clone();
@@ -528,7 +571,38 @@ impl JobGates for GateKeeper {
                     checker: &*checker,
                     verifier: verifier.as_ref(),
                 };
-                let record = verify_now(&*source, &work, job, &gate, baseline, base.as_deref());
+                let mut record = verify_now(&*source, &work, job, &gate, baseline, base.as_deref());
+                if !rules.is_empty() {
+                    let mut checked = Checked {
+                        runs: record.findings.runs.clone(),
+                        hidden: record.findings.hidden,
+                        ..Checked::default()
+                    };
+                    run_rule_checks(
+                        &*checker,
+                        provider.as_deref(),
+                        Some(job),
+                        &rules,
+                        &gate.root,
+                        &mut checked,
+                    );
+                    if checked.hidden != record.findings.hidden {
+                        record.findings.hidden = checked.hidden;
+                        let checked_any = record.findings.checked();
+                        record.outcome = if checked_any && record.findings.clean() {
+                            GateOutcome::Pass
+                        } else {
+                            GateOutcome::Escalate
+                        };
+                        record.digest = digest(
+                            &record.findings,
+                            record.outcome,
+                            0,
+                            gate.spec.max_blocks,
+                            &gate.spec.protected_globs(),
+                        );
+                    }
+                }
                 // Nobody listening (the app is closing): nothing to record.
                 let _ = out.send(record);
             })
@@ -544,6 +618,52 @@ impl<T: JobGates + ?Sized> JobGates for Arc<T> {
 
     fn verify(&self, job: JobId, dir: &Path) -> Result<(), String> {
         (**self).verify(job, dir)
+    }
+}
+
+/// The enforced lint rules' checks, added to the visible ones.
+fn add_lint(spec: &mut GateSpec, rules: &[RuleCheck]) {
+    for r in rules.iter().filter(|r| !r.hidden && !r.shadow) {
+        if !spec.checks.iter().any(|c| c.name == r.check.name) {
+            spec.checks.push(r.check.clone());
+        }
+    }
+}
+
+/// Runs the rules' checks that aren't among the visible ones and reports
+/// every result: enforced gate rules count as hidden checks (only how
+/// many ran and passed is ever told), shadow rules count for nothing.
+fn run_rule_checks(
+    checker: &dyn Checker,
+    provider: Option<&dyn RuleChecks>,
+    job: Option<JobId>,
+    rules: &[RuleCheck],
+    root: &Path,
+    checked: &mut Checked,
+) {
+    let (Some(job), Some(provider)) = (job, provider) else {
+        return;
+    };
+    for r in rules {
+        if !r.hidden && !r.shadow {
+            if let Some(run) = checked.runs.iter().find(|run| run.name == r.check.name) {
+                provider.report(job, &r.rule, run.passed(), false);
+            }
+            continue;
+        }
+        let passed = run_checks(checker, std::slice::from_ref(&r.check), root)
+            .first()
+            .is_some_and(CheckRun::passed);
+        provider.report(job, &r.rule, passed, r.shadow);
+        if r.hidden && !r.shadow {
+            let tally = checked
+                .hidden
+                .get_or_insert(HiddenTally { ran: 0, passed: 0 });
+            tally.ran += 1;
+            if passed {
+                tally.passed += 1;
+            }
+        }
     }
 }
 

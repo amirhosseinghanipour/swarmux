@@ -1,7 +1,7 @@
 mod review;
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -224,6 +224,25 @@ pub struct JobService {
     workspaces: Option<Rc<dyn WorkspaceStore>>,
     /// The repositories each workspace job touches (all when absent).
     scopes: HashMap<JobId, Vec<String>>,
+    /// Told about each job as it starts (knowledge).
+    starts: Option<Rc<dyn JobStarts>>,
+}
+
+/// A job that just started, as [`JobStarts`] sees it.
+pub struct JobStart<'a> {
+    pub job: JobId,
+    pub session: &'a Session,
+    /// Where it runs: the worktree, the task folder or the session's folder.
+    pub cwd: &'a Path,
+    /// The repositories of its workspace it touches; empty: all.
+    pub repos: Vec<String>,
+    /// A reviewer's job.
+    pub review: bool,
+}
+
+/// Told about every job as it starts.
+pub trait JobStarts {
+    fn started(&self, start: &JobStart<'_>) -> AppResult<()>;
 }
 
 /// Where a job runs.
@@ -300,7 +319,14 @@ impl JobService {
             draining: false,
             workspaces: None,
             scopes: HashMap::new(),
+            starts: None,
         }
+    }
+
+    /// Tells `starts` about every job as it starts.
+    pub fn with_starts(mut self, starts: Rc<dyn JobStarts>) -> JobService {
+        self.starts = Some(starts);
+        self
     }
 
     /// Runs the jobs of workspace sessions from the workspace's root (or
@@ -1434,6 +1460,19 @@ impl JobService {
         };
         self.jobs.set_status(id, JobStatus::Running, now)?;
         self.sessions.touch(session_id, now)?;
+        if let Some(starts) = &self.starts {
+            let job = &self.tracked[i].job;
+            let owner = job.review_of.unwrap_or(id);
+            let start = JobStart {
+                job: id,
+                session: &session,
+                cwd: &cwd,
+                repos: self.scope(owner).to_vec(),
+                review: job.review_of.is_some(),
+            };
+            // Knowledge it can't load leaves the job to run without it.
+            let _ = starts.started(&start);
+        }
 
         let offset = self.tracked[i]
             .job

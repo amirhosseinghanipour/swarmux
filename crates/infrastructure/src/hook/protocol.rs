@@ -228,6 +228,7 @@ impl WireRequest {
             input.truncate(cut);
             input.push('…');
         }
+        let content = written_text(&self.tool_name, &self.tool_input);
         HookRequest {
             request_id,
             job_id: self.job_id.map(JobId),
@@ -235,8 +236,43 @@ impl WireRequest {
             subject,
             input,
             cwd: self.cwd,
+            content,
         }
     }
+}
+
+/// Longest text a file tool writes that knowledge rules look at, in bytes.
+const CONTENT_MAX: usize = 256 * 1024;
+
+/// What a file tool writes: `content`, `new_string`, or every edit's
+/// `new_string` (MultiEdit), joined; empty for other tools.
+pub fn written_text(tool: &str, input: &Value) -> String {
+    let field = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).map(str::to_string);
+    let mut out = match tool {
+        "Write" => field(input, "content").unwrap_or_default(),
+        "Edit" => field(input, "new_string").unwrap_or_default(),
+        "MultiEdit" => input
+            .get("edits")
+            .and_then(Value::as_array)
+            .map(|edits| {
+                edits
+                    .iter()
+                    .filter_map(|e| field(e, "new_string"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .unwrap_or_default(),
+        "NotebookEdit" => field(input, "new_source").unwrap_or_default(),
+        _ => String::new(),
+    };
+    if out.len() > CONTENT_MAX {
+        let mut end = CONTENT_MAX;
+        while !out.is_char_boundary(end) {
+            end -= 1;
+        }
+        out.truncate(end);
+    }
+    out
 }
 
 impl WireReply {
@@ -386,6 +422,20 @@ mod tests {
         let hr = req.into_hook_request(1);
         assert_eq!(hr.input.chars().count(), INPUT_MAX + 1);
         assert_eq!(hr.subject, "a");
+    }
+
+    #[test]
+    fn written_text_per_tool() {
+        let w = |tool: &str, v: Value| written_text(tool, &v);
+        assert_eq!(w("Write", json!({"file_path": "a", "content": "x"})), "x");
+        assert_eq!(w("Edit", json!({"old_string": "o", "new_string": "n"})), "n");
+        assert_eq!(
+            w("MultiEdit", json!({"edits": [{"new_string": "a"}, {"new_string": "b"}]})),
+            "a\nb"
+        );
+        assert_eq!(w("Bash", json!({"command": "ls"})), "");
+        let big = w("Write", json!({"content": "é".repeat(CONTENT_MAX)}));
+        assert!(big.len() <= CONTENT_MAX);
     }
 
     #[test]
