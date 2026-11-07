@@ -426,7 +426,12 @@ pub(crate) fn gate_chips(g: &GateState) -> Vec<Chip> {
         out.push(chip("evidence missing".into(), Tone::Warn));
     }
     if g.tampering > 0 {
-        out.push(chip("tests tampered".into(), Tone::Bad));
+        out.push(chip("tests weakened".into(), Tone::Bad));
+    }
+    match g.base_suite {
+        Some(true) => out.push(chip("base suite ok".into(), Tone::Good)),
+        Some(false) => out.push(chip("base suite failed".into(), Tone::Bad)),
+        None => {}
     }
     // Hidden checks are counted, never named.
     if let Some(h) = g.hidden.filter(|h| h.ran > 0) {
@@ -587,6 +592,7 @@ mod tests {
             review_of: None,
             cost_usd: 1.5,
             context: Some(0.4),
+            cache_ratio: None,
             flow: vec![1, 2],
             todos_done: 2,
             todos_total: 5,
@@ -786,6 +792,8 @@ mod tests {
             evidence_gaps: 1,
             hidden: None,
             tampering: 0,
+            checks_weakened: false,
+            base_suite: None,
             digest: String::new(),
             problem: None,
             at: 0,
@@ -840,6 +848,8 @@ mod tests {
             evidence_gaps: 0,
             hidden: Some(swarmux_domain::verifier::HiddenTally { ran: 3, passed: 2 }),
             tampering: 1,
+            checks_weakened: false,
+            base_suite: None,
             digest: String::new(),
             problem: None,
             at: 0,
@@ -853,13 +863,15 @@ mod tests {
             [
                 ("gate 1/3".to_string(), Tone::Warn),
                 ("cargo test".to_string(), Tone::Good),
-                ("tests tampered".to_string(), Tone::Bad),
+                ("tests weakened".to_string(), Tone::Bad),
                 ("hidden 2/3".to_string(), Tone::Bad),
             ]
         );
         let passed = GateState {
             hidden: Some(swarmux_domain::verifier::HiddenTally { ran: 3, passed: 3 }),
             tampering: 0,
+            checks_weakened: false,
+            base_suite: None,
             outcome: GateOutcome::Pass,
             ..gate
         };

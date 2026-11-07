@@ -230,6 +230,12 @@ enum StatsAction {
         #[arg(long, default_value_t = 1)]
         days: i64,
     },
+    /// How much of what the agents read came from the prompt cache.
+    Cache {
+        /// How many days back to look.
+        #[arg(long, default_value_t = 7)]
+        days: i64,
+    },
 }
 
 #[derive(Subcommand)]
@@ -329,8 +335,21 @@ enum ThemeAction {
 
 #[derive(Subcommand)]
 enum AuditAction {
-    /// Check the whole hash chain; exits with 1 if it is broken.
-    Verify,
+    /// Check the whole hash chain and every signed checkpoint of it; exits
+    /// with 1 if the chain is broken or the ledger was cut short or
+    /// rewritten since a checkpoint.
+    Verify {
+        /// Also check against checkpoints kept elsewhere (the output of
+        /// `export-checkpoints`, one per line).
+        #[arg(long)]
+        checkpoints: Option<PathBuf>,
+    },
+    /// Sign the ledger's head now and keep the checkpoint. Also done when
+    /// a mission is delivered.
+    Checkpoint,
+    /// Print every checkpoint, one per line, to keep somewhere an agent
+    /// cannot write (a gist, an email to yourself).
+    ExportCheckpoints,
     /// Show the newest entries.
     Tail {
         /// How many entries.
@@ -346,9 +365,15 @@ fn main() -> anyhow::Result<ExitCode> {
     }
     match cli.command {
         Some(Command::Audit {
-            action: AuditAction::Verify,
+            action: AuditAction::Checkpoint,
+        }) => audit::checkpoint(),
+        Some(Command::Audit {
+            action: AuditAction::ExportCheckpoints,
+        }) => audit::export_checkpoints(),
+        Some(Command::Audit {
+            action: AuditAction::Verify { checkpoints },
         }) => {
-            return Ok(if audit::verify()? {
+            return Ok(if audit::verify(checkpoints.as_deref())? {
                 ExitCode::SUCCESS
             } else {
                 ExitCode::FAILURE
@@ -369,6 +394,9 @@ fn main() -> anyhow::Result<ExitCode> {
         Some(Command::Stats {
             what: StatsAction::Alarms { days },
         }) => stats::alarms(days.max(1)),
+        Some(Command::Stats {
+            what: StatsAction::Cache { days },
+        }) => stats::cache(days.max(1)),
         Some(Command::Gate {
             action: GateAction::Run { dir, in_place },
         }) => {
@@ -584,6 +612,7 @@ fn build_app(
         ledger.clone(),
         clock.clone(),
         Some(checkpoints.clone()),
+        Some(Rc::new(audit::service(&paths)?)),
     );
     // Plan-first missions: a plan-mode run proposes, the user approves, and
     // the finished build is compared with the plan.

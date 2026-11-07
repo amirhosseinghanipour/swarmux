@@ -258,6 +258,19 @@ impl CleanCopy for GitCleanCopy {
         bytes.truncate(DIFF_MAX);
         Ok(String::from_utf8_lossy(&bytes).into_owned())
     }
+
+    fn restore(&self, base: &str, paths: &[String]) -> AppResult<()> {
+        // The copy is a worktree of the repository, so `base` is there.
+        // `--` and literal pathspecs keep a file name from being read as
+        // an option or a pattern.
+        for chunk in paths.chunks(100) {
+            let mut args: Vec<String> = vec!["checkout".into(), base.into(), "--".into()];
+            args.extend(chunk.iter().map(|p| format!(":(literal){p}")));
+            let args: Vec<&str> = args.iter().map(String::as_str).collect();
+            must(&self.bin, &self.path, &args, None)?;
+        }
+        Ok(())
+    }
 }
 
 impl Drop for GitCleanCopy {

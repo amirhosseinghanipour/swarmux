@@ -37,6 +37,7 @@ fn fact(id: i64, status: JobStatus, session: SessionId, finished: Option<Millis>
         review_of: None,
         cost_usd: 0.1,
         context: None,
+        cache_ratio: None,
         flow: Vec::new(),
         todos_done: 0,
         todos_total: 0,

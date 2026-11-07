@@ -1,6 +1,7 @@
 //! swarmux infrastructure: adapters that implement the application's ports.
 
 pub mod agents;
+pub mod anchor;
 pub mod board;
 pub mod claude_cli;
 pub mod clean_checkout;
@@ -39,6 +40,7 @@ pub mod workspace;
 pub mod worktree;
 
 pub use agents::FsAgentCatalog;
+pub use anchor::MinisignSigner;
 pub use claude_cli::{
     BoardMcp, ClaudeCli, ClaudePlanner, GuardHook, HaikuDiagnoser, HaikuLinter, HaikuRouter,
 };

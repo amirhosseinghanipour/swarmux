@@ -310,10 +310,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("old.db");
         let conn = rusqlite::Connection::open(&path).unwrap();
-        for sql in &super::super::MIGRATIONS[..15] {
+        for sql in &super::super::MIGRATIONS[..17] {
             conn.execute_batch(sql).unwrap();
         }
-        conn.pragma_update(None, "user_version", 15).unwrap();
+        conn.pragma_update(None, "user_version", 17).unwrap();
         conn.execute_batch(
             "INSERT INTO worktrees VALUES (7, '00000000-0000-4000-8000-000000000001', '/repo',
              '/wt/7', 'swarmux/s/7', 2, 20040, 20, 5, NULL);",

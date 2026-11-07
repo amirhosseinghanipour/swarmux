@@ -61,6 +61,7 @@ pub struct JobProgress {
     pub log_offset: u32,
     /// Cache-read tokens of the whole job, once Claude Code reported them.
     final_cache_read: Option<u64>,
+    final_cache_creation: Option<u64>,
     /// Subagent tool_use id → label (e.g. "explorer").
     labels: HashMap<String, String>,
     /// Subagent calls seen while replaying, not yet matched to an actor.
@@ -98,6 +99,7 @@ impl JobProgress {
             lead_label: "lead".into(),
             log_offset: 0,
             final_cache_read: None,
+            final_cache_creation: None,
             labels: HashMap::new(),
             replay_starts: VecDeque::new(),
         }
@@ -120,6 +122,16 @@ impl JobProgress {
 
     /// Cache-read tokens so far: the final figure once known, else the sum
     /// of the usage reports.
+    /// Share of the input served from the prompt cache, once the job has
+    /// reported its final usage; `None` while running or when unreported.
+    pub fn cache_ratio(&self) -> Option<f64> {
+        crate::tokens::cache_read_ratio(
+            self.tokens_in,
+            self.final_cache_read?,
+            self.final_cache_creation,
+        )
+    }
+
     pub fn cache_read(&self) -> u64 {
         self.final_cache_read.unwrap_or_else(|| {
             self.lead_tokens.cache_read
@@ -252,6 +264,7 @@ impl JobProgress {
                 tokens_in,
                 tokens_out,
                 cache_read,
+                cache_creation,
                 context_window,
                 subagents_spawned,
                 text,
@@ -263,6 +276,7 @@ impl JobProgress {
                 self.context_window = *context_window;
                 self.subagents_spawned = *subagents_spawned;
                 self.final_cache_read = Some(*cache_read);
+                self.final_cache_creation = *cache_creation;
                 // Claude Code reports again after background subagents end;
                 // that updates the numbers but doesn't end the job twice.
                 if !self.status.is_finished() {
@@ -277,6 +291,7 @@ impl JobProgress {
                     tokens_in: *tokens_in,
                     tokens_out: *tokens_out,
                     cache_read: *cache_read,
+                    cache_creation: *cache_creation,
                     cost_usd: *cost_usd,
                     duration_ms: *duration_ms,
                     outcome: subtype.clone(),
@@ -330,6 +345,7 @@ impl JobProgress {
             tokens_in: self.tokens_in,
             tokens_out: self.tokens_out,
             cache_read: 0,
+            cache_creation: None,
             cost_usd: self.cost_usd,
             duration_ms: u64::from(tick) * 100,
             outcome: status.as_str().into(),
@@ -540,6 +556,7 @@ mod tests {
             tokens_in: 10,
             tokens_out: 20,
             cache_read: 3,
+            cache_creation: None,
             context_window: Some(1_000_000),
             subagents_spawned: 0,
             text: "all good".into(),

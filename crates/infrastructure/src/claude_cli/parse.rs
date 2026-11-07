@@ -243,6 +243,9 @@ fn parse_result(v: &Value) -> AgentEvent {
         tokens_in: u64_at(usage, "input_tokens"),
         tokens_out: u64_at(usage, "output_tokens"),
         cache_read: u64_at(usage, "cache_read_input_tokens"),
+        cache_creation: usage
+            .get("cache_creation_input_tokens")
+            .and_then(Value::as_u64),
         context_window,
         subagents_spawned: v
             .pointer("/subagent_stats/spawned")
@@ -379,6 +382,36 @@ mod tests {
         assert_eq!(tokens_out, 385);
         assert!(matches!(ev.last(), Some(AgentEvent::Result { text, .. }) if !text.is_empty()));
         assert!(!is_error);
+    }
+
+    #[test]
+    fn cache_tokens_come_from_the_results_usage_and_unknown_stays_unknown() {
+        let ev = fixture("stream_basic.jsonl");
+        let Some(AgentEvent::Result {
+            tokens_in,
+            cache_read,
+            cache_creation,
+            ..
+        }) = ev.last().cloned()
+        else {
+            panic!("last event is not a result");
+        };
+        assert_eq!(
+            (tokens_in, cache_read, cache_creation),
+            (4, 49_753, Some(50_682))
+        );
+        let ratio = swarmux_domain::cache_read_ratio(tokens_in, cache_read, cache_creation)
+            .expect("the usage said");
+        assert!((ratio - 0.4953).abs() < 0.001, "{ratio}");
+
+        // A result whose usage names no cache writes says nothing about them.
+        let bare = parse_line(
+            r#"{"type":"result","subtype":"success","is_error":false,"result":"x","usage":{"input_tokens":3,"output_tokens":1}}"#,
+        );
+        let Some(AgentEvent::Result { cache_creation, .. }) = bare.last().cloned() else {
+            panic!("not a result");
+        };
+        assert_eq!(cache_creation, None);
     }
 
     #[test]

@@ -108,6 +108,9 @@ pub struct JobFact {
     pub cost_usd: f64,
     /// Lead context used, `0.0..` of the window, when known.
     pub context: Option<f64>,
+    /// Share of the job's input served from the prompt cache, once it
+    /// reported its usage; `None` when unknown.
+    pub cache_ratio: Option<f64>,
     /// Tokens per minute over the last half hour, oldest first.
     pub flow: Vec<u64>,
     /// Items of the lead's todo list: done, and all.
@@ -1020,6 +1023,7 @@ impl JobService {
                         .filter(|w| *w > 0)
                         .map(|w| p.context_used as f64 / w as f64)
                         .filter(|_| p.context_used > 0),
+                    cache_ratio: p.cache_ratio(),
                     flow: flow[last..].iter().map(|b| b.total()).collect(),
                     todos_done: t
                         .activity

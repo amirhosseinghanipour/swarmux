@@ -187,6 +187,7 @@ impl EvidenceService {
             }
         }
         out.extend(self.ledger_items(bundle));
+        out.extend(self.anchor_item(bundle));
         if bundle.dirty {
             out.push(VerifyItem::bad(
                 "work in the commit",
@@ -195,6 +196,33 @@ impl EvidenceService {
             ));
         }
         out
+    }
+
+    /// The bundle's checkpoint: signed, and the ledger still has the head
+    /// it signed. A bundle sealed without one says so, as no problem.
+    fn anchor_item(&self, bundle: &Bundle) -> Option<VerifyItem> {
+        let subject = "ledger anchor";
+        let Some(cp) = &bundle.anchor else {
+            return Some(VerifyItem::ok(
+                subject,
+                "none (sealed without a checkpoint)",
+            ));
+        };
+        let anchors = self.anchor.as_ref()?;
+        Some(match anchors.check(cp) {
+            Ok(j) => match j.problem() {
+                None => VerifyItem::ok(
+                    subject,
+                    &format!(
+                        "checkpoint #{} signed{}",
+                        cp.seq,
+                        if j.own_key { "" } else { " (by another key)" }
+                    ),
+                ),
+                Some(why) => VerifyItem::bad(subject, "signed and still on the ledger", &why),
+            },
+            Err(e) => VerifyItem::bad(subject, "readable", &e.to_string()),
+        })
     }
 
     fn ledger_items(&self, bundle: &Bundle) -> Vec<VerifyItem> {

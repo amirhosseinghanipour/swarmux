@@ -4,6 +4,7 @@
 //! frameworks; time is always passed in by the caller.
 
 pub mod alarm;
+pub mod anchor;
 mod attention;
 pub mod board;
 pub mod budget;
@@ -61,7 +62,7 @@ pub use schedule::{Limits, plan, run_order};
 pub use session::{DEFAULT_MODEL, DEFAULT_PERMISSION_MODE, Session, SessionId};
 pub use subagent::{Subagent, SubagentStatus, ToolOutcome};
 pub use template::{render, variables};
-pub use tokens::{TokenTally, estimate_tokens};
+pub use tokens::{TokenTally, cache_read_ratio, estimate_tokens};
 pub use workspace::{Repo, RepoRef, Stack, Workspace, WorkspaceId};
 pub use worktree::{
     Checkpoint, CheckpointReason, Handoff, PortPlan, SetMember, WorktreeRecord, branch_name, slug,

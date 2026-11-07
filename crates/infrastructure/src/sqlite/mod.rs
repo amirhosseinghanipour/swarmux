@@ -1,7 +1,9 @@
 //! SQLite adapter for the storage ports.
 
 mod alarms;
+mod anchors;
 mod board;
+mod cache;
 mod consents;
 mod decisions;
 mod evidence;
@@ -298,7 +300,32 @@ CREATE TABLE IF NOT EXISTS board_entries (
 CREATE INDEX IF NOT EXISTS board_entries_mission ON board_entries (mission, id);
 ";
 
-/// Workspaces: a product folder and the git repositories in it. A
+/// Prompt-cache writes per job, next to the cache reads already kept.
+/// Null: unknown (jobs that finished before this was recorded).
+/// TRUST TRACK, migration 16 when written; renumber freely on merge: it
+/// is one self-contained step.
+const SCHEMA_CACHE_CREATION: &str = "
+ALTER TABLE job_results ADD COLUMN cache_creation INTEGER;
+";
+
+/// Signed checkpoints of the audit ledger's head; append only.
+/// TRUST TRACK, migration 17 when written; self-contained.
+const SCHEMA_ANCHORS: &str = "
+CREATE TABLE IF NOT EXISTS ledger_anchors (
+    seq INTEGER NOT NULL,
+    head BLOB NOT NULL,
+    at INTEGER NOT NULL,
+    key TEXT NOT NULL,
+    signature TEXT NOT NULL,
+    PRIMARY KEY (seq, key, at)
+);
+CREATE TRIGGER ledger_anchors_no_update BEFORE UPDATE ON ledger_anchors
+BEGIN SELECT RAISE(ABORT, 'checkpoints are append-only'); END;
+CREATE TRIGGER ledger_anchors_no_delete BEFORE DELETE ON ledger_anchors
+BEGIN SELECT RAISE(ABORT, 'checkpoints are append-only'); END;
+";
+
+/// Workspaces (v18): a product folder and the git repositories in it. A
 /// repository is keyed by its workspace and its name (kept across
 /// rescans), which is what knowledge, rules and contracts about it refer
 /// to. Sessions and missions can belong to a workspace; a mission's
@@ -328,7 +355,7 @@ ALTER TABLE missions ADD COLUMN workspace_id TEXT;
 ALTER TABLE missions ADD COLUMN landing TEXT;
 ";
 
-/// Worktree sets: a workspace job has one worktree per repository it
+/// Worktree sets (v19): a workspace job has one worktree per repository it
 /// touches (`seq` 0, 1, ...), all in one task folder and one port slot.
 /// A job of a repository has one, `seq` 0, as before.
 const SCHEMA_WORKTREE_SETS: &str = "
@@ -374,6 +401,8 @@ const MIGRATIONS: &[&str] = &[
     SCHEMA_ALARMS,
     SCHEMA_PLANS,
     SCHEMA_BOARD,
+    SCHEMA_CACHE_CREATION,
+    SCHEMA_ANCHORS,
     SCHEMA_WORKSPACES,
     SCHEMA_WORKTREE_SETS,
 ];
@@ -581,6 +610,7 @@ pub(crate) mod tests {
             tokens_in: 4,
             tokens_out: 385,
             cache_read: 49753,
+            cache_creation: Some(1200),
             cost_usd: 0.0108,
             duration_ms: 44116,
             outcome: "success".into(),

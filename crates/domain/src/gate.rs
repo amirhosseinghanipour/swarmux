@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::guard::glob::{glob_match, is_windows, relative};
 use crate::guard::shell::{collapse, split_commands, strip_wrappers};
-use crate::verifier::HiddenTally;
+use crate::verifier::{BaseSuite, HiddenTally};
 
 /// Blocks before the gate gives up and asks the user.
 pub const DEFAULT_MAX_BLOCKS: u32 = 3;
@@ -97,6 +97,9 @@ pub struct GateSpec {
     /// protected files and the evidence are checked).
     pub subagent_checks: bool,
     pub verifier: VerifierSpec,
+    /// Globs of tests the repository says may be removed or changed: the
+    /// weakening detector skips them.
+    pub allow_test_changes: Vec<String>,
 }
 
 /// How the independent verifier treats a repository.
@@ -107,6 +110,9 @@ pub struct VerifierSpec {
     pub clean: bool,
     /// Removing, changing or switching off existing tests blocks the stop.
     pub block_test_edits: bool,
+    /// Run the checks again against the original versions of the protected
+    /// and test files that the job changed.
+    pub base_suite: bool,
 }
 
 impl Default for VerifierSpec {
@@ -114,6 +120,7 @@ impl Default for VerifierSpec {
         VerifierSpec {
             clean: true,
             block_test_edits: true,
+            base_suite: true,
         }
     }
 }
@@ -127,6 +134,7 @@ impl Default for GateSpec {
             evidence: true,
             subagent_checks: false,
             verifier: VerifierSpec::default(),
+            allow_test_changes: Vec::new(),
         }
     }
 }
@@ -725,8 +733,12 @@ pub struct GateFindings {
     pub gaps: Vec<String>,
     /// How the hidden checks went, when any ran: counts only.
     pub hidden: Option<HiddenTally>,
-    /// Changes to the tests that look like gaming them.
+    /// Changes that make the tests easier to pass: the evidence lines.
     pub tampering: Vec<String>,
+    /// Whether any of them touches what the mission's checks run.
+    pub checks_weakened: bool,
+    /// The checks run against the original tests, when that was done.
+    pub base_suite: Option<BaseSuite>,
 }
 
 impl GateFindings {
@@ -737,6 +749,7 @@ impl GateFindings {
             && self.gaps.is_empty()
             && self.hidden.is_none_or(|h| h.clean())
             && self.tampering.is_empty()
+            && self.base_suite.as_ref().is_none_or(BaseSuite::clean)
     }
 
     /// Whether any check ran, visible or hidden.
@@ -839,8 +852,17 @@ pub fn digest(
     }
     for t in &findings.tampering {
         out.push_str(&format!(
-            "⛔ {t}. Tests are the referee, not yours to change: put them back and fix the code.\n"
+            "⛔ tests weakened: {t}. Tests are the referee, not yours to change: put them back and fix the code.\n"
         ));
+    }
+    if let Some(b) = findings.base_suite.as_ref().filter(|b| !b.clean()) {
+        out.push_str(&format!("⛔ {}.\n", b.text()));
+        for (name, line) in &b.failed {
+            out.push_str(&format!("    {name}: {line}\n"));
+        }
+        out.push_str(
+            "The original tests are the referee: your code has to pass them as they were, not as you changed them.\n",
+        );
     }
     if let Some(h) = findings.hidden.filter(|h| !h.clean()) {
         out.push_str(&format!(

@@ -293,6 +293,15 @@ fn card_lines(app: &App, card: &RunCard, selected: bool, w: usize) -> [Line<'sta
         second.push(dot());
         second.push(Span::styled(text, Style::new().fg(label_color(t, kind))));
     }
+    // Last: on a narrow card the label matters more than the cache share.
+    second.push(dot());
+    second.push(Span::styled(
+        card.cache.map_or_else(
+            || "cache —".to_string(),
+            |c| format!("cache {:.0}%", c * 100.0),
+        ),
+        muted,
+    ));
     [first, Line::from(second)]
 }
 

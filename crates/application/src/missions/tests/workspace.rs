@@ -110,6 +110,8 @@ fn pass(at: Millis) -> GateState {
         digest: String::new(),
         problem: None,
         at,
+        checks_weakened: false,
+        base_suite: None,
     }
 }
 
@@ -138,6 +140,7 @@ impl W {
                 context_window: None,
                 subagents_spawned: 0,
                 text: "done".into(),
+                cache_creation: None,
             }),
         );
         self.runner.emit(

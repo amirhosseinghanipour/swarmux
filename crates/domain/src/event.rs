@@ -88,6 +88,9 @@ pub enum AgentEvent {
         tokens_in: u64,
         tokens_out: u64,
         cache_read: u64,
+        /// Tokens written to the prompt cache; `None` when the result's
+        /// usage did not say.
+        cache_creation: Option<u64>,
         context_window: Option<u64>,
         subagents_spawned: u32,
         /// The final answer.
