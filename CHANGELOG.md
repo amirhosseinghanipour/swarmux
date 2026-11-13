@@ -8,6 +8,56 @@ follows [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Verifier and gate hardening. The verifier now checks what runs the tests as
+  well as the tests, and says so when it could not check something.
+  - The harness is a finding. Created, changed, moved or deleted, any file of a
+    built-in list (`conftest.py`, `pytest.ini`, `pyproject.toml`, `jest.config.*`,
+    `vitest.config.*`, `package.json`, `build.rs`, `.cargo/config.toml`,
+    `Cargo.toml`, `Makefile`, `.github/workflows/**`, `dart_test.yaml`,
+    `pubspec.yaml`, and more, see [the verifier](guide/verifier.md#the-test-harness)),
+    any `[[check]]` program that is a path in the repository, and
+    `[verifier] substrate = [...]` blocks the stop as *test harness changed*
+    (P1 when the gate gives up) unless `allow_substrate` or `allow_test_changes`
+    matches. Manifests are read, not just flagged: a change that only adds
+    dependencies or touches the package's metadata is not harness; a `[patch]`,
+    a `build =`, a test script or a pytest entry point is.
+  - The base suite and the hidden checks run on a copy made again from what the
+    agent left, with the harness and changed tests put back as the commit the job
+    started from had them (what the job created is removed). A planted
+    `conftest.py`, a cargo runner that runs nothing or a `build.rs` that rewrites
+    the source can make the visible checks pass; they are not there when the hidden
+    checks run.
+  - No silent skips. Hidden checks that exist and did not run show `hidden
+    checks: not run (reason)` on the wall card, in Focus, on the Work screen, in
+    the ledger and in the bundle. A mission whose hidden checks did not run, whose
+    checks ran in the worktree (`ran_in = "worktree"`), or whose change could not
+    be read is Escalate, never Pass.
+  - A `.swarmux/gates.toml` that cannot be read makes every verdict Escalate with
+    the parse error (it used to read as an empty gate and pass with a note);
+    `swarmux gate lint [--strict]` says what is wrong.
+  - `swarmux gate selftest` plants a harness file and deletes an assertion in
+    scratch copies and fails (exit 1) when the gate lets either through; the
+    result is a `policy` entry in the ledger. `[verifier] revert_probe = true`
+    reverts the non-test part of a change and requires a failing check.
+  - `[[check]]` takes `required`, `level` (`fast`, `full`, `deep`; with `[gate]
+    level` and `swarmux gate run --level`), `on_error = "fail"` and `env`. A flaky
+    check is named after `flaky_after` flakes in `flaky_window` runs. Checks run
+    with a clean environment: no `SWARMUX_*`, provider or other credentials,
+    whatever `env` lists.
+  - New or changed dependencies in a manifest or lockfile (Cargo, npm, pnpm, yarn,
+    pip, poetry, uv, go, pub) are listed with the package names, and block with
+    `[verifier] dependencies = "block"`.
+  - A plain job that ends gets its gate run once more when its last stop was not
+    a pass on the tree it left, and `unverified` when that cannot be done.
+  - Evidence bundles are `schema` 2 and record how the verdict was reached (where
+    the checks ran, planned against run, hidden not run, base suite, what was found).
+    Bundles of schema 1 still read and verify; a fixture pins their bytes.
+  - Every gate verdict in the ledger carries `policy_sha256`, the hash of the gate
+    configuration that judged it.
+  - The exploit corpus in `crates/infrastructure/tests/verifier_seeded.rs` covers
+    a planted `conftest.py`, a `.cargo/config.toml` runner, a `build.rs`, a jest
+    config's `testPathIgnorePatterns`, a `package.json` test script and more,
+    next to the honest fixes that must pass.
 - Guard hardening. Nothing below changes what a rule matches; it changes what
   the Guard does when it can't decide, and who may decide.
   - `[guard] on_unreachable` (`"auto"`, `"deny"`, `"ask"`, `"pass"`) sets what a
@@ -299,6 +349,15 @@ follows [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Hidden checks are kept per repository by its folder name and what it is (its
+  remote and root commit), like `shop.id-3fa9c1d2e4b7`, so two folders of one
+  name no longer share them. Checks kept under the plain folder name move to the
+  identity key the first time that repository is looked at (recorded in
+  `holdout/.migrated` and in the ledger as `holdout_migrated`); a name is handed
+  out once.
+- The base suite and the hidden checks no longer run in the copy the visible
+  checks ran in. `swarmux gate run` prints `gate cannot pass this: escalate` when
+  the gate could not vouch for work in which nothing was wrong.
 - Irreversible calls (risk R4) are allowed only by the typed confirmation, and
   the Guard enforces it, not only the key handler. A call that an allow rule
   (even a bare `Bash`) or `unmatched = "pass"` used to allow is now held for

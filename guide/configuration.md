@@ -16,7 +16,7 @@ The other settings live next to the feature they control:
 | `theme`, `layout`, `icons`, `motion`, `[themes]`, `[[layouts]]` | look and feel | [Themes](themes.md) |
 | `[guard]` | permission rules, the loop breaker, what happens when swarmux can't be reached, "always allow" scope and expiry, protected paths | [Guard](guard.md) |
 | `gates.toml` in a repository | the done-gate's checks and protected paths | [Done-gate](done-gate.md) |
-| `[verifier]` | clean copies and hidden checks | [Verifier](verifier.md) |
+| `[verifier]`, `[gate] level`, `[[check]] required/level/env` | clean copies, hidden checks, the harness list, check levels and environment, the revert probe | [Verifier](verifier.md#configuration) |
 | `[worktree]` | where worktrees go, port blocks | [Worktrees](worktrees.md) |
 | `[missions]` | plan-first, drift, and `landing` | [Missions](missions.md), [Landing](#landing) below |
 | `[deck]` | which panels the Deck shows, their order, the graph's direction, the sessions strip | [The Deck](deck.md#customizing-deck) |

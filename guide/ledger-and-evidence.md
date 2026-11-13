@@ -20,6 +20,68 @@ sealed (no passing verdict on the ledger, no git repository) is escalated
 instead of delivered, and missions delivered before bundles existed get one
 the next time swarmux starts.
 
+### What a bundle says about how it was checked (schema 2)
+
+A tick says the gate passed; it does not say how. A bundle of schema 2 has a
+`verification` object, read from the passing verdict's ledger entry, so it
+never shows more certainty than the run had:
+
+| Key | Says |
+| --- | --- |
+| `ran_in` | `clean_copy`, or `worktree` when the checks ran next to what the agent left (a mission is only delivered like that when its `gates.toml` says `worktree_checks = "allow"`) |
+| `planned`, `left_out` | the checks the gate meant to run, and those it left out with why (a level above the gate's) |
+| `hidden_not_run` | how many hidden checks exist and did not run, and why: `hidden checks: not run (reason)`. The `hidden` count beside it is only for checks that did run |
+| `base_suite` | whether the original tests passed with the job's code, and which files were put back |
+| `tampering`, `substrate`, `dependencies` | tests weakened, harness files created or changed, dependencies added or changed: what the gate found and let by |
+| `revert_probe` | whether the tests proved the change, when the probe ran |
+| `incomplete` | why the gate could not vouch, if it could not |
+| `policy_sha256` | the hash of the gate configuration that judged |
+
+`swarmux verify` prints what it says as findings that do not mismatch (`checks
+ran in: the worktree, next to what the agent left`, `hidden checks: not run
+(...)`, `planned check <name>: not run`): they are what the bundle does not
+establish. A bundle sealed before schema 2 prints `how it was checked: not
+recorded`.
+
+**Schema versions.** The bundle format is `schema` 2. Bundles of schema 1 are
+still read and verify as they always did: their digest covers the bytes they
+were sealed with, no new key is written into them when they are read back,
+and nothing is added to the digest of a bundle that already has one. Anything
+other than 1 or 2 is refused with its number. A fixture in the repository
+(`crates/domain/src/evidence/fixtures/bundle_v1.json`) pins the version 1
+bytes and its signature, which was also recomputed with `sha256sum`.
+
+### What a bundle says about how it was checked (schema 2)
+
+A tick says the gate passed; it does not say how. A bundle of schema 2 has a
+`verification` object, read from the passing verdict's ledger entry, so it
+never shows more certainty than the run had:
+
+| Key | Says |
+| --- | --- |
+| `ran_in` | `clean_copy`, or `worktree` when the checks ran next to what the agent left (a mission is only delivered like that when its `gates.toml` says `worktree_checks = "allow"`) |
+| `planned`, `left_out` | the checks the gate meant to run, and those it left out with why (a level above the gate's) |
+| `hidden_not_run` | how many hidden checks exist and did not run, and why: `hidden checks: not run (reason)`. The `hidden` count beside it is only for checks that did run |
+| `base_suite` | whether the original tests passed with the job's code, and which files were put back |
+| `tampering`, `substrate`, `dependencies` | tests weakened, harness files created or changed, dependencies added or changed: what the gate found and let by |
+| `revert_probe` | whether the tests proved the change, when the probe ran |
+| `incomplete` | why the gate could not vouch, if it could not |
+| `policy_sha256` | the hash of the gate configuration that judged |
+
+`swarmux verify` prints what it says as findings that do not mismatch (`checks
+ran in: the worktree, next to what the agent left`, `hidden checks: not run
+(...)`, `planned check <name>: not run`): they are what the bundle does not
+establish. A bundle sealed before schema 2 prints `how it was checked: not
+recorded`.
+
+**Schema versions.** The bundle format is `schema` 2. Bundles of schema 1 are
+still read and verify as they always did: their digest covers the bytes they
+were sealed with, no new key is written into them when they are read back,
+and nothing is added to the digest of a bundle that already has one. Anything
+other than 1 or 2 is refused with its number. A fixture in the repository
+(`crates/domain/src/evidence/fixtures/bundle_v1.json`) pins the version 1
+bytes and its signature, which was also recomputed with `sha256sum`.
+
 ```sh
 swarmux verify fast-search          # by mission
 swarmux verify .swarmux/evidence/fast-search.json
@@ -138,6 +200,22 @@ allows, and where it could not decide:
   was added, removed by `swarmux guard rules remove`, or pruned after its expiry
   (`rule`, `scope`, `root`, `source`, `created_at`, `expires_at` and the SHA-256
   of the rule as kept; the actor is `operator`).
+- `gate_selftest`: `swarmux gate selftest` ran. Each known-bad change it made
+  in a scratch copy and whether the gate refused it (`probes`), the probes it
+  could not make (`skipped`), the outcome (`pass` only when at least one was
+  made and all were refused), the repository, and the SHA-256 of the gate
+  configuration that judged (`policy_sha256`; the actor is `operator`).
+- `holdout_migrated`: hidden checks kept under a repository's folder name moved
+  to its identity key (`from`, `to`; the actor is `operator`). See [the
+  verifier](verifier.md#how-hidden-checks-are-kept-per-repository).
+- `gate_selftest`: `swarmux gate selftest` ran. Each known-bad change it made
+  in a scratch copy and whether the gate refused it (`probes`), the probes it
+  could not make (`skipped`), the outcome (`pass` only when at least one was
+  made and all were refused), the repository, and the SHA-256 of the gate
+  configuration that judged (`policy_sha256`; the actor is `operator`).
+- `holdout_migrated`: hidden checks kept under a repository's folder name moved
+  to its identity key (`from`, `to`; the actor is `operator`). See [the
+  verifier](verifier.md#how-hidden-checks-are-kept-per-repository).
 - `guard_fallback`: a hook call that fell back because swarmux could not be
   reached (when, job, tool, the SHA-256 of the hook input, why, what the hook
   printed, and the hash of the setting that decided it; the actor is
@@ -150,3 +228,28 @@ decided them, who resolved a held call (`human-typed`, `human-key`, `rule`,
 the optional JEV model existed (source `jev`, resolver `model`, with the
 provider, model and hash of what was sent) stay in the ledger unchanged and
 verify as before; swarmux no longer writes any.
+
+## What a gate verdict records
+
+An entry of kind `gate_verdict` is the gate's decision, and carries what it
+decided on: the checks (command, exit code, time, whether it flaked, the first
+failing line), the protected files that changed, the claims nothing backed,
+the tests weakened, and, since the verifier checks the harness:
+
+- `outcome`: `pass`, `block`, `escalate` for a stop; for a run nobody waited
+  for (a mission's verification, `swarmux gate run`) `pass`, `fail`, or
+  `escalate` when nothing was wrong with the change and the gate could not
+  vouch for it. It is never `pass` when the gate could not read its file,
+  hidden checks that exist did not run in a mission, or the checks ran in the
+  worktree where a mission does not allow that.
+- `substrate`, `dependencies`, `ran_in`, `planned`, `left_out`,
+  `hidden_not_run`, `base_suite`, `revert_probe`, `incomplete`, `warnings`,
+  `unattended`: what [the bundle](#what-a-bundle-says-about-how-it-was-checked-schema-2)
+  repeats.
+- `policy_sha256`: the SHA-256 of the gate configuration that judged (the
+  checks with their levels, `required`, environment names and timeouts, the
+  limits, and every `[verifier]` key). Change anything that decides a verdict
+  and the hash changes, so an entry says which rules judged it.
+
+Hidden checks are counted, never named, here as everywhere. Entries written
+before these keys existed read as having none of them.

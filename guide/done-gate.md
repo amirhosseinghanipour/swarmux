@@ -20,10 +20,27 @@ and `SubagentStop` hooks; when the agent tries to finish, swarmux:
    looser assertions, edited snapshots, wider tolerances, relaxed CI. A
    finding blocks the stop as *tests weakened*, with the lines that show it
    (see [Independent verifier](verifier.md#test-weakening-detector)).
-5. **Runs the checks against the original tests**: the test and protected
-   files the job changed are put back as the job's starting commit had them,
-   and the checks run again. Passing requires the tests that existed when
-   the job began, unmodified (*base suite*).
+5. **Reads the diff for the harness that runs the tests**: a `conftest.py`
+   planted, a `.cargo/config.toml` runner, a `build.rs`, a jest config, a
+   `package.json` test script, a `Makefile`, the CI pipeline. Every one
+   created, changed, moved or deleted blocks the stop as *test harness
+   changed* unless the repository allows it (see [The test
+   harness](verifier.md#the-test-harness)). New or changed dependencies are
+   listed.
+6. **Runs the checks against the original tests**: the test and protected
+   files the job changed, and the harness it changed, are put back as the
+   job's starting commit had them (what the job created is removed), and the
+   checks run again, then the hidden checks, in a copy made again from what
+   the agent left. Passing requires the tests that existed when the job began,
+   unmodified (*base suite*).
+
+Passing also means the gate could do all of that. If it could not, the verdict
+is **Escalate**, never Pass: `gates.toml` that cannot be read, and, for a
+mission, hidden checks that exist and did not run, or checks that ran in the
+worktree instead of a clean copy (see [When the gate cannot
+vouch](verifier.md#when-the-gate-cannot-vouch)). When a plain job (a session
+you were watching) ends, the gate runs once more unless its last stop passed on
+the tree it left, and a job that cannot be verified is shown as `unverified`.
 
 Anything wrong blocks the stop: the agent continues with a short digest (the
 failing check, its first failing lines verbatim, the changed protected files,
@@ -65,12 +82,20 @@ timeout_secs = 600
 [[check]]
 name = "lint"
 run = ["cargo", "clippy", "--", "-D", "warnings"]
+required = true           # false: a failure is reported and blocks nothing
+level = "fast"            # "fast" | "full" | "deep": from which [gate] level it runs (default "full")
+env = ["DATABASE_URL"]    # environment variables it may see besides the allowlist (never credentials)
 
 [verifier]
 clean = true              # run the checks in a clean copy (false: in the worktree)
 test_edits = "block"      # "block": weakened tests block the stop; "allow"
 base_suite = true         # run the checks again against the original tests
 allow_test_changes = ["tests/legacy/**"]   # test changes that are intended: not reported, not put back
+substrate = ["scripts/ci/**"]    # more harness files than the built-in list
+allow_substrate = ["Makefile"]   # harness files this repository changes on purpose
+revert_probe = false      # revert the non-test part of a change and require a failing check
+worktree_checks = "escalate"     # "escalate" | "allow": a mission whose checks ran in the worktree
+dependencies = "flag"     # "flag" | "block": new or changed dependencies
 ```
 
 The repository root is the nearest folder with a `.swarmux/gates.toml`, else
@@ -78,9 +103,25 @@ the nearest with `.git`. A `Stop` hook may take up to 30 minutes; a gate
 still running then lets the agent stop.
 
 ```sh
-swarmux gate show            # the gate that applies here: checks, protected paths, limits
-swarmux gate run             # run the checks now, as at a stop (recorded in the ledger); exits 1 if one fails
+swarmux gate show            # the gate that applies here: checks, protected paths, limits, the policy hash
+swarmux gate lint            # what is wrong with gates.toml, and what fell back to a default; --strict fails on warnings
+swarmux gate run             # run the checks now, as at a stop (recorded in the ledger); exits 1 unless the gate passes
 swarmux gate run --dir ../x  # for another repository
 swarmux gate run --in-place  # in the folder itself: no clean copy, no hidden checks
+swarmux gate run --level deep  # run the checks up to that level (fast, full, deep)
+swarmux gate selftest        # plant a harness file and delete an assertion in scratch copies: the gate must refuse both
+```
+
+A `gates.toml` that cannot be read (a syntax error, an unknown key, a value of
+the wrong kind) used to read as an empty gate with a note. It now makes every
+verdict Escalate with the parse error until it is fixed, so a typo cannot
+quietly turn the gate off. The keys added with the harness check are read one
+by one: a value that cannot be used falls back to its strict default with a
+warning (see [Configuration](verifier.md#configuration)).
+
+```text
+$ swarmux gate lint
+✗ .swarmux/gates.toml: unclosed table, expected `]`
+  The gate cannot pass until this is fixed: every verdict is escalate.
 ```
 
