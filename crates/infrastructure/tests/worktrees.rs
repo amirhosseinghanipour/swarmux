@@ -647,7 +647,11 @@ fn worktree_mode_follows_the_session_and_the_folder() {
     assert!(!app.worktrees.enabled_for(&outside));
     svc.dispatch(outside.id, "x").unwrap();
     assert_eq!(script.seen()[1].request.cwd, plain.path());
-    assert!(script.seen()[1].request.env.is_empty());
+    // Only what the Guard's hook is told.
+    assert_eq!(
+        script.seen()[1].request.env,
+        [("SWARMUX_GUARD_FAIL".to_string(), "open".to_string())]
+    );
 
     // Back to auto inside a repository: on.
     app.store.set_worktree(off.id, None).unwrap();

@@ -298,6 +298,7 @@ async fn board(wire: WireRequest, shared: &Shared) -> BoardReply {
 /// knowledge a file pulls, a rule's warning) unless it is denied.
 async fn decide(wire: WireRequest, shared: &Shared) -> WireReply {
     let id = shared.next_id.fetch_add(1, Ordering::Relaxed);
+    let fail = wire.fail.clone();
     let request = wire.into_hook_request(id);
     let (decision, micros) = shared.policy.decide(&request);
     let decision = if decision.verdict == Verdict::Ask {
@@ -307,9 +308,12 @@ async fn decide(wire: WireRequest, shared: &Shared) -> WireReply {
             request: request.clone(),
             answered: None,
         });
-        // If the app goes away, leave the call to Claude Code's own rules.
-        rx.await
-            .unwrap_or_else(|_| Decision::new(Verdict::Pass, None))
+        // If the app goes away, answer as the job's hook would have:
+        // unattended jobs are denied, the rest are left to Claude Code.
+        match rx.await {
+            Ok(decision) => decision,
+            Err(_) => return gone(fail.as_deref()),
+        }
     } else {
         let item = InboxItem {
             request: request.clone(),
@@ -323,6 +327,19 @@ async fn decide(wire: WireRequest, shared: &Shared) -> WireReply {
         reply.context = shared.responders.tool_context.tool_context(&request);
     }
     reply
+}
+
+/// The answer for a held call whose app went away, by the job's failure
+/// mode (`closed`, `ask`; anything else leaves the call to Claude Code).
+fn gone(fail: Option<&str>) -> WireReply {
+    match fail {
+        Some("closed") => WireReply::from_decision(&Decision::new(
+            Verdict::Deny,
+            Some("swarmux went away while this call was held; unattended jobs fail closed".into()),
+        )),
+        Some("ask") => WireReply::ask("swarmux went away while this call was held"),
+        _ => WireReply::pass(),
+    }
 }
 
 /// Hands a lifecycle event to the app and answers it: the events Claude
@@ -381,6 +398,24 @@ fn respond(event: HookEvent, notice: &HookNotice, shared: &Shared) -> WireReply 
         _ => {
             shared.responders.stop.observe(notice);
             WireReply::pass()
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_app_that_goes_away_answers_as_the_jobs_hook_would() {
+        let closed = gone(Some("closed"));
+        assert_eq!(closed.decision, "deny");
+        assert!(closed.reason.contains("unattended jobs fail closed"));
+        let v: serde_json::Value = serde_json::from_str(&closed.hook_output().unwrap()).unwrap();
+        assert_eq!(v["hookSpecificOutput"]["permissionDecision"], "deny");
+        assert_eq!(gone(Some("ask")).decision, "ask");
+        for open in [Some("open"), None, Some("surprise")] {
+            assert_eq!(gone(open), WireReply::pass());
         }
     }
 }

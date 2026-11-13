@@ -40,6 +40,7 @@ fn from_row(r: &Row) -> rusqlite::Result<DecisionRecord> {
         // Unknown sources (from a newer swarmux) read as the guard's.
         source: Source::parse(&r.get::<_, String>(7)?).unwrap_or_default(),
         confidence: r.get(8)?,
+        extra: swarmux_application::DecisionExtra::default(),
     })
 }
 
@@ -105,6 +106,7 @@ mod tests {
             ts,
             source: Source::Guard,
             confidence: None,
+            extra: swarmux_application::DecisionExtra::default(),
         }
     }
 

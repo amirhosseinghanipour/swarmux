@@ -54,6 +54,15 @@ pub struct WireRequest {
     pub raw_sha256: String,
     #[serde(default, skip_serializing_if = "is_zero")]
     pub raw_len: usize,
+    /// The subagent that made the call, when Claude Code says which.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_type: Option<String>,
+    /// What the hook does when it can't reach the app (`closed`, `ask` or
+    /// `open`), so an app that goes away mid-call answers the same way.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fail: Option<String>,
 }
 
 fn is_zero(n: &usize) -> bool {
@@ -84,6 +93,8 @@ impl WireRequest {
             tool_name: v.get("tool_name")?.as_str()?.to_string(),
             tool_input: v.get("tool_input").cloned().unwrap_or(Value::Null),
             cwd: str_at(&v, "cwd"),
+            agent_id: opt_str_at(&v, "agent_id"),
+            agent_type: opt_str_at(&v, "agent_type"),
             ..WireRequest::default()
         })
     }
@@ -166,6 +177,9 @@ impl WireRequest {
             raw,
             raw_sha256: hex(&sha256(stdin.as_bytes())),
             raw_len: stdin.len(),
+            agent_id: opt_str_at(&v, "agent_id"),
+            agent_type: opt_str_at(&v, "agent_type"),
+            fail: None,
         })
     }
 
@@ -240,6 +254,8 @@ impl WireRequest {
             input,
             cwd: self.cwd,
             content,
+            agent_id: self.agent_id,
+            agent_type: self.agent_type,
         }
     }
 }
@@ -323,6 +339,16 @@ impl WireReply {
         }
     }
 
+    /// Leave the call to Claude Code's own question.
+    pub fn ask(reason: &str) -> WireReply {
+        WireReply {
+            decision: "ask".into(),
+            reason: reason.to_string(),
+            output: None,
+            context: None,
+        }
+    }
+
     pub fn pass() -> WireReply {
         WireReply {
             decision: "pass".into(),
@@ -350,6 +376,7 @@ impl WireReply {
         let decision = match self.decision.as_str() {
             "allow" => Some("allow"),
             "deny" => Some("deny"),
+            "ask" => Some("ask"),
             _ => None,
         };
         let mut out = json!({ "hookEventName": "PreToolUse" });
@@ -371,6 +398,14 @@ fn str_at(v: &Value, key: &str) -> String {
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string()
+}
+
+fn opt_str_at(v: &Value, key: &str) -> Option<String> {
+    v.get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
 }
 
 fn first_line(s: &str) -> &str {

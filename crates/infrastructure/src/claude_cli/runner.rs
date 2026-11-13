@@ -20,7 +20,7 @@ use tokio::task::AbortHandle;
 use super::command::{build_args, display, env_for, user_message};
 use super::contention::{self, is_config_contention};
 use super::parse::parse_line;
-use crate::hook::{ENV_JOB, ENV_PIPE, hook_settings};
+use crate::hook::{ENV_JOB, ENV_PIPE, ENV_SPOOL, hook_settings_with};
 use crate::process::{Stagger, random_below, spawn_tokio};
 
 /// Makes `claude` report `system/session_state_changed` on stdout.
@@ -40,6 +40,10 @@ pub struct ClaudeCli {
     rt: Handle,
     running: Running,
     stagger: Arc<Stagger>,
+    /// Where each job's hook leaves what it could not ask the app.
+    spool: Option<PathBuf>,
+    /// Add `onFailure: "block"` to the PreToolUse hook.
+    on_failure_block: bool,
 }
 
 /// The Board's MCP server, added to the jobs on a mission's board.
@@ -76,10 +80,10 @@ pub struct GuardHook {
 
 impl GuardHook {
     /// `--settings` and its JSON.
-    fn args(&self) -> [String; 2] {
+    fn args(&self, on_failure_block: bool) -> [String; 2] {
         [
             "--settings".into(),
-            hook_settings(&self.exe, self.timeout_secs),
+            hook_settings_with(&self.exe, self.timeout_secs, on_failure_block),
         ]
     }
 }
@@ -99,7 +103,22 @@ impl ClaudeCli {
             rt,
             running: Running::default(),
             stagger: Stagger::shared(),
+            spool: None,
+            on_failure_block: false,
         }
+    }
+
+    /// Where each job's hook writes the calls it could not ask the app
+    /// about (`SWARMUX_GUARD_SPOOL`).
+    pub fn with_guard_spool(mut self, spool: PathBuf) -> ClaudeCli {
+        self.spool = Some(spool);
+        self
+    }
+
+    /// Adds `onFailure: "block"` to the PreToolUse hook of every job.
+    pub fn with_on_failure_block(mut self, on: bool) -> ClaudeCli {
+        self.on_failure_block = on;
+        self
     }
 
     /// How many jobs are still running.
@@ -143,9 +162,12 @@ impl AgentRunner for ClaudeCli {
         // A workspace job's repositories load their own instructions.
         env.extend(env_for(&request));
         if let Some(guard) = &self.guard {
-            extra_args.extend(guard.args());
+            extra_args.extend(guard.args(self.on_failure_block));
             env.push((ENV_PIPE.into(), guard.pipe.clone()));
             env.push((ENV_JOB.into(), job.to_string()));
+            if let Some(spool) = &self.spool {
+                env.push((ENV_SPOOL.into(), spool.to_string_lossy().into_owned()));
+            }
         }
         if let (Some(board), true) = (&self.board, request.board) {
             extra_args.extend(board.args(job));
@@ -171,7 +193,7 @@ impl AgentRunner for ClaudeCli {
     fn command_line(&self, request: &RunRequest) -> Option<String> {
         let mut args = build_args(request);
         if let Some(guard) = &self.guard {
-            args.extend(guard.args());
+            args.extend(guard.args(self.on_failure_block));
         }
         if let (Some(board), true) = (&self.board, request.board) {
             args.extend(board.args(request.job_id));

@@ -97,6 +97,8 @@ struct RawJev {
     provider: Option<String>,
     threshold: Option<f64>,
     timeout_ms: Option<i64>,
+    /// Read line by line: see `config_guard`.
+    max_allow: Option<toml::Value>,
     /// Only to refuse it with a clear message; its value is never read.
     api_key: Option<IgnoredAny>,
 }
@@ -109,6 +111,12 @@ struct RawGuard {
     unmatched: Option<String>,
     approval_timeout_secs: Option<i64>,
     loop_repeats: Option<i64>,
+    // Read line by line: see `config_guard`.
+    on_unreachable: Option<toml::Value>,
+    always_scope: Option<toml::Value>,
+    always_expiry_days: Option<toml::Value>,
+    protected_paths: Option<toml::Value>,
+    hook_on_failure_block: Option<toml::Value>,
 }
 
 /// Reads settings from `path`; a missing file gives the defaults.
@@ -163,12 +171,21 @@ pub fn parse_settings(text: &str, path: &Path) -> Result<Settings, ConfigError> 
         }
         settings.default_model = model.to_string();
     }
-    if let Some(guard) = raw.guard {
+    let mut extras = crate::config_guard::GuardExtras::default();
+    if let Some(mut guard) = raw.guard {
+        extras.on_unreachable = guard.on_unreachable.take();
+        extras.always_scope = guard.always_scope.take();
+        extras.always_expiry_days = guard.always_expiry_days.take();
+        extras.protected_paths = guard.protected_paths.take();
+        extras.hook_on_failure_block = guard.hook_on_failure_block.take();
         settings.guard = parse_guard(guard, text, path)?;
     }
-    if let Some(jev) = raw.jev {
+    let mut max_allow = None;
+    if let Some(mut jev) = raw.jev {
+        max_allow = jev.max_allow.take();
         settings.jev = parse_jev(jev, text, path)?;
     }
+    crate::config_guard::apply(extras, max_allow, text, &mut settings);
     if let Some(review) = raw.review {
         settings.review = parse_review(review, text, path)?;
     }
@@ -715,6 +732,7 @@ timeout_ms = 3000
                 provider: JevProvider::OpenRouter,
                 threshold: 0.9,
                 timeout_ms: Some(3000),
+                max_allow: swarmux_domain::alarm::Reversibility::R1,
             }
         );
         assert_eq!(parse("").unwrap().jev.provider, JevProvider::Off);

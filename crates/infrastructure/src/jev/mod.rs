@@ -90,6 +90,15 @@ impl DecisionAdvisor for JevHttp {
         &self.host
     }
 
+    fn model(&self) -> &str {
+        &self.endpoint.model
+    }
+
+    fn prompt_sha256(&self, request: &AdviceRequest) -> String {
+        let body = wire::request_body(&self.endpoint.model, request).to_string();
+        swarmux_domain::ledger::hex(&swarmux_domain::ledger::sha256(body.as_bytes()))
+    }
+
     fn has_key(&self) -> bool {
         self.key.is_some()
     }

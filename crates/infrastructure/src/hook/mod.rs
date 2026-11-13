@@ -6,6 +6,7 @@
 //! PreToolUse is decided by the Guard; the other events are recorded.
 
 mod client;
+mod fallback;
 mod protocol;
 mod server;
 mod statusline;
@@ -15,7 +16,8 @@ use std::path::Path;
 
 use swarmux_domain::HookEvent;
 
-pub use client::{board_call, hook_main, pre_tool, pre_tool_main, run_hook};
+pub use client::{HookEnv, board_call, hook_main, pre_tool, pre_tool_in, pre_tool_main, run_hook};
+pub use fallback::{ENV_FAIL, ENV_SPOOL, FileSpool, append as append_fallback, spool_file};
 pub use protocol::{BOARD_EVENT, WireReply, WireRequest, subject_of};
 pub use server::{HookServer, Responders};
 pub use statusline::{SpoolFeed, run_statusline, spool_dir, statusline_main};
@@ -41,6 +43,15 @@ pub const STOP_TIMEOUT_SECS: u64 = 1800;
 /// status line. PreToolUse is killed after `timeout_secs` (it may wait for
 /// the user); the events nobody waits for are registered asynchronous.
 pub fn hook_settings(exe: &Path, timeout_secs: u64) -> String {
+    hook_settings_with(exe, timeout_secs, false)
+}
+
+/// Like [`hook_settings`]; with `on_failure_block` the PreToolUse hook also
+/// carries `"onFailure": "block"`, which Claude Code versions that know it
+/// answer a failing hook with (a refusal rather than letting the call run).
+/// Versions that don't know the key ignore it. Which versions know it is
+/// not detected here: the key is added only when asked for.
+pub fn hook_settings_with(exe: &Path, timeout_secs: u64, on_failure_block: bool) -> String {
     let mut hooks = serde_json::Map::new();
     for event in HookEvent::ALL {
         let mut command = serde_json::json!({
@@ -51,6 +62,9 @@ pub fn hook_settings(exe: &Path, timeout_secs: u64) -> String {
         });
         if !event.is_blocking() {
             command["async"] = true.into();
+        }
+        if on_failure_block && event == HookEvent::PreToolUse {
+            command["onFailure"] = "block".into();
         }
         let mut group = serde_json::json!({ "hooks": [command] });
         if has_matcher(event) {
@@ -116,6 +130,24 @@ mod tests {
         assert_eq!(hook["timeout"], 130);
         assert_eq!(hook["async"], Value::Null);
         assert_eq!(v["hooks"]["PreToolUse"][0]["matcher"], "*");
+    }
+
+    #[test]
+    fn on_failure_block_is_added_to_the_pre_tool_hook_only_when_asked() {
+        let with: Value =
+            serde_json::from_str(&hook_settings_with(Path::new("/x/swarmux"), 130, true)).unwrap();
+        assert_eq!(
+            with["hooks"]["PreToolUse"][0]["hooks"][0]["onFailure"],
+            "block"
+        );
+        assert_eq!(
+            with["hooks"]["Stop"][0]["hooks"][0]["onFailure"],
+            Value::Null
+        );
+        assert_eq!(
+            settings()["hooks"]["PreToolUse"][0]["hooks"][0]["onFailure"],
+            Value::Null
+        );
     }
 
     #[test]
