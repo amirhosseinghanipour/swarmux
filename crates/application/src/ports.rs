@@ -70,6 +70,19 @@ pub trait JobRepository {
     ) -> AppResult<()>;
     /// Oldest first.
     fn events(&self, id: JobId) -> AppResult<Vec<StoredEvent>>;
+    /// The newest `limit` events of the job stored at or before `until`,
+    /// oldest first: the tail of the session stream as it stood at that
+    /// moment. What the console quotes a held call's agent from.
+    ///
+    /// The default reads the whole stream; an adapter with an index
+    /// should read only the tail, since a long job stores thousands of
+    /// events.
+    fn recent_events(&self, id: JobId, until: Millis, limit: usize) -> AppResult<Vec<StoredEvent>> {
+        let mut all = self.events(id)?;
+        all.retain(|e| e.ts <= until);
+        let skip = all.len().saturating_sub(limit);
+        Ok(all.split_off(skip))
+    }
     /// Marks jobs left `running` (crash or quit) as `interrupted`. Returns how many.
     fn interrupt_running(&self, now: Millis) -> AppResult<usize>;
     /// The newest `limit` jobs, newest first.

@@ -747,6 +747,10 @@ impl JobRepository for LedgeredJobs {
         self.inner.events(id)
     }
 
+    fn recent_events(&self, id: JobId, until: Millis, limit: usize) -> AppResult<Vec<StoredEvent>> {
+        self.inner.recent_events(id, until, limit)
+    }
+
     fn interrupt_running(&self, now: Millis) -> AppResult<usize> {
         let n = self.inner.interrupt_running(now)?;
         if n > 0 {

@@ -265,6 +265,29 @@ impl JobRepository for SqliteStore {
         rows.collect::<Result<_, _>>().or_storage()
     }
 
+    fn recent_events(&self, id: JobId, until: Millis, limit: usize) -> AppResult<Vec<StoredEvent>> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT ts, kind, actor, payload_json FROM                  (SELECT id, ts, kind, actor, payload_json FROM events                   WHERE job_id = ?1 AND ts <= ?2 ORDER BY id DESC LIMIT ?3)                  ORDER BY id",
+            )
+            .or_storage()?;
+        let rows = stmt
+            .query_map(
+                rusqlite::params![id.0, until, i64::try_from(limit).unwrap_or(i64::MAX)],
+                |r| {
+                    Ok(StoredEvent {
+                        ts: r.get(0)?,
+                        kind: r.get(1)?,
+                        actor: r.get(2)?,
+                        payload: r.get(3)?,
+                    })
+                },
+            )
+            .or_storage()?;
+        rows.collect::<Result<_, _>>().or_storage()
+    }
+
     fn interrupt_running(&self, now: Millis) -> AppResult<usize> {
         self.conn
             .execute(
@@ -412,6 +435,38 @@ mod tests {
             (ev[1].ts, ev[1].kind.as_str(), ev[1].actor.as_str()),
             (6, "text", "toolu_A")
         );
+    }
+
+    #[test]
+    fn recent_events_are_the_tail_of_the_stream_up_to_a_moment() {
+        let (s, sess) = store();
+        let id = JobRepository::insert(&s, &new_job(sess.id, "a"), 1).unwrap();
+        let other = JobRepository::insert(&s, &new_job(sess.id, "b"), 1).unwrap();
+        for (ts, text) in [(10, "one"), (20, "two"), (30, "three"), (40, "four")] {
+            s.append_event(id, "text", "lead", text, ts).unwrap();
+        }
+        s.append_event(other, "text", "lead", "not mine", 25)
+            .unwrap();
+        let texts = |until, limit| -> Vec<String> {
+            s.recent_events(id, until, limit)
+                .unwrap()
+                .into_iter()
+                .map(|e| e.payload)
+                .collect()
+        };
+        // The newest two at or before 30, oldest first.
+        assert_eq!(texts(30, 2), ["two", "three"]);
+        // Everything when the limit is large; nothing before the first.
+        assert_eq!(texts(1_000, 10), ["one", "two", "three", "four"]);
+        assert!(texts(5, 10).is_empty());
+        // The default (whole stream, filtered) agrees with the index.
+        let all = s.events(id).unwrap();
+        let upto: Vec<String> = all
+            .iter()
+            .filter(|e| e.ts <= 30)
+            .map(|e| e.payload.clone())
+            .collect();
+        assert_eq!(upto[upto.len() - 2..], texts(30, 2));
     }
 
     #[test]
