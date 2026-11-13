@@ -20,6 +20,7 @@ mod guard;
 mod hook;
 mod job;
 mod json;
+pub mod keys;
 pub mod knowledge;
 pub mod ledger;
 pub mod mission;
