@@ -469,14 +469,15 @@ impl GuardService {
             .iter()
             .find(|h| h.request.request_id == request_id)
             .ok_or(AppError::ApprovalNotFound)?;
-        if held.owner_only {
+        let request = held.request.clone();
+        let owner_only = held.owner_only;
+        let rule = always_rule(&request.tool_name, &request.subject, &request.cwd)
+            .map_err(|r| AppError::Guard(r.to_string()))?;
+        if owner_only {
             return Err(AppError::Guard(
                 "this call is held by a protection; it can only be allowed once".into(),
             ));
         }
-        let request = held.request.clone();
-        let rule = always_rule(&request.tool_name, &request.subject, &request.cwd)
-            .map_err(|r| AppError::Guard(r.to_string()))?;
         self.adopt(rule, RuleSource::AlwaysAllow, &request, Some(request_id))
     }
 

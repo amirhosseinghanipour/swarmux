@@ -843,6 +843,21 @@ fn build_app(
     // Rules added in earlier runs, and the hook calls that fell back while
     // swarmux was not running.
     let mut startup_notes: Vec<String> = settings.warnings.clone();
+    // Said at every start: what the Guard does when swarmux can't be reached.
+    {
+        use swarmux_application::FailMode;
+        let (unattended, watched) = (
+            guard_settings.on_unreachable.mode(true),
+            guard_settings.on_unreachable.mode(false),
+        );
+        if unattended != FailMode::Closed || watched != FailMode::Closed {
+            startup_notes.push(format!(
+                "guard: if swarmux can't be reached, unattended jobs are {} and other jobs are {} (guard.on_unreachable)",
+                if unattended == FailMode::Closed { "denied" } else { "left to Claude Code" },
+                if watched == FailMode::Closed { "denied" } else { "left to Claude Code" },
+            ));
+        }
+    }
     match guard.load_rules() {
         Ok(skipped) => startup_notes.extend(skipped.iter().map(|r| {
             format!(

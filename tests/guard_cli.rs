@@ -61,8 +61,16 @@ fn seed(home: &Path) -> (StoredRule, StoredRule) {
 #[test]
 fn rules_list_remove_and_prune_are_ledgered() {
     let home = tempfile::tempdir().unwrap();
-    std::fs::write(home.path().join(".swarmux").join("config.toml"), "").ok();
     let (live, old) = seed(home.path());
+    // A rule written in config.toml before this version, with no scope or
+    // expiry of its own, keeps working and is listed as such.
+    std::fs::write(
+        home.path().join(".swarmux").join("config.toml"),
+        "[guard]
+allow = [\"Bash(npm test)\"]
+",
+    )
+    .unwrap();
 
     let list = swarmux(home.path(), &["guard", "rules", "list"]);
     assert!(list.status.success());
@@ -75,6 +83,10 @@ fn rules_list_remove_and_prune_are_ledgered() {
     assert!(out.contains("repo /work/app"), "{out}");
     assert!(out.contains("source always_allow"), "{out}");
     assert!(out.contains("EXPIRED"), "{out}");
+    assert!(
+        out.contains("Bash(npm test)") && out.contains("global, never expires (source config"),
+        "{out}"
+    );
 
     let removed = swarmux(home.path(), &["guard", "rules", "remove", &live.id]);
     println!("{}", text(&removed));
@@ -88,7 +100,12 @@ fn rules_list_remove_and_prune_are_ledgered() {
     assert!(pruned.status.success());
     assert!(out.contains(&old.id), "{out}");
     let list = text(&swarmux(home.path(), &["guard", "rules", "list"]));
-    assert!(list.contains("no allow rules"), "{list}");
+    assert!(
+        list.contains("Bash(npm test)")
+            && !list.contains("Bash(make all)")
+            && !list.contains("Bash(cargo fmt)"),
+        "only the rule written in config.toml is left: {list}"
+    );
 
     let tail = text(&swarmux(home.path(), &["audit", "tail", "-n", "10"]));
     println!("{tail}");
