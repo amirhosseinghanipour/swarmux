@@ -1,7 +1,7 @@
 //! A screen drawn into a `TestBackend` buffer, with the questions a layout
 //! test asks of it: what is on which row, where does a word start, what
-//! does a cell look like. The helper later milestones build their layout
-//! tests on; it draws through the same `draw` the terminal uses.
+//! does a cell look like. The helper the layout tests of new screens build
+//! on; it draws through the same `draw` the terminal uses.
 
 use ratatui::{
     buffer::Buffer,
