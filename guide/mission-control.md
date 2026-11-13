@@ -92,3 +92,26 @@ to act on.
   `held: you're at 78% load`; reviews keep running. Set the line with
   `load_hold_at` in `[governor]`, or `1.0` to turn the hold off.
 
+### Where an outcome stands
+
+The console's read model (the data the Work and Deck screens are built on)
+puts every outcome, a mission or a job without one, in one of four groups,
+using the inbox's own priorities and nothing new:
+
+1. **Decide.** Something needs you: a held call, a question, a failed job, a
+   gate that gave up, a recovery that did not work, a plan to approve, a merge
+   that cannot happen, a reviewer's concerns, a build that strayed from its
+   plan, or a mission that was escalated (always at least P2). Ordered by
+   priority, then by the earliest auto-deny deadline (an ask without one
+   last), then by the oldest ask.
+2. **Ready to land.** The gate passed and the work has not landed. Waiting
+   longest first.
+3. **Running.** A job is out for it, or it waits for a slot. Verifying first,
+   then running, then queued; oldest first.
+4. **Landed.** Delivered with proof. Newest first.
+
+A result to read, a quiet job, a follow-up and a knowledge item never move an
+outcome out of its group; a finished job nobody asks about is on no queue.
+Ties are broken by the outcome's id, so the order never depends on the order
+things were read in.
+

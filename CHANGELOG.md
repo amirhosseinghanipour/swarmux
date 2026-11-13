@@ -8,6 +8,14 @@ follows [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- A console read model, the data layer for the Work and Deck screens and later
+  a daemon API or phone client: ranked outcome groups (decide, ready to land,
+  running, landed), each outcome's contract, plan and drift, checks and gate
+  stages, the agent's claim, evidence references and what landing does; the
+  Guard's holds with the countdown and the agent's own words quoted from its
+  stored session stream; and the Deck's graph of task dependencies, contract
+  links and file claims. Plain serde data with a versioned, golden-tested JSON
+  shape; no screen uses it yet.
 - Customizable hotkeys: a `[keys]` section in `config.toml` rebinds any
   action (one key, a list, a chord like `"g w"`, `ctrl+x`, `alt+x`,
   `shift+tab`, `f5`) or unbinds it with an empty list; what you don't mention
