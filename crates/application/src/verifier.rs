@@ -339,6 +339,8 @@ impl Verifier {
                 !p.starts_with(".swarmux/")
                     && (is_test_path(p) || protected_glob(&globs, p, fold).is_some())
                     && protected_glob(&spec.allow_test_changes, p, fold).is_none()
+                    // Put back with the harness already.
+                    && !substrate_paths.contains(p)
             })
             .collect();
         Harness {

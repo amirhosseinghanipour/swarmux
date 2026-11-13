@@ -4,7 +4,7 @@ use std::sync::mpsc::Receiver;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use super::*;
-use crate::gate::{GateKeeper, GateRecord, GateSource, LoadedGate, WriteFence};
+use crate::gate::{GateKeeper, GateRecord, GateSource, JobGates, LoadedGate, WriteFence};
 use crate::hookbus::{HookNotice, StopAnswer, StopContext, StopPolicy};
 use crate::{AppError, ExecutionLog};
 use swarmux_domain::gate::{GateOrigin, GateOutcome, Pin};
@@ -123,6 +123,10 @@ struct Copies {
     fail_on_restore: Mutex<Option<(Arc<Checks>, String)>>,
     /// What the copies hold, and what the base commit held.
     resets: Mutex<Vec<()>>,
+    /// Putting files back fails with this.
+    fail_restore: Mutex<Option<String>>,
+    /// The diff cannot be read.
+    diff_error: Mutex<bool>,
     files: Mutex<std::collections::BTreeMap<String, Vec<u8>>>,
     base_files: Mutex<std::collections::BTreeMap<String, Vec<u8>>>,
 }
@@ -146,6 +150,9 @@ impl CleanCopy for Copy {
 
     fn diff_from(&self, base: Option<&str>) -> AppResult<String> {
         lock(&self.bases).push(base.map(str::to_string));
+        if *lock(&self.owner.diff_error) {
+            return Err(AppError::Workspace("no commit to compare with".into()));
+        }
         Ok(self.diff.clone())
     }
 
@@ -154,7 +161,10 @@ impl CleanCopy for Copy {
         if let Some((checks, name)) = &*lock(&self.owner.fail_on_restore) {
             checks.fail(name);
         }
-        Ok(())
+        match &*lock(&self.owner.fail_restore) {
+            Some(why) => Err(AppError::Workspace(why.clone())),
+            None => Ok(()),
+        }
     }
 
     fn head(&self) -> Option<&str> {
@@ -633,4 +643,244 @@ fn tests_weakened_in_any_way_block_with_the_evidence_and_say_whether_the_checks_
         record.findings.checks_weakened,
         "a cargo test check runs it"
     );
+}
+
+// --- X2: the harness, the copy made again, and what did not run -------------
+
+/// A diff that creates `path` with one line.
+fn created_file(path: &str) -> String {
+    format!(
+        "diff --git a/{path} b/{path}\nnew file mode 100644\n--- /dev/null\n+++ b/{path}\n@@ -0,0 +1 @@\n+planted\n"
+    )
+}
+
+#[test]
+fn a_planted_harness_file_is_a_finding_and_is_taken_away_before_the_hidden_checks_run() {
+    let w = world();
+    w.holdout.hide(SECRET);
+    *lock(&w.copies.diff) = created_file("conftest.py");
+    w.start();
+    let (answer, record) = w.stop();
+    let StopAnswer::Block { reason } = answer else {
+        panic!("a planted harness file must block");
+    };
+    assert!(
+        reason.contains("test harness changed: conftest.py"),
+        "{reason}"
+    );
+    assert!(
+        reason.contains("pytest runs it before every test"),
+        "{reason}"
+    );
+    assert!(!reason.contains(SECRET), "{reason}");
+    let record = record.unwrap();
+    assert_eq!(record.outcome, GateOutcome::Block);
+    assert_eq!(
+        record.findings.substrate,
+        ["conftest.py: harness file created (pytest runs it before every test)"]
+    );
+    // The copy was made again from what the agent left and the harness put
+    // back (a file the base did not have is removed) before the hidden ran.
+    assert_eq!(lock(&w.copies.resets).len(), 1);
+    assert_eq!(
+        *lock(&w.copies.restored),
+        [("base-sha".to_string(), vec!["conftest.py".to_string()])]
+    );
+    assert_eq!(
+        record.findings.hidden,
+        Some(HiddenTally { ran: 1, passed: 1 })
+    );
+}
+
+#[test]
+fn a_new_test_is_taken_out_of_the_copy_the_hidden_checks_run_in() {
+    let w = world();
+    w.holdout.hide(SECRET);
+    *lock(&w.copies.diff) = created_file("tests/new.rs");
+    w.start();
+    let (answer, record) = w.stop();
+    assert_eq!(answer, StopAnswer::Allow, "{record:?}");
+    let restores = lock(&w.copies.restored).clone();
+    assert_eq!(
+        restores,
+        [("base-sha".to_string(), vec!["tests/new.rs".to_string()])],
+        "removed for the hidden run; the visible run had it"
+    );
+}
+
+#[test]
+fn hidden_checks_that_cannot_be_given_a_restored_copy_do_not_run_and_say_why() {
+    let w = world();
+    w.holdout.hide(SECRET);
+    *lock(&w.copies.diff) = created_file("conftest.py");
+    *lock(&w.copies.fail_restore) = Some("git: pathspec did not match".into());
+    w.start();
+    let (_, record) = w.stop();
+    let record = record.unwrap();
+    assert_eq!(record.findings.hidden, None, "none ran");
+    let not_run = record.findings.hidden_not_run.expect("said so");
+    assert_eq!(not_run.planned, 1);
+    assert!(
+        not_run
+            .reason
+            .contains("the test harness could not be put back"),
+        "{not_run:?}"
+    );
+    assert!(not_run.reason.contains("pathspec"), "{not_run:?}");
+    assert!(lock(&w.holdout.placed).is_empty(), "nothing was placed");
+    // An agent that is blocked is told what to fix, not the verifier's own
+    // trouble; the record, the ledger and the screens carry it.
+    assert!(
+        !record.digest.contains("hidden checks: not run"),
+        "{}",
+        record.digest
+    );
+}
+
+#[test]
+fn hidden_checks_that_never_had_a_harness_to_restore_still_run_after_a_reset() {
+    let w = world();
+    w.holdout.hide(SECRET);
+    w.start();
+    let (answer, record) = w.stop();
+    assert_eq!(answer, StopAnswer::Allow);
+    assert_eq!(
+        record.unwrap().findings.hidden,
+        Some(HiddenTally { ran: 1, passed: 1 })
+    );
+    assert_eq!(
+        lock(&w.copies.resets).len(),
+        1,
+        "made again before the hidden files"
+    );
+    assert!(lock(&w.copies.restored).is_empty(), "nothing to put back");
+}
+
+#[test]
+fn a_diff_that_cannot_be_read_is_said_and_a_mission_is_not_passed_on_it() {
+    let w = world();
+    *lock(&w.copies.diff_error) = true;
+    w.keeper
+        .assign(w.job, swarmux_domain::mission::MissionGate::default());
+    w.start();
+    let (_, record) = w.stop();
+    let record = record.unwrap();
+    assert!(record.findings.unscanned.is_some());
+    assert_eq!(record.outcome, GateOutcome::Escalate, "{}", record.digest);
+    assert!(
+        record
+            .findings
+            .incomplete()
+            .iter()
+            .any(|s| s.starts_with("not scanned for tampering")),
+        "{:?}",
+        record.findings.incomplete()
+    );
+}
+
+#[test]
+fn checks_above_the_gates_level_are_named_not_silently_skipped() {
+    let w = world();
+    {
+        let mut spec = lock(&w.source.spec);
+        let mut deep = GateCheck::new("soak", "cargo", &["test", "--ignored"]);
+        deep.level = swarmux_domain::gate::GateLevel::Deep;
+        spec.checks.push(deep);
+    }
+    w.start();
+    let (answer, record) = w.stop();
+    assert_eq!(answer, StopAnswer::Allow);
+    let record = record.unwrap();
+    assert_eq!(record.findings.planned, ["cargo test"]);
+    assert_eq!(
+        record.findings.left_out,
+        [(
+            "soak".to_string(),
+            "level deep is above the gate's full".to_string()
+        )]
+    );
+    assert!(
+        record
+            .digest
+            .contains("check soak not run (level deep is above the gate's full)"),
+        "{}",
+        record.digest
+    );
+    assert!(!w.checks.roots().is_empty());
+    assert!(lock(&w.checks.ran).iter().all(|(n, _)| n != "soak"));
+
+    lock(&w.source.spec).level = swarmux_domain::gate::GateLevel::Deep;
+    let (_, record) = w.stop();
+    let record = record.unwrap();
+    assert_eq!(record.findings.planned, ["cargo test", "soak"]);
+    assert!(record.findings.left_out.is_empty());
+}
+
+#[test]
+fn an_optional_check_that_fails_is_reported_and_does_not_block() {
+    let w = world();
+    {
+        let mut spec = lock(&w.source.spec);
+        spec.checks[0].required = false;
+    }
+    w.checks.fail("cargo test");
+    w.start();
+    let (answer, record) = w.stop();
+    assert_eq!(answer, StopAnswer::Allow);
+    let record = record.unwrap();
+    assert_eq!(record.outcome, GateOutcome::Pass);
+    assert_eq!(record.findings.optional, ["cargo test"]);
+    assert_eq!(record.findings.failed_optional().count(), 1);
+    assert!(
+        record.digest.contains("1 check passed") || record.digest.contains("0 checks passed"),
+        "{}",
+        record.digest
+    );
+}
+
+#[test]
+fn dependencies_in_a_lockfile_are_named_and_the_hash_of_the_policy_rides_with_the_verdict() {
+    let w = world();
+    *lock(&w.copies.diff) = "diff --git a/Cargo.lock b/Cargo.lock\n--- a/Cargo.lock\n+++ b/Cargo.lock\n@@ -1 +1,3 @@\n+[[package]]\n+name = \"leftpad\"\n+version = \"2.0.0\"\n"
+        .into();
+    w.start();
+    let (answer, record) = w.stop();
+    assert_eq!(answer, StopAnswer::Allow);
+    let record = record.unwrap();
+    assert_eq!(record.findings.dependencies, ["Cargo.lock: leftpad"]);
+    assert_eq!(record.findings.policy_sha256.len(), 64);
+    assert_eq!(
+        record.findings.policy_sha256,
+        lock(&w.source.spec).policy_sha256()
+    );
+}
+
+#[test]
+fn a_manifest_read_from_the_base_and_the_copy_is_told_apart_from_harness() {
+    let w = world();
+    *lock(&w.copies.diff) = "diff --git a/Cargo.toml b/Cargo.toml\n--- a/Cargo.toml\n+++ b/Cargo.toml\n@@ -1 +1,2 @@\n+x\n".into();
+    lock(&w.copies.base_files).insert(
+        "Cargo.toml".into(),
+        b"[package]\nname = \"a\"\n[dependencies]\n".to_vec(),
+    );
+    lock(&w.copies.files).insert(
+        "Cargo.toml".into(),
+        b"[package]\nname = \"a\"\n[dependencies]\nleftpad = \"2\"\n".to_vec(),
+    );
+    w.start();
+    let (answer, record) = w.stop();
+    assert_eq!(answer, StopAnswer::Allow, "{record:?}");
+    let record = record.unwrap();
+    assert!(record.findings.substrate.is_empty());
+    assert_eq!(record.findings.dependencies, ["Cargo.toml: leftpad"]);
+
+    // A [patch] in the same manifest is harness.
+    lock(&w.copies.files).insert(
+        "Cargo.toml".into(),
+        b"[package]\nname = \"a\"\n[dependencies]\n[patch.crates-io]\nserde = { path = \"x\" }\n"
+            .to_vec(),
+    );
+    let (answer, record) = w.stop();
+    assert!(matches!(answer, StopAnswer::Block { .. }));
+    assert!(record.unwrap().findings.substrate[0].contains("[patch]"));
 }

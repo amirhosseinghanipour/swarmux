@@ -516,3 +516,123 @@ fn a_decision_made_by_the_removed_jev_still_records_and_the_chain_holds() {
     assert!(p.contains("\"resolver\":\"model\""), "{p}");
     assert!(verify_all(&*f.ledger).unwrap().is_ok());
 }
+
+// --- X2: the gate's own decisions in the ledger ------------------------------
+
+#[test]
+fn a_selftest_and_a_holdout_migration_are_ledgered_and_the_chain_holds() {
+    let f = fixture();
+    f.service
+        .record_gate_selftest(
+            "/repo",
+            &[
+                (
+                    "planted conftest.py".to_string(),
+                    true,
+                    "conftest.py: harness file created".to_string(),
+                ),
+                (
+                    "deleted an assertion".to_string(),
+                    false,
+                    "the gate found nothing wrong".to_string(),
+                ),
+            ],
+            &[("another".to_string(), "no test".to_string())],
+            &"cd".repeat(32),
+            2_000,
+        )
+        .unwrap();
+    f.service
+        .record_holdout_migrated("shop", "shop.id-0123456789ab", 3_000)
+        .unwrap();
+    let entries = policy_entries(&f.ledger);
+    assert_eq!(entries.len(), 2);
+    let selftest = &entries[0].draft.payload_json;
+    for says in [
+        "\"event\":\"gate_selftest\"",
+        "\"outcome\":\"fail\"",
+        "\"root\":\"/repo\"",
+        "\"caught\":true",
+        "\"caught\":false",
+        "\"skipped\":[{\"name\":\"another\"",
+        "\"policy_sha256\":\"cdcd",
+    ] {
+        assert!(selftest.contains(says), "{says} in {selftest}");
+    }
+    let moved = &entries[1].draft.payload_json;
+    assert!(moved.contains("\"event\":\"holdout_migrated\""), "{moved}");
+    assert!(moved.contains("\"from\":\"shop\""), "{moved}");
+    assert!(moved.contains("\"to\":\"shop.id-0123456789ab\""), "{moved}");
+    assert!(
+        verify_all(&*f.ledger).unwrap().is_ok(),
+        "the chain still holds"
+    );
+
+    // Every probe refused: the outcome is a pass.
+    f.service
+        .record_gate_selftest(
+            "/repo",
+            &[("planted".to_string(), true, "found".to_string())],
+            &[],
+            "ab",
+            4_000,
+        )
+        .unwrap();
+    assert!(
+        policy_entries(&f.ledger)[2]
+            .draft
+            .payload_json
+            .contains("\"outcome\":\"pass\"")
+    );
+    // None made is not a pass.
+    f.service
+        .record_gate_selftest("/repo", &[], &[], "ab", 5_000)
+        .unwrap();
+    assert!(
+        policy_entries(&f.ledger)[3]
+            .draft
+            .payload_json
+            .contains("\"outcome\":\"fail\"")
+    );
+}
+
+#[test]
+fn a_manual_run_that_found_nothing_wrong_but_could_not_vouch_is_never_recorded_as_a_pass() {
+    use crate::gate::GateRecord;
+    use swarmux_domain::gate::{GateFindings, GateOrigin, GateOutcome, RanIn};
+    let f = fixture();
+    let findings = GateFindings {
+        ran_in: Some(RanIn::Worktree),
+        unattended: true,
+        ..GateFindings::default()
+    };
+    assert!(findings.clean() && !findings.incomplete().is_empty());
+    let record = |outcome| GateRecord {
+        job: None,
+        session: String::new(),
+        event: None,
+        root: "/r".into(),
+        origin: GateOrigin::File,
+        outcome,
+        blocks: 0,
+        max_blocks: 0,
+        findings: findings.clone(),
+        digest: String::new(),
+        problem: None,
+    };
+    f.service
+        .record_gate(&record(GateOutcome::Escalate), None, 1_000)
+        .unwrap();
+    let entries: Vec<String> = f
+        .ledger
+        .entries()
+        .into_iter()
+        .filter(|e| e.draft.kind == LedgerKind::GateVerdict)
+        .map(|e| e.draft.payload_json)
+        .collect();
+    assert!(
+        entries[0].contains("\"outcome\":\"escalate\""),
+        "{}",
+        entries[0]
+    );
+}

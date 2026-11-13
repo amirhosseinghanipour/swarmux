@@ -903,3 +903,87 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod verifier_chips {
+    use super::*;
+    use swarmux_application::GateNotes;
+    use swarmux_domain::gate::RanIn;
+
+    fn state(notes: GateNotes) -> GateState {
+        GateState {
+            outcome: GateOutcome::Escalate,
+            blocks: 0,
+            max_blocks: 3,
+            checks: vec![("cargo test".into(), true, false)],
+            protected_changed: 0,
+            evidence_gaps: 0,
+            hidden: None,
+            tampering: 0,
+            checks_weakened: false,
+            base_suite: None,
+            digest: String::new(),
+            problem: None,
+            at: 0,
+            notes,
+        }
+    }
+
+    fn chips(notes: GateNotes) -> Vec<(String, Tone)> {
+        gate_chips(&state(notes))
+            .into_iter()
+            .map(|c| (c.text, c.tone))
+            .collect()
+    }
+
+    #[test]
+    fn hidden_checks_that_did_not_run_are_a_chip_with_the_reason_never_a_missing_one() {
+        let shown = chips(GateNotes {
+            hidden_not_run: Some("hidden checks: not run (no clean copy was made)".into()),
+            ..GateNotes::default()
+        });
+        assert!(
+            shown.contains(&(
+                "hidden: not run (no clean copy was made)".to_string(),
+                Tone::Warn
+            )),
+            "{shown:?}"
+        );
+        assert!(
+            chips(GateNotes::default())
+                .iter()
+                .all(|(t, _)| !t.contains("hidden")),
+            "nothing planned, nothing said"
+        );
+    }
+
+    #[test]
+    fn where_the_checks_ran_what_changed_and_what_flaked_show_beside_the_verdict() {
+        let shown = chips(GateNotes {
+            ran_in: Some(RanIn::Worktree),
+            substrate: 2,
+            dependencies: 1,
+            flaky: vec![("unit".into(), 3, 10)],
+            ..GateNotes::default()
+        });
+        for (text, tone) in [
+            ("ran in the worktree", Tone::Warn),
+            ("test harness changed", Tone::Bad),
+            ("dependencies changed", Tone::Warn),
+            ("unit flaky 3/10", Tone::Warn),
+        ] {
+            assert!(
+                shown.contains(&(text.to_string(), tone)),
+                "{text}: {shown:?}"
+            );
+        }
+        let clean = chips(GateNotes {
+            ran_in: Some(RanIn::CleanCopy),
+            ..GateNotes::default()
+        });
+        assert!(
+            clean.iter().all(|(t, _)| !t.contains("worktree")),
+            "{clean:?}"
+        );
+    }
+}

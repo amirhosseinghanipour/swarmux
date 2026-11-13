@@ -149,9 +149,6 @@ pub fn run(dir: Option<PathBuf>, in_place: bool, level: Option<&str>) -> anyhow:
     let gate = with_level(load(dir)?, level)?;
     let paths = Paths::default_home()?;
     let verifier = holdout::verifier(&paths, holdout::checker());
-    if let Some(p) = &gate.problem {
-        println!("✗ gates.toml could not be used: {p}");
-    }
     let clean = !in_place && gate.spec.verifier.clean;
     if clean && verifier.applies(&gate.root, &gate.spec, true) {
         return run_clean(&gate, &verifier);

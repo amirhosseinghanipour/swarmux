@@ -1547,3 +1547,62 @@ mod erased {
 }
 
 mod c3;
+
+#[test]
+fn hidden_checks_that_exist_and_did_not_run_say_so_with_why_never_a_bare_none() {
+    let mut r = evening();
+    // Job 3's gate: hidden checks exist and could not run.
+    let failed = JobId(3);
+    r.details.get_mut(&failed).unwrap().hidden_not_run =
+        Some("hidden checks: not run (the test harness could not be put back)".into());
+    let snap = r.snapshot();
+    let o = outcome(&snap, "job:3");
+    let hidden = o
+        .checks
+        .stages
+        .iter()
+        .find(|s| s.key == StageKey::HiddenChecks)
+        .unwrap();
+    assert_eq!(hidden.state, StageState::NotRun);
+    assert_eq!(
+        hidden.summary,
+        "hidden checks: not run (the test harness could not be put back)"
+    );
+    assert_eq!((hidden.ran, hidden.passed), (None, None));
+
+    // With nothing known, the older wording stands.
+    let snap = evening().snapshot();
+    let o = outcome(&snap, "job:3");
+    let hidden = o
+        .checks
+        .stages
+        .iter()
+        .find(|s| s.key == StageKey::HiddenChecks)
+        .unwrap();
+    assert_eq!(hidden.summary, "no hidden checks ran");
+}
+
+#[test]
+fn harness_files_the_job_changed_are_findings_on_the_weakening_stage() {
+    let mut r = evening();
+    let failed = JobId(3);
+    r.details.get_mut(&failed).unwrap().substrate =
+        vec!["conftest.py: harness file created (pytest runs it before every test)".into()];
+    let snap = r.snapshot();
+    let o = outcome(&snap, "job:3");
+    let stage = o
+        .checks
+        .stages
+        .iter()
+        .find(|s| s.key == StageKey::TestWeakening)
+        .unwrap();
+    assert_eq!(stage.state, StageState::Failed);
+    assert_eq!(
+        stage.summary,
+        "1 change(s) to tests or to the harness that runs them"
+    );
+    assert_eq!(
+        stage.items,
+        ["conftest.py: harness file created (pytest runs it before every test)"]
+    );
+}

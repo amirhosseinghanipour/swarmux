@@ -5,7 +5,7 @@ use crate::SharedPolicy;
 use crate::contracts::{ContractGate, ContractJudgement};
 use crate::ports::{HookRequest, NewJob, SessionRepository};
 use crate::testing::{FixedClock, InMemoryLedger, InMemoryStore};
-use swarmux_domain::gate::WorktreeChecks;
+use swarmux_domain::gate::{RevertProbe, WorktreeChecks};
 use swarmux_domain::ledger::LedgerKind;
 use swarmux_domain::{AttentionKind, GuardPolicy, Session, Unmatched, Verdict};
 
@@ -804,4 +804,299 @@ fn a_mission_that_breaks_a_consumer_is_blocked_with_its_places() {
             .any(|n| n == "app: flutter analyze"),
         "the consumer's check ran too"
     );
+}
+
+// --- X2: flake history, plain jobs that end, what the ledger holds ----------
+
+/// A verdict whose one check, `unit`, failed and passed when run again.
+fn flaky_record(job: JobId, outcome: GateOutcome) -> GateRecord {
+    let mut r = record(job, Some(HookEvent::Stop), outcome);
+    r.root = "/w".into();
+    r.findings = GateFindings {
+        runs: vec![CheckRun {
+            name: "unit".into(),
+            command: "cargo test".into(),
+            exit: Some(0),
+            timed_out: false,
+            spawn_error: None,
+            duration_ms: 10,
+            output: String::new(),
+            flaky: true,
+        }],
+        flake_policy: (3, 10),
+        ran_in: Some(RanIn::CleanCopy),
+        ..GateFindings::default()
+    };
+    r
+}
+
+#[test]
+fn a_check_that_flakes_three_times_in_ten_is_called_flaky_and_the_history_outlives_a_restart() {
+    let mut f = fixture(3);
+    for n in 1..=2 {
+        f.keeper.send(flaky_record(f.job, GateOutcome::Pass));
+        next_record(&mut f);
+        let state = f.service.state(f.job).unwrap();
+        assert!(state.notes.flaky.is_empty(), "{n} is not enough");
+    }
+    f.keeper.send(flaky_record(f.job, GateOutcome::Pass));
+    next_record(&mut f);
+    let state = f.service.state(f.job).unwrap();
+    assert_eq!(state.notes.flaky, [("unit".to_string(), 3, 3)]);
+    assert_eq!(f.service.detail(f.job).unwrap().flaky, state.notes.flaky);
+
+    // A new run of the app: the ledger knows what happened before it.
+    let (tx, rx) = std::sync::mpsc::channel();
+    let clock = Rc::new(FixedClock::new(10_000));
+    let mut again = GateService::new(
+        rx,
+        Rc::new(LedgerService::new(f.ledger.clone(), clock.clone())),
+        f.store.clone(),
+        clock,
+    );
+    tx.send(flaky_record(f.job, GateOutcome::Pass)).unwrap();
+    let (_, errors) = again.pump();
+    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!(
+        again.state(f.job).unwrap().notes.flaky,
+        [("unit".to_string(), 4, 4)],
+        "seeded from the ledger"
+    );
+}
+
+#[test]
+fn flaky_tracking_can_be_turned_off_and_never_names_a_check_that_did_not_flake() {
+    let mut f = fixture(3);
+    let mut off = flaky_record(f.job, GateOutcome::Pass);
+    off.findings.flake_policy = (0, 0);
+    for _ in 0..5 {
+        f.keeper.send(off.clone());
+        next_record(&mut f);
+    }
+    assert!(f.service.state(f.job).unwrap().notes.flaky.is_empty());
+    // The ledger remembers the flakes of `unit` even with tracking off;
+    // another check that never flaked is not named.
+    let mut steady = flaky_record(f.job, GateOutcome::Pass);
+    steady.findings.runs[0].name = "steady".into();
+    steady.findings.runs[0].flaky = false;
+    for _ in 0..5 {
+        f.keeper.send(steady.clone());
+        next_record(&mut f);
+    }
+    assert!(f.service.state(f.job).unwrap().notes.flaky.is_empty());
+}
+
+#[test]
+fn the_inbox_item_of_a_gave_up_job_says_which_check_is_flaky_and_a_harness_change_is_p1() {
+    let mut f = fixture(3);
+    for _ in 0..3 {
+        f.keeper.send(flaky_record(f.job, GateOutcome::Pass));
+        next_record(&mut f);
+    }
+    let mut gave_up = flaky_record(f.job, GateOutcome::Escalate);
+    gave_up.digest = "swarmux gate: still failing after 3 blocks.\n✗ unit failed".into();
+    f.keeper.send(gave_up);
+    next_record(&mut f);
+    let items = f.service.escalations(&f.facts());
+    assert_eq!(items.len(), 1);
+    assert!(
+        items[0]
+            .detail
+            .contains("unit is flaky (4 of its last 4 runs)"),
+        "{}",
+        items[0].detail
+    );
+    assert_eq!(items[0].priority, Priority::P2);
+
+    let mut harness = flaky_record(f.job, GateOutcome::Escalate);
+    harness.findings.substrate = vec!["conftest.py: harness file created".into()];
+    f.keeper.send(harness);
+    next_record(&mut f);
+    let items = f.service.escalations(&f.facts());
+    assert_eq!(
+        items[0].priority,
+        Priority::P1,
+        "the harness is the referee's"
+    );
+}
+
+#[test]
+fn what_the_verdict_could_not_say_is_in_the_state_the_detail_and_the_ledger() {
+    let mut f = fixture(3);
+    let mut r = record(f.job, Some(HookEvent::Stop), GateOutcome::Escalate);
+    r.findings = GateFindings {
+        hidden_not_run: Some(HiddenNotRun {
+            planned: 2,
+            reason: "no clean copy was made (git broke)".into(),
+        }),
+        ran_in: Some(RanIn::Worktree),
+        substrate: vec!["Makefile: harness file changed (make runs what it says)".into()],
+        dependencies: vec!["Cargo.lock: leftpad".into()],
+        planned: vec!["unit".into(), "soak".into()],
+        left_out: vec![("soak".into(), "level deep is above the gate's full".into())],
+        revert_probe: Some(RevertProbe {
+            proved: false,
+            detail: "every check still passes".into(),
+        }),
+        policy_sha256: "ab".repeat(32),
+        unattended: true,
+        warnings: vec!["verifier dependencies is one of flag, block, not \"x\"".into()],
+        ..GateFindings::default()
+    };
+    f.keeper.send(r);
+    next_record(&mut f);
+    let state = f.service.state(f.job).unwrap();
+    assert_eq!(
+        state.notes.hidden_not_run.as_deref(),
+        Some("hidden checks: not run (no clean copy was made (git broke))")
+    );
+    assert_eq!(state.notes.ran_in, Some(RanIn::Worktree));
+    assert_eq!((state.notes.substrate, state.notes.dependencies), (1, 1));
+    assert_eq!(
+        state.notes.incomplete.len(),
+        2,
+        "{:?}",
+        state.notes.incomplete
+    );
+    let detail = f.service.detail(f.job).unwrap();
+    assert_eq!(detail.planned, ["unit", "soak"]);
+    assert_eq!(detail.left_out.len(), 1);
+    assert_eq!(
+        detail.revert_probe,
+        Some((false, "every check still passes".into()))
+    );
+    assert_eq!(detail.policy_sha256.len(), 64);
+
+    let entry = f.gate_entries().pop().unwrap();
+    for says in [
+        "\"substrate\":[\"Makefile: harness file changed",
+        "\"dependencies\":[\"Cargo.lock: leftpad\"]",
+        "\"ran_in\":\"worktree\"",
+        "\"planned\":[\"unit\",\"soak\"]",
+        "\"left_out\":[{\"name\":\"soak\"",
+        "\"hidden_not_run\":{\"planned\":2,\"reason\":\"no clean copy was made (git broke)\"}",
+        "\"revert_probe\":{\"proved\":false",
+        "\"unattended\":true",
+        "\"policy_sha256\":\"abab",
+        "\"warnings\":[\"verifier dependencies is one of flag, block",
+        "\"incomplete\":[\"hidden checks: not run",
+    ] {
+        assert!(entry.contains(says), "{says} in {entry}");
+    }
+    // A record the bundle can be sealed from reads all of it back.
+    let facts = swarmux_domain::evidence::parse_verdict(&entry).unwrap();
+    assert_eq!(facts.how.ran_in, "worktree");
+    assert_eq!(facts.how.hidden_not_run.unwrap().0, 2);
+    assert_eq!(facts.how.substrate.len(), 1);
+    assert_eq!(facts.how.policy_sha256, "ab".repeat(32));
+}
+
+#[test]
+fn a_plain_job_that_ends_is_judged_again_unless_its_last_stop_passed_on_the_final_tree() {
+    let mut f = fixture(3);
+    // It never opened a session in a repository: nothing to judge.
+    assert_eq!(f.keeper.finish(f.job), Ok(false));
+    f.start();
+    f.edit();
+    f.fix();
+    // It changed files and never stopped: judged now, attended, so a run in
+    // the worktree is a note, not an escalation.
+    assert_eq!(f.keeper.finish(f.job), Ok(true));
+    next_record(&mut f);
+    let state = f.service.state(f.job).unwrap().clone();
+    assert_eq!(state.outcome, GateOutcome::Pass, "{}", state.digest);
+    assert_eq!(state.notes.ran_in, Some(RanIn::Worktree));
+    assert_eq!(f.stop(HookEvent::Stop, "Done."), StopAnswer::Allow);
+    next_record(&mut f);
+
+    // Its last stop passed and nothing changed since: not judged again.
+    assert_eq!(f.keeper.finish(f.job), Ok(false));
+    // It changed a file after the pass: judged again.
+    f.edit();
+    assert_eq!(f.keeper.finish(f.job), Ok(true));
+    next_record(&mut f);
+
+    // A mission has its own verification.
+    f.keeper.assign(f.job, mission_gate());
+    f.edit();
+    assert_eq!(f.keeper.finish(f.job), Ok(false));
+}
+
+#[test]
+fn a_plain_job_in_a_repository_with_nothing_to_check_is_not_judged_at_all() {
+    let f = fixture(3);
+    lock(&f.source.spec).checks.clear();
+    f.start();
+    f.edit();
+    assert_eq!(f.keeper.finish(f.job), Ok(false));
+}
+
+/// Says a job that ended could not be verified.
+struct Refuses;
+
+impl JobGates for Refuses {
+    fn assign(&self, _job: JobId, _gate: MissionGate) {}
+
+    fn verify(&self, _job: JobId, _dir: &Path) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn finish(&self, _job: JobId) -> Result<bool, String> {
+        Err("no clean copy: git is gone".into())
+    }
+}
+
+#[test]
+fn a_job_that_ended_and_could_not_be_verified_shows_as_unverified_with_why() {
+    let mut f = fixture(3);
+    f.service = {
+        let (_tx, rx) = std::sync::mpsc::channel();
+        let clock = Rc::new(FixedClock::new(9_000));
+        GateService::new(
+            rx,
+            Rc::new(LedgerService::new(f.ledger.clone(), clock.clone())),
+            f.store.clone(),
+            clock,
+        )
+        .with_finisher(Rc::new(Refuses))
+    };
+    let mut running = f.facts();
+    running[0].status = swarmux_domain::JobStatus::Running;
+    assert!(f.service.pump_finished(&running).is_empty());
+    assert!(
+        f.service.state(f.job).is_none(),
+        "still running: nothing yet"
+    );
+    let mut done = f.facts();
+    done[0].status = swarmux_domain::JobStatus::Done;
+    let errors = f.service.pump_finished(&done);
+    assert!(errors.is_empty(), "{errors:?}");
+    let state = f.service.state(f.job).unwrap();
+    assert_eq!(state.outcome, GateOutcome::Escalate);
+    assert!(
+        state
+            .digest
+            .contains("unverified: no clean copy: git is gone"),
+        "{}",
+        state.digest
+    );
+    assert_eq!(
+        state.notes.incomplete,
+        ["unverified: no clean copy: git is gone"]
+    );
+    // Asked once: the job is no longer running.
+    f.service.pump_finished(&done);
+    assert_eq!(f.gate_entries().len(), 1);
+    // And a job that was already finished when swarmux started is history.
+    let (_tx2, rx2) = std::sync::mpsc::channel();
+    let clock = Rc::new(FixedClock::new(9_000));
+    let mut fresh = GateService::new(
+        rx2,
+        Rc::new(LedgerService::new(f.ledger.clone(), clock.clone())),
+        f.store.clone(),
+        clock,
+    )
+    .with_finisher(Rc::new(Refuses));
+    assert!(fresh.pump_finished(&done).is_empty());
+    assert!(fresh.state(f.job).is_none());
 }

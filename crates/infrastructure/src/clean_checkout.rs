@@ -580,3 +580,209 @@ mod tests {
         assert!(checkouts.snapshot(dir.path()).is_err());
     }
 }
+
+/// The operations the verifier needs of a copy besides making it: reading
+/// what the base had, putting files back (and taking away what the base did
+/// not have), starting over, and listing.
+#[cfg(test)]
+mod copy_operations {
+    use super::*;
+    use std::process::Command;
+
+    fn git(dir: &Path, args: &[&str]) -> bool {
+        Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args([
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "commit.gpgsign=false",
+            ])
+            .args(args)
+            .output()
+            .is_ok_and(|o| o.status.success())
+    }
+
+    /// A repository with a test, a harness file and a source file.
+    fn repo(name: &str) -> Option<(tempfile::TempDir, PathBuf)> {
+        let dir = tempfile::tempdir().ok()?;
+        let p = dir.path().join(name);
+        fs::create_dir_all(p.join("src")).ok()?;
+        fs::create_dir_all(p.join("tests")).ok()?;
+        if !git(&p, &["init", "-q", "-b", "main"]) {
+            eprintln!("git not available; skipping");
+            return None;
+        }
+        fs::write(p.join("src/lib.rs"), "pub fn f() -> i32 { 1 }\n").ok()?;
+        fs::write(p.join("tests/a.rs"), "assert_eq!(f(), 1);\n").ok()?;
+        fs::write(p.join("pytest.ini"), "[pytest]\n").ok()?;
+        assert!(git(&p, &["add", "."]));
+        assert!(git(&p, &["commit", "-q", "-m", "init"]));
+        Some((dir, p))
+    }
+
+    #[test]
+    fn a_copy_can_be_read_written_listed_and_put_back_as_the_base_had_it() {
+        let Some((dir, p)) = repo("shop") else { return };
+        let checkouts = GitCleanCheckout::new("git".into(), dir.path().join("verify"));
+        let base = checkouts.head(&p).unwrap();
+        // The agent edits a test and the harness, and plants two files.
+        fs::write(p.join("tests/a.rs"), "assert_eq!(f(), 2);\n").unwrap();
+        fs::write(p.join("pytest.ini"), "[pytest]\naddopts = -p evil\n").unwrap();
+        fs::write(p.join("conftest.py"), "planted\n").unwrap();
+        fs::create_dir_all(p.join(".cargo")).unwrap();
+        fs::write(p.join(".cargo/config.toml"), "planted\n").unwrap();
+        let copy = checkouts.snapshot(&p).unwrap();
+        assert_eq!(copy.head(), Some(base.as_str()));
+
+        // What the base had, and what the copy has now.
+        let shown = |c: &str, path: &str| copy.show(c, path).unwrap();
+        assert_eq!(shown(&base, "pytest.ini").unwrap(), b"[pytest]\n");
+        assert_eq!(shown(&base, "conftest.py"), None, "the base never had it");
+        assert!(
+            String::from_utf8(copy.read("pytest.ini").unwrap())
+                .unwrap()
+                .contains("evil")
+        );
+        assert_eq!(copy.read("nope.txt"), None);
+        let files = copy.files().unwrap();
+        for f in [
+            "src/lib.rs",
+            "tests/a.rs",
+            "conftest.py",
+            ".cargo/config.toml",
+            "pytest.ini",
+        ] {
+            assert!(files.iter().any(|x| x == f), "{f} in {files:?}");
+        }
+
+        // Put back: a file the base had is written as it was, one it did not
+        // have is removed, the others stay as the agent left them.
+        copy.restore(
+            &base,
+            &[
+                "pytest.ini".into(),
+                "tests/a.rs".into(),
+                "conftest.py".into(),
+                ".cargo/config.toml".into(),
+            ],
+        )
+        .unwrap();
+        assert_eq!(copy.read("pytest.ini").unwrap(), b"[pytest]\n");
+        assert!(
+            String::from_utf8(copy.read("tests/a.rs").unwrap())
+                .unwrap()
+                .contains("f(), 1")
+        );
+        assert_eq!(copy.read("conftest.py"), None);
+        assert_eq!(copy.read(".cargo/config.toml"), None);
+        // Nothing of the repository itself changed.
+        assert!(p.join("conftest.py").is_file());
+        assert!(
+            fs::read_to_string(p.join("pytest.ini"))
+                .unwrap()
+                .contains("evil")
+        );
+
+        // Write and remove inside the copy only.
+        copy.write("deep/er/new.txt", b"x").unwrap();
+        assert_eq!(copy.read("deep/er/new.txt").unwrap(), b"x");
+        copy.remove("deep/er/new.txt").unwrap();
+        copy.remove("deep/er/new.txt").unwrap();
+        assert_eq!(copy.read("deep/er/new.txt"), None);
+        assert!(!p.join("deep").exists());
+
+        // Starting over: what the checks wrote is gone, and every file is
+        // as the work had it, the planted ones included.
+        copy.write("src/lib.rs", b"rewritten by a build script\n")
+            .unwrap();
+        copy.write("left-by-a-test.txt", b"x").unwrap();
+        copy.reset().unwrap();
+        assert_eq!(
+            copy.read("src/lib.rs").unwrap(),
+            b"pub fn f() -> i32 { 1 }\n"
+        );
+        assert_eq!(copy.read("left-by-a-test.txt"), None);
+        assert_eq!(copy.read("conftest.py").unwrap(), b"planted\n");
+        assert!(
+            String::from_utf8(copy.read("pytest.ini").unwrap())
+                .unwrap()
+                .contains("evil")
+        );
+    }
+
+    #[test]
+    fn paths_that_leave_the_copy_are_refused() {
+        let Some((dir, p)) = repo("shop") else { return };
+        let checkouts = GitCleanCheckout::new("git".into(), dir.path().join("verify"));
+        let copy = checkouts.snapshot(&p).unwrap();
+        for bad in ["../x", "a/../../x", "/etc/passwd", "C:/x", "", "a//b"] {
+            assert!(copy.write(bad, b"x").is_err(), "{bad:?}");
+            assert!(copy.remove(bad).is_err(), "{bad:?}");
+            assert!(copy.show("HEAD", bad).is_err(), "{bad:?}");
+            assert_eq!(copy.read(bad), None, "{bad:?}");
+        }
+        assert!(copy.restore("HEAD", &["../x".into()]).is_err());
+    }
+
+    #[test]
+    fn two_repositories_in_folders_of_one_name_have_two_keys_and_a_worktree_shares_its_own() {
+        let Some((d1, one)) = repo("shop") else {
+            return;
+        };
+        let Some((_d2, two)) = repo("shop") else {
+            return;
+        };
+        // Make the second one a different repository (another first commit).
+        fs::write(two.join("other.txt"), "x").unwrap();
+        assert!(git(&two, &["add", "."]));
+        assert!(git(
+            &two,
+            &["commit", "-q", "--amend", "-m", "another start"]
+        ));
+        let checkouts = GitCleanCheckout::new("git".into(), d1.path().join("verify"));
+        let (k1, k2) = (checkouts.repo(&one).unwrap(), checkouts.repo(&two).unwrap());
+        assert!(
+            k1.starts_with("shop.id-") && k2.starts_with("shop.id-"),
+            "{k1} {k2}"
+        );
+        assert_ne!(k1, k2, "the same folder name, not the same repository");
+
+        // A remote is part of what a repository is; moving the folder is not.
+        assert!(git(
+            &one,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://example.com/acme/shop.git"
+            ]
+        ));
+        let with_remote = checkouts.repo(&one).unwrap();
+        assert_ne!(with_remote, k1);
+        assert_eq!(
+            holdout_key(Path::new("git"), &one).as_deref(),
+            Some(with_remote.as_str())
+        );
+        let moved = d1.path().join("renamed-checkout");
+        fs::rename(&one, &moved).unwrap();
+        let after = checkouts.repo(&moved).unwrap();
+        assert_eq!(
+            after.split_once(".id-").map(|(_, id)| id),
+            with_remote.split_once(".id-").map(|(_, id)| id),
+            "the identity does not depend on where it lives"
+        );
+        assert!(after.starts_with("renamed-checkout.id-"), "{after}");
+
+        // A worktree of a repository is the repository.
+        let wt = d1.path().join("job-7");
+        assert!(git(
+            &moved,
+            &["worktree", "add", "-q", "-b", "job", wt.to_str().unwrap()]
+        ));
+        assert_eq!(checkouts.repo(&wt), Some(after));
+    }
+}

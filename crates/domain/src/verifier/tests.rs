@@ -233,3 +233,49 @@ fn protected_changes_come_from_the_diff() {
     );
     assert!(protected_changes(&file("src/a.rs", &["1"], &["2"]), &globs, false).is_empty());
 }
+
+#[test]
+fn a_repository_is_known_by_what_it_is_not_only_where_it_lives() {
+    // One remote in three spellings is one remote.
+    let a = repo_identity("https://github.com/Acme/Shop.git", "abc123");
+    assert_eq!(a, repo_identity("git@github.com:acme/shop", "abc123"));
+    assert_eq!(
+        a,
+        repo_identity("ssh://git@github.com/acme/shop/", "abc123")
+    );
+    assert_eq!(a.len(), 12);
+    assert!(a.bytes().all(|b| b.is_ascii_hexdigit()));
+    // A different root commit, or a different remote, is another repository.
+    assert_ne!(a, repo_identity("https://github.com/acme/shop", "def456"));
+    assert_ne!(a, repo_identity("https://github.com/other/shop", "abc123"));
+    assert_ne!(
+        a,
+        repo_identity("", "abc123"),
+        "no remote is not the same as one"
+    );
+    assert_eq!(
+        normalize_remote("https://user:pw@host.example:8443/x/y.git"),
+        "host.example:8443/x/y"
+    );
+}
+
+#[test]
+fn keys_carry_the_folder_name_and_give_it_back() {
+    let id = repo_identity("", "abc");
+    let key = identity_key("shop", &id);
+    assert_eq!(key, format!("shop.id-{id}"));
+    assert!(valid_name(&key).is_ok());
+    assert_eq!(legacy_name(&key), Some("shop"));
+    assert_eq!(
+        legacy_name("shop"),
+        None,
+        "a plain folder name has no identity"
+    );
+    assert_eq!(legacy_name("shop.id-zzzzzzzzzzzz"), None);
+    assert_eq!(legacy_name(".id-0123456789ab"), None);
+    // A long folder name is cut to leave room for the identity.
+    let long = identity_key(&"x".repeat(64), &id);
+    assert!(long.len() <= 64, "{}", long.len());
+    assert!(valid_name(&long).is_ok());
+    assert_eq!(legacy_name(&long).map(str::len), Some(64 - 4 - 12));
+}

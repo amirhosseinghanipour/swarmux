@@ -399,3 +399,239 @@ fn hidden_checks_and_tampering_block_without_saying_what_they_are() {
     assert!(d.contains("Tests are the referee"), "{d}");
     assert!(!GateFindings::default().checked());
 }
+
+// --- X2: a gate that can say it could not vouch -----------------------------
+
+fn passing_run() -> CheckRun {
+    run("ok", Some(0))
+}
+
+fn clean_findings() -> GateFindings {
+    GateFindings {
+        runs: vec![passing_run()],
+        ran_in: Some(RanIn::CleanCopy),
+        ..GateFindings::default()
+    }
+}
+
+#[test]
+fn a_clean_run_in_a_clean_copy_passes() {
+    let f = clean_findings();
+    assert!(f.clean());
+    assert!(f.incomplete().is_empty());
+    assert_eq!(judge(&f, 0, 3), GateOutcome::Pass);
+}
+
+#[test]
+fn a_gate_that_could_not_read_its_file_escalates_and_never_passes() {
+    let mut f = clean_findings();
+    f.config_problem = Some(".swarmux/gates.toml: expected an equals sign".into());
+    assert!(f.clean(), "nothing is wrong with the change");
+    assert_eq!(f.incomplete().len(), 1);
+    // Not a block (the agent cannot fix the file), and not a pass.
+    assert_eq!(judge(&f, 0, 3), GateOutcome::Escalate);
+    assert_eq!(judge(&f, 0, 0), GateOutcome::Escalate);
+    let d = digest(&f, GateOutcome::Escalate, 0, 3, &[]);
+    assert!(d.contains("cannot vouch"), "{d}");
+    assert!(d.contains("gates.toml could not be used"), "{d}");
+    // Attended or not makes no difference for this one.
+    f.unattended = true;
+    assert_eq!(judge(&f, 0, 3), GateOutcome::Escalate);
+}
+
+#[test]
+fn what_a_mission_cannot_be_passed_without_is_not_asked_of_an_attended_stop() {
+    let mut f = clean_findings();
+    f.hidden_not_run = Some(HiddenNotRun {
+        planned: 2,
+        reason: "no clean copy was made (git broke)".into(),
+    });
+    f.ran_in = Some(RanIn::Worktree);
+    f.unscanned = Some("the change could not be read (no commit)".into());
+    // Somebody is watching: it passes, and says what did not happen.
+    assert_eq!(judge(&f, 0, 3), GateOutcome::Pass);
+    let d = digest(&f, GateOutcome::Pass, 0, 3, &[]);
+    assert!(d.contains("hidden checks: not run (no clean copy"), "{d}");
+    assert!(d.contains("ran in the worktree"), "{d}");
+    assert!(d.contains("not scanned for tampering"), "{d}");
+    assert!(d.starts_with("swarmux gate: 1 check passed"), "{d}");
+    // Nobody is: Escalate, with each reason.
+    f.unattended = true;
+    assert_eq!(f.incomplete().len(), 3, "{:?}", f.incomplete());
+    assert_eq!(judge(&f, 0, 3), GateOutcome::Escalate);
+    let d = digest(&f, GateOutcome::Escalate, 0, 3, &[]);
+    assert!(d.contains("cannot vouch"), "{d}");
+    assert!(d.contains("hidden checks: not run"), "{d}");
+    // A repository that accepts worktree runs is believed about that only.
+    f.worktree_allowed = true;
+    assert_eq!(f.incomplete().len(), 2);
+}
+
+#[test]
+fn harness_findings_block_and_say_which_file() {
+    let mut f = clean_findings();
+    f.substrate =
+        vec!["conftest.py: harness file created (pytest runs it before every test)".into()];
+    assert!(!f.clean());
+    assert_eq!(judge(&f, 0, 3), GateOutcome::Block);
+    assert_eq!(judge(&f, 3, 3), GateOutcome::Escalate);
+    let d = digest(&f, GateOutcome::Block, 0, 3, &[]);
+    assert!(d.contains("test harness changed: conftest.py"), "{d}");
+    assert!(d.contains("put them back"), "{d}");
+}
+
+#[test]
+fn dependencies_are_listed_and_block_only_when_asked() {
+    let mut f = clean_findings();
+    f.dependencies = vec!["Cargo.lock: leftpad".into()];
+    assert!(f.clean());
+    let d = digest(&f, GateOutcome::Pass, 0, 3, &[]);
+    assert!(
+        d.contains("new or changed dependencies: Cargo.lock: leftpad"),
+        "{d}"
+    );
+    f.block_dependencies = true;
+    assert!(!f.clean());
+    let d = digest(&f, GateOutcome::Block, 0, 3, &[]);
+    assert!(d.contains("A person has to look at these first"), "{d}");
+    assert_eq!(d.matches("leftpad").count(), 1, "told once: {d}");
+}
+
+#[test]
+fn an_optional_check_is_reported_and_blocks_nothing() {
+    let mut f = GateFindings {
+        runs: vec![run("assertion failed", Some(1))],
+        optional: vec!["cargo test".into()],
+        ran_in: Some(RanIn::CleanCopy),
+        ..GateFindings::default()
+    };
+    assert!(f.clean());
+    assert_eq!(f.failed().count(), 0);
+    assert_eq!(f.failed_optional().count(), 1);
+    assert_eq!(judge(&f, 0, 3), GateOutcome::Pass);
+    f.optional.clear();
+    assert_eq!(judge(&f, 0, 3), GateOutcome::Block);
+}
+
+#[test]
+fn a_revert_probe_that_proves_nothing_blocks() {
+    let mut f = clean_findings();
+    f.revert_probe = Some(RevertProbe {
+        proved: true,
+        detail: "1 file reverted; cargo test fail without the change".into(),
+    });
+    assert!(f.clean());
+    assert!(digest(&f, GateOutcome::Pass, 0, 3, &[]).contains("revert probe: 1 file reverted"));
+    f.revert_probe = Some(RevertProbe {
+        proved: false,
+        detail: "1 file reverted and every check still passes".into(),
+    });
+    assert!(!f.clean());
+    let d = digest(&f, GateOutcome::Block, 0, 3, &[]);
+    assert!(
+        d.contains("revert probe: 1 file reverted and every check still passes"),
+        "{d}"
+    );
+}
+
+#[test]
+fn levels_decide_which_checks_run_and_the_rest_are_named() {
+    let mut fast = GateCheck::new("lint", "cargo", &["clippy"]);
+    fast.level = GateLevel::Fast;
+    let full = GateCheck::new("unit", "cargo", &["test"]);
+    let mut deep = GateCheck::new("soak", "cargo", &["test", "--ignored"]);
+    deep.level = GateLevel::Deep;
+    let mut spec = GateSpec {
+        checks: vec![fast, full, deep],
+        ..GateSpec::default()
+    };
+    let names = |s: &GateSpec| -> (Vec<String>, Vec<String>) {
+        let (run, left) = s.planned();
+        (
+            run.iter().map(|c| c.name.clone()).collect(),
+            left.iter().map(|c| c.name.clone()).collect(),
+        )
+    };
+    assert_eq!(
+        names(&spec),
+        (vec!["lint".into(), "unit".into()], vec!["soak".into()])
+    );
+    spec.level = GateLevel::Fast;
+    assert_eq!(
+        names(&spec),
+        (vec!["lint".into()], vec!["unit".into(), "soak".into()])
+    );
+    spec.level = GateLevel::Deep;
+    assert_eq!(names(&spec).1, Vec::<String>::new());
+    assert_eq!(GateLevel::parse("deep"), Some(GateLevel::Deep));
+    assert_eq!(GateLevel::parse("slow"), None);
+    assert!(GateLevel::Fast < GateLevel::Full && GateLevel::Full < GateLevel::Deep);
+}
+
+#[test]
+fn the_policy_hash_changes_with_anything_that_decides_a_verdict() {
+    let base = GateSpec {
+        checks: vec![GateCheck::new("unit", "cargo", &["test"])],
+        ..GateSpec::default()
+    };
+    let h = base.policy_sha256();
+    assert_eq!(h.len(), 64);
+    assert_eq!(h, base.clone().policy_sha256(), "stable");
+    let changed = |f: &dyn Fn(&mut GateSpec)| {
+        let mut s = base.clone();
+        f(&mut s);
+        assert_ne!(s.policy_sha256(), h);
+    };
+    changed(&|s| s.max_blocks = 5);
+    changed(&|s| s.level = GateLevel::Deep);
+    changed(&|s| s.checks[0].required = false);
+    changed(&|s| s.checks[0].env.push("DATABASE_URL".into()));
+    changed(&|s| s.verifier.revert_probe = true);
+    changed(&|s| s.verifier.worktree_checks = WorktreeChecks::Allow);
+    changed(&|s| s.verifier.dependencies = DependencyChanges::Block);
+    changed(&|s| s.allow_substrate.push("Makefile".into()));
+    changed(&|s| s.substrate.push("scripts/**".into()));
+    changed(&|s| s.allow_test_changes.push("tests/old/**".into()));
+}
+
+#[test]
+fn checks_see_their_tools_and_never_credentials() {
+    for ok in [
+        "PATH",
+        "path",
+        "HOME",
+        "LC_ALL",
+        "LC_CTYPE",
+        "CARGO_HOME",
+        "SystemRoot",
+        "TEMP",
+    ] {
+        assert!(env_passes(ok, &[]), "{ok}");
+    }
+    for bad in [
+        "SWARMUX_JOB_ID",
+        "swarmux_hook_pipe",
+        "ANTHROPIC_API_KEY",
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "OPENAI_API_KEY",
+        "AWS_SECRET_ACCESS_KEY",
+        "GITHUB_TOKEN",
+        "NPM_TOKEN",
+        "MY_SERVICE_TOKEN",
+        "DB_PASSWORD",
+        "STRIPE_API_KEY",
+        "DATABASE_URL",
+        "RUST_LOG",
+    ] {
+        assert!(!env_passes(bad, &[]), "{bad}");
+    }
+    // A check can ask for what is not a credential, and never for one.
+    assert!(env_passes("DATABASE_URL", &["DATABASE_URL".into()]));
+    assert!(env_passes("database_url", &["DATABASE_URL".into()]));
+    assert!(!env_passes("SWARMUX_JOB_ID", &["SWARMUX_JOB_ID".into()]));
+    assert!(!env_passes(
+        "MY_SERVICE_TOKEN",
+        &["MY_SERVICE_TOKEN".into()]
+    ));
+    assert!(env_denied("ANTHROPIC_BASE_URL"));
+}

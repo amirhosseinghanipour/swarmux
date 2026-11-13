@@ -734,3 +734,210 @@ run = ["cargo", "clippy"]
         );
     }
 }
+
+/// The keys X2 added to `gates.toml`: each is enforced, and one with a
+/// value that cannot be used falls back to its strict default with a
+/// warning, never a refusal of the file.
+#[cfg(test)]
+mod harness_keys {
+    use super::*;
+
+    fn facts() -> RepoFacts {
+        RepoFacts::default()
+    }
+
+    fn parse(text: &str) -> GateSpec {
+        parse_gates(text, &facts()).unwrap()
+    }
+
+    #[test]
+    fn the_defaults_are_the_strict_ones() {
+        let spec = parse("");
+        assert_eq!(spec.level, GateLevel::Full);
+        assert!(spec.substrate.is_empty() && spec.allow_substrate.is_empty());
+        assert!(spec.env.is_empty() && spec.warnings.is_empty());
+        let v = spec.verifier;
+        assert!(!v.revert_probe);
+        assert_eq!(v.worktree_checks, WorktreeChecks::Escalate);
+        assert_eq!(v.dependencies, DependencyChanges::Flag);
+        assert_eq!((v.flaky_after, v.flaky_window), (3, 10));
+    }
+
+    #[test]
+    fn every_new_key_is_read_and_reaches_the_spec() {
+        let spec = parse(
+            r#"
+[gate]
+level = "deep"
+
+[[check]]
+name = "unit"
+run = ["cargo", "test"]
+required = false
+level = "fast"
+on_error = "fail"
+env = ["DATABASE_URL"]
+
+[[check]]
+name = "lint"
+run = ["cargo", "clippy"]
+
+[verifier]
+substrate = ["scripts/ci/**"]
+allow_substrate = ["Makefile"]
+revert_probe = true
+worktree_checks = "allow"
+dependencies = "block"
+env = ["API_BASE", "DATABASE_URL"]
+flaky_after = 2
+flaky_window = 5
+"#,
+        );
+        assert_eq!(spec.level, GateLevel::Deep);
+        assert_eq!(spec.substrate, ["scripts/ci/**"]);
+        assert_eq!(spec.allow_substrate, ["Makefile"]);
+        assert!(spec.verifier.revert_probe);
+        assert_eq!(spec.verifier.worktree_checks, WorktreeChecks::Allow);
+        assert_eq!(spec.verifier.dependencies, DependencyChanges::Block);
+        assert_eq!(
+            (spec.verifier.flaky_after, spec.verifier.flaky_window),
+            (2, 5)
+        );
+        assert!(spec.warnings.is_empty(), "{:?}", spec.warnings);
+        let unit = &spec.checks[0];
+        assert!(!unit.required);
+        assert_eq!(unit.level, GateLevel::Fast);
+        // The check's own names and the verifier's, once each.
+        assert_eq!(unit.env, ["DATABASE_URL", "API_BASE"]);
+        let lint = &spec.checks[1];
+        assert!(lint.required);
+        assert_eq!(lint.level, GateLevel::Full);
+        assert_eq!(lint.env, ["API_BASE", "DATABASE_URL"]);
+    }
+
+    #[test]
+    fn a_value_that_cannot_be_used_falls_back_to_the_strict_default_with_a_warning() {
+        let spec = parse(
+            r#"
+[gate]
+level = "slowest"
+
+[[check]]
+run = ["cargo", "test"]
+required = "yes"
+level = 3
+on_error = "warn"
+env = "PATH"
+
+[verifier]
+substrate = "scripts"
+allow_substrate = ["ok/**", 5, "../up/**"]
+revert_probe = "sometimes"
+worktree_checks = "whenever"
+dependencies = "ignore"
+env = ["ANTHROPIC_API_KEY", "SWARMUX_JOB_ID", "MY_SERVICE_TOKEN", "FINE", 7]
+flaky_after = -1
+flaky_window = "ten"
+"#,
+        );
+        assert_eq!(spec.level, GateLevel::Full);
+        let c = &spec.checks[0];
+        assert!(c.required, "required falls back to true");
+        assert_eq!(c.level, GateLevel::Full);
+        assert!(spec.substrate.is_empty());
+        assert_eq!(spec.allow_substrate, ["ok/**"], "bad entries are left out");
+        let v = spec.verifier;
+        assert!(!v.revert_probe);
+        assert_eq!(v.worktree_checks, WorktreeChecks::Escalate);
+        assert_eq!(v.dependencies, DependencyChanges::Flag);
+        assert_eq!((v.flaky_after, v.flaky_window), (3, 10));
+        // Credentials are refused, the rest kept.
+        assert_eq!(spec.env, ["FINE"]);
+        let all = spec.warnings.join("\n");
+        for says in [
+            "gate level is one of full, fast, deep",
+            "check 1 (cargo test) required is true or false",
+            "check 1 (cargo test) level is one of",
+            "check 1 (cargo test) on_error is \"fail\", the only value",
+            "check 1 (cargo test) env is a list of strings",
+            "verifier substrate is a list of strings",
+            "verifier allow_substrate: 5 is not a string",
+            "verifier allow_substrate: \"../up/**\" may not contain ..",
+            "verifier revert_probe is true or false",
+            "verifier worktree_checks is one of escalate, allow",
+            "verifier dependencies is one of flag, block",
+            "verifier env: ANTHROPIC_API_KEY is never passed to a check",
+            "verifier env: SWARMUX_JOB_ID is never passed to a check",
+            "verifier env: MY_SERVICE_TOKEN is never passed to a check",
+            "verifier flaky_after is a number from 0 up",
+            "verifier flaky_window is a number from 0 up",
+        ] {
+            assert!(all.contains(says), "no warning {says:?} in:\n{all}");
+        }
+    }
+
+    #[test]
+    fn a_key_this_version_does_not_know_is_an_error_not_an_ignored_line() {
+        for bad in [
+            "[verifier]\nsubstrates = [\"x\"]\n",
+            "[gate]\nlevels = \"fast\"\n",
+            "[[check]]\nrun = [\"x\"]\nrequired_ = true\n",
+        ] {
+            assert!(parse_gates(bad, &facts()).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_zero_window_still_looks_at_one_run() {
+        let spec = parse("[verifier]\nflaky_window = 0\nflaky_after = 0\n");
+        assert_eq!(spec.verifier.flaky_window, 1);
+        assert_eq!(spec.verifier.flaky_after, 0, "off");
+    }
+
+    #[test]
+    fn an_old_gates_file_reads_as_it_always_did() {
+        // A file written before X2: nothing in it is new, and nothing it
+        // says changes meaning.
+        let spec = parse(
+            r#"
+[gate]
+max_blocks = 2
+protected = ["tests/oracles/**"]
+
+[[check]]
+name = "unit"
+run = ["cargo", "test"]
+timeout_secs = 300
+
+[verifier]
+clean = true
+test_edits = "block"
+base_suite = true
+allow_test_changes = ["tests/legacy/**"]
+"#,
+        );
+        assert_eq!(spec.max_blocks, 2);
+        assert_eq!(spec.checks.len(), 1);
+        assert!(spec.checks[0].required);
+        assert_eq!(spec.checks[0].timeout_secs, 300);
+        assert!(spec.warnings.is_empty());
+        assert_eq!(spec.allow_test_changes, ["tests/legacy/**"]);
+    }
+
+    #[test]
+    fn a_file_that_cannot_be_read_is_reported_as_a_problem_not_swallowed() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::create_dir_all(root.join(".git")).unwrap();
+        fs::create_dir_all(root.join(".swarmux")).unwrap();
+        fs::write(root.join(GATES_FILE), "[gate\nmax_blocks = 1\n").unwrap();
+        let gate = FsGateSource::new().load(root);
+        let problem = gate.problem.expect("a problem");
+        assert!(problem.starts_with(GATES_FILE), "{problem}");
+        assert_eq!(gate.origin, GateOrigin::File);
+        // The same through a typo in an old key.
+        fs::write(root.join(GATES_FILE), "[gate]\nmax_block = 1\n").unwrap();
+        let again = FsGateSource::new().load(root);
+        assert!(again.problem.is_some_and(|p| p.contains("max_block")));
+    }
+}
