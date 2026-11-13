@@ -134,6 +134,16 @@ pub struct Shadow {
     pub hidden: (Context, Action, Chord),
 }
 
+impl std::fmt::Display for Shadow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let ((wc, wa, wk), (hc, ha, hk)) = (&self.winner, &self.hidden);
+        write!(
+            f,
+            "`{wk}` is {wa} in {wc}, which comes first and hides {ha} (`{hk}` in {hc})"
+        )
+    }
+}
+
 /// Keys bound to actions, by context. Pure data: nothing here knows a
 /// terminal or a screen.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -314,6 +324,8 @@ pub struct ActionDef {
     pub context: Context,
     pub action: Action,
     pub help: &'static str,
+    /// The user can't rebind it: its keys are fixed.
+    pub locked: bool,
 }
 
 /// Every action that can be bound, by context: what a config's `[keys]`
@@ -334,8 +346,42 @@ impl Catalog {
                 context,
                 action,
                 help,
+                locked: false,
             });
         }
+    }
+
+    /// Makes `action` in `context` something a config can't rebind.
+    pub fn lock(&mut self, context: Context, action: Action) {
+        if let Some(d) = self
+            .defs
+            .iter_mut()
+            .find(|d| d.context == context && d.action == action)
+        {
+            d.locked = true;
+        }
+    }
+
+    pub fn is_locked(&self, context: Context, action: Action) -> bool {
+        self.defs
+            .iter()
+            .any(|d| d.context == context && d.action == action && d.locked)
+    }
+
+    /// The context called `id`, as a config names it.
+    pub fn context(&self, id: &str) -> Option<Context> {
+        self.defs.iter().map(|d| d.context).find(|c| c.id() == id)
+    }
+
+    /// Every context that has actions, in the order they were declared.
+    pub fn contexts(&self) -> Vec<Context> {
+        let mut out: Vec<Context> = Vec::new();
+        for d in &self.defs {
+            if !out.contains(&d.context) {
+                out.push(d.context);
+            }
+        }
+        out
     }
 
     pub fn declares(&self, context: Context, action: Action) -> bool {
