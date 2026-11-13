@@ -1,0 +1,21 @@
+//! The console's rules: where an outcome stands on the Work queue, which
+//! actions its state allows, and how the cards of the Deck relate to each
+//! other. Pure functions over plain facts; the application layer gathers
+//! the facts and the clients (the terminal, a daemon API, a phone) render
+//! what these rules decide.
+//!
+//! Nothing here is invented: every group, action and edge is derived from
+//! state swarmux already keeps (the attention items, the mission and job
+//! states, the gate's verdicts, the plan and its task graph, the
+//! repositories' contracts and the files tasks claim).
+
+mod actions;
+mod graph;
+mod rank;
+
+pub use actions::{ActionFacts, ActionKind, Allowed, allowed};
+pub use graph::{
+    ContractFlow, DepState, Edge, EdgeKind, Node, Progress, claim_edges, contract_edges, depths,
+    task_edges,
+};
+pub use rank::{Ask, Group, Placement, Ranked, Stage, Standing, place, rank};

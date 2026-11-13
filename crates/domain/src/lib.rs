@@ -8,6 +8,7 @@ pub mod anchor;
 mod attention;
 pub mod board;
 pub mod budget;
+pub mod console;
 pub mod contracts;
 mod date;
 pub mod dist;
