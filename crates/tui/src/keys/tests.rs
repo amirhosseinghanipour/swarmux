@@ -362,14 +362,13 @@ fn the_overlaps_between_contexts_are_the_ones_meant() {
         let mut app = t.app;
         app.screen = screen;
         // Every state a screen has a context for.
-        let variants: Vec<Box<dyn Fn(&mut crate::app::App)>> = vec![
-            Box::new(|_| {}),
-            Box::new(|a| a.dashboard.classic = false),
-            Box::new(|a| a.mission.pane = crate::mission::Pane::Wall),
-            Box::new(|a| a.knowledge_screen.contracts_tab = true),
-        ];
-        for set in variants {
-            set(&mut app);
+        for variant in 0..4 {
+            match variant {
+                1 => app.dashboard.classic = false,
+                2 => app.mission.pane = crate::mission::Pane::Wall,
+                3 => app.knowledge_screen.contracts_tab = true,
+                _ => {}
+            }
             for s in keymap.shadows(&app.contexts()) {
                 let line = format!(
                     "{} {}: {} over {} ({})",
