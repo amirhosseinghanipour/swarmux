@@ -16,9 +16,9 @@ use crate::screens::{self, Bind, PLANNED, Screen, Section};
 
 // ---- contexts
 
-/// Answers to whatever is asking the user: a proposed plan, the JEV
-/// consent, a held tool call. Active on every screen, before the screen's
-/// own keys; an action that has nothing to answer lets the key through.
+/// Answers to whatever is asking the user: a proposed plan, a held tool
+/// call. Active on every screen, before the screen's own keys; an action
+/// that has nothing to answer lets the key through.
 pub const DECIDE: Context = Context::new("decide");
 /// The choice after `s` on an inbox item.
 pub const SHELVE: Context = Context::new("shelve");

@@ -22,7 +22,6 @@ pub mod governor;
 mod guard;
 mod history;
 pub mod hookbus;
-mod jev;
 mod jobs;
 pub mod knowledge;
 pub mod ledger;
@@ -59,7 +58,7 @@ pub use contracts::{
     ContractService, ContractStore, FileRecord, PullContext, Rescanned, ScanStats, SourceFile,
     SourceTree, StartFan, WatchFan,
 };
-pub use decision::{DecisionExtra, DecisionRecord, JevTrace, Outcome, Source};
+pub use decision::{DecisionExtra, DecisionRecord, Outcome, Source};
 pub use engine::{Engine, EngineReport, MissionsPump};
 pub use error::{AppError, AppResult};
 pub use evidence::{
@@ -86,7 +85,6 @@ pub use hookbus::{
     AllowStop, HookBus, HookFeed, HookNotice, NoSessionContext, SessionSignals,
     SessionStartContext, SessionStartInfo, StopAnswer, StopContext, StopPolicy,
 };
-pub use jev::{Jev, JevState, SUMMARY_MAX, summarize};
 pub use jobs::{
     JobFact, JobService, JobStart, JobStarts, PumpReport, QueueEntry, QueueStats, Restart,
 };
@@ -113,9 +111,9 @@ pub use routing::{ROUTE_PROMPT_MAX, RouteReport, Routed, RoutingService};
 pub use sendback::{SentBack, send_back_prompt};
 pub use sessions::SessionService;
 pub use settings::{
-    BoardSettings, ConsoleSettings, FailMode, GovernorSettings, GuardSettings, JevProvider,
-    JevSettings, LayoutSettings, MAX_SEND_BACK_NOTES, MotionSetting, OnUnreachable, ReviewSettings,
-    ReviewWhen, RowSettings, Settings, TelemetrySettings, UiSettings, WorktreeSettings,
+    BoardSettings, ConsoleSettings, FailMode, GovernorSettings, GuardSettings, LayoutSettings,
+    MAX_SEND_BACK_NOTES, MotionSetting, OnUnreachable, ReviewSettings, ReviewWhen, RowSettings,
+    Settings, TelemetrySettings, UiSettings, WorktreeSettings,
 };
 pub use telemetry::{
     ActivityView, AgentsPoll, Battery, CacheView, CiRun, Collected, CombinedStatusline, Commit,

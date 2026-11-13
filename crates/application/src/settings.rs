@@ -1,7 +1,6 @@
 use std::path::PathBuf;
 
 use crate::palette::ThemeDef;
-use swarmux_domain::alarm::Reversibility;
 use swarmux_domain::budget::GovernorPolicy;
 use swarmux_domain::telemetry::{MINUTE, PriceTable};
 use swarmux_domain::{
@@ -48,7 +47,6 @@ pub struct Settings {
     /// Model for new sessions.
     pub default_model: String,
     pub guard: GuardSettings,
-    pub jev: JevSettings,
     pub review: ReviewSettings,
     pub telemetry: TelemetrySettings,
     /// Built-in model prices with the `[pricing]` overrides applied.
@@ -494,7 +492,6 @@ impl Default for Settings {
             min_free_ram_mb: 1536,
             default_model: DEFAULT_MODEL.to_string(),
             guard: GuardSettings::default(),
-            jev: JevSettings::default(),
             review: ReviewSettings::default(),
             telemetry: TelemetrySettings::default(),
             pricing: PriceTable::builtin(),
@@ -511,76 +508,6 @@ impl Default for Settings {
             warnings: Vec::new(),
             deck: swarmux_domain::console::DeckConfig::default(),
         }
-    }
-}
-
-/// Which hosted JEV provider to ask, if any.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum JevProvider {
-    #[default]
-    Off,
-    TypeSafe,
-    OpenRouter,
-}
-
-impl JevProvider {
-    pub const ALL: [JevProvider; 3] = [
-        JevProvider::Off,
-        JevProvider::TypeSafe,
-        JevProvider::OpenRouter,
-    ];
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            JevProvider::Off => "off",
-            JevProvider::TypeSafe => "typesafe",
-            JevProvider::OpenRouter => "openrouter",
-        }
-    }
-
-    pub fn parse(s: &str) -> Option<JevProvider> {
-        JevProvider::ALL.into_iter().find(|p| p.as_str() == s)
-    }
-
-    /// How long a decision may take before swarmux stops waiting.
-    pub fn default_timeout_ms(self) -> u64 {
-        match self {
-            JevProvider::OpenRouter => 5_000,
-            JevProvider::Off | JevProvider::TypeSafe => 2_000,
-        }
-    }
-}
-
-/// The `[jev]` section: the optional hosted decision model.
-#[derive(Clone, Debug, PartialEq)]
-pub struct JevSettings {
-    pub provider: JevProvider,
-    /// Answers below this confidence go to the user (or to Haiku) instead.
-    pub threshold: f64,
-    /// `None` uses the provider's default.
-    pub timeout_ms: Option<u64>,
-    /// JEV may allow a call up to this reversibility; above it, and for
-    /// every call a person must confirm by typing, it may only deny or
-    /// hand the call to the owner. `R1` (changes that stay in the
-    /// worktree) by default; `R4` is not a choice.
-    pub max_allow: Reversibility,
-}
-
-impl Default for JevSettings {
-    fn default() -> JevSettings {
-        JevSettings {
-            provider: JevProvider::Off,
-            threshold: 0.85,
-            timeout_ms: None,
-            max_allow: Reversibility::R1,
-        }
-    }
-}
-
-impl JevSettings {
-    pub fn timeout_ms(&self) -> u64 {
-        self.timeout_ms
-            .unwrap_or_else(|| self.provider.default_timeout_ms())
     }
 }
 
@@ -655,26 +582,6 @@ mod tests {
             (0.97, 2, None)
         );
         assert_eq!(g.policy(), GovernorPolicy::default());
-    }
-
-    #[test]
-    fn jev_is_off_by_default_with_provider_timeouts() {
-        let j = JevSettings::default();
-        assert_eq!((j.provider, j.threshold), (JevProvider::Off, 0.85));
-        let typesafe = JevSettings {
-            provider: JevProvider::TypeSafe,
-            ..j.clone()
-        };
-        assert_eq!(typesafe.timeout_ms(), 2_000);
-        let openrouter = JevSettings {
-            provider: JevProvider::OpenRouter,
-            ..j
-        };
-        assert_eq!(openrouter.timeout_ms(), 5_000);
-        for p in JevProvider::ALL {
-            assert_eq!(JevProvider::parse(p.as_str()), Some(p));
-        }
-        assert_eq!(JevProvider::parse("x"), None);
     }
 
     #[test]

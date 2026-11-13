@@ -1473,8 +1473,8 @@ impl App {
     }
 
     /// The answers to whatever is asking: a proposed plan first, then the
-    /// JEV consent, then the oldest held tool call. Does nothing, and lets
-    /// the key through, when nothing is asking.
+    /// oldest held tool call. Does nothing, and lets the key through, when
+    /// nothing is asking.
     fn decide(&mut self, action: Action) -> Handled {
         let answer = match action {
             DECIDE_YES => Decision::Yes,
@@ -1486,13 +1486,6 @@ impl App {
             && let Some(slug) = self.plan_target()
         {
             let result = self.answer_plan(answer, &slug);
-            self.show(result);
-            return Handled::Yes;
-        }
-        if matches!(answer, Decision::Yes | Decision::No)
-            && self.engine.guard.jev().is_some_and(|j| j.wants_consent())
-        {
-            let result = self.answer_consent(answer == Decision::Yes);
             self.show(result);
             return Handled::Yes;
         }
@@ -2261,13 +2254,13 @@ pub(crate) mod tests_support {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use swarmux_application::ports::PromptRepository;
     use swarmux_application::testing::{
-        FakeAdvisor, FakeAgentCatalog, FakeConsents, FakeDecisionRepo, FakeGit, FakeHookInbox,
-        FakeJobGates, FakeLinter, FakeMergeQueue, FakeMonitor, FakePlanner, FakeRouter,
-        FakeRuleStore, FakeRunner, FakeTelemetry, FakeTerminal, FakeUsageProbe, FakeWorkspace,
-        FixedClock, InMemoryMissions, InMemoryPlans, InMemoryStore, InMemoryWorktrees,
+        FakeAgentCatalog, FakeDecisionRepo, FakeGit, FakeHookInbox, FakeJobGates, FakeLinter,
+        FakeMergeQueue, FakeMonitor, FakePlanner, FakeRouter, FakeRuleStore, FakeRunner,
+        FakeTelemetry, FakeTerminal, FakeUsageProbe, FakeWorkspace, FixedClock, InMemoryMissions,
+        InMemoryPlans, InMemoryStore, InMemoryWorktrees,
     };
     use swarmux_application::{
-        Governor, GovernorSettings, GuardService, HistoryService, Jev, JobService, MissionService,
+        Governor, GovernorSettings, GuardService, HistoryService, JobService, MissionService,
         PromptService, ReviewSettings, ReviewWhen, RoutingService, ScopeClaims, SessionService,
         SharedPolicy, TelemetryService, TelemetrySettings, WorktreeService,
     };
@@ -2290,8 +2283,6 @@ pub(crate) mod tests_support {
         pub feed: Rc<FakeTelemetry>,
         /// Records what `t` on Focus opens.
         pub terminal: Rc<FakeTerminal>,
-        /// Set by [`test_app_with_jev`].
-        pub advisor: Option<Rc<FakeAdvisor>>,
         /// Where the Missions screen keeps its missions.
         pub missions: Rc<InMemoryMissions>,
         /// Answers mission lints when told to.
@@ -2311,23 +2302,18 @@ pub(crate) mod tests_support {
         test_app_with_store(Rc::new(InMemoryStore::default()))
     }
 
-    /// An app with JEV configured; `consented` says whether the user already agreed.
-    pub(crate) fn test_app_with_jev(consented: bool) -> TestApp {
-        build(Rc::new(InMemoryStore::default()), Some(consented), false)
-    }
-
     /// An app whose `/work` folder is a git repository with worktrees, so
     /// approved plans can run as task graphs.
     pub(crate) fn test_app_with_graph() -> TestApp {
-        build(Rc::new(InMemoryStore::default()), None, true)
+        build(Rc::new(InMemoryStore::default()), true)
     }
 
     /// An app over an existing store, like a restart.
     pub(crate) fn test_app_with_store(store: Rc<InMemoryStore>) -> TestApp {
-        build(store, None, false)
+        build(store, false)
     }
 
-    fn build(store: Rc<InMemoryStore>, jev: Option<bool>, graph: bool) -> TestApp {
+    fn build(store: Rc<InMemoryStore>, graph: bool) -> TestApp {
         let runner = Rc::new(FakeRunner::default());
         let clock = Rc::new(FixedClock::new(1_000));
         let monitor = Rc::new(FakeMonitor::default());
@@ -2353,7 +2339,7 @@ pub(crate) mod tests_support {
         let inbox = Rc::new(FakeHookInbox::default());
         let decisions = Rc::new(FakeDecisionRepo::default());
         let rules = Rc::new(FakeRuleStore::default());
-        let mut guard = GuardService::new(
+        let guard = GuardService::new(
             SharedPolicy::new(GuardPolicy::default()).with_now(clock.reader()),
             inbox.clone(),
             decisions.clone(),
@@ -2361,7 +2347,7 @@ pub(crate) mod tests_support {
         )
         .with_rule_store(rules.clone());
         let router = Rc::new(FakeRouter::default());
-        let mut routing = RoutingService::new(
+        let routing = RoutingService::new(
             store.clone(),
             store.clone(),
             decisions.clone(),
@@ -2371,18 +2357,6 @@ pub(crate) mod tests_support {
         let feed = Rc::new(FakeTelemetry::default());
         let terminal = Rc::new(FakeTerminal::default());
         let service = TelemetryService::new(feed.clone(), store.clone(), clock.clone());
-        let mut advisor = None;
-        if let Some(consented) = jev {
-            let fake = Rc::new(FakeAdvisor::default());
-            let consents = Rc::new(FakeConsents::default());
-            let jev = Rc::new(Jev::new(fake.clone(), consents, clock.clone(), 0.85).unwrap());
-            if consented {
-                jev.grant().unwrap();
-            }
-            guard = guard.with_jev(jev.clone());
-            routing = routing.with_jev(jev);
-            advisor = Some(fake);
-        }
         let missions = Rc::new(InMemoryMissions::default());
         let linter = Rc::new(FakeLinter::default());
         let job_gates = Rc::new(FakeJobGates::default());
@@ -2438,7 +2412,6 @@ pub(crate) mod tests_support {
             catalog,
             feed,
             terminal,
-            advisor,
             missions,
             linter,
             job_gates,

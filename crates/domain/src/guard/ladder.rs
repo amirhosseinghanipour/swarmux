@@ -13,8 +13,6 @@ use crate::Millis;
 pub enum Rung {
     /// A short message on the agent's next tool call.
     Nudge,
-    /// JEV judges: carry on, change approach, or stop.
-    Judge,
     /// Checkpoint, hand off, and carry on in a new session with a clean context.
     Fresh,
     /// Haiku reads the last steps and names what went wrong.
@@ -30,9 +28,8 @@ pub enum Rung {
 }
 
 impl Rung {
-    pub const ALL: [Rung; 8] = [
+    pub const ALL: [Rung; 7] = [
         Rung::Nudge,
-        Rung::Judge,
         Rung::Fresh,
         Rung::Diagnose,
         Rung::Fork,
@@ -45,7 +42,6 @@ impl Rung {
     pub fn as_str(self) -> &'static str {
         match self {
             Rung::Nudge => "nudge",
-            Rung::Judge => "judge",
             Rung::Fresh => "fresh",
             Rung::Diagnose => "diagnose",
             Rung::Fork => "fork",
@@ -63,7 +59,6 @@ impl Rung {
     pub fn label(self) -> &'static str {
         match self {
             Rung::Nudge => "nudge",
-            Rung::Judge => "JEV judgement",
             Rung::Fresh => "fresh session",
             Rung::Diagnose => "diagnosis",
             Rung::Fork => "fork from checkpoint",
@@ -91,7 +86,7 @@ impl Rung {
 pub struct LadderPolicy {
     /// The rungs that may be taken; the inbox is always the last resort.
     pub rungs: Vec<Rung>,
-    /// Settling time after a nudge, a judgement or a diagnosis.
+    /// Settling time after a nudge or a diagnosis.
     pub nudge_cooldown_ms: Millis,
     /// Settling time after a new session starts.
     pub restart_cooldown_ms: Millis,
@@ -114,7 +109,7 @@ impl LadderPolicy {
     /// How long the agent is left alone after `rung`.
     pub fn cooldown(&self, rung: Rung) -> Millis {
         match rung {
-            Rung::Nudge | Rung::Judge | Rung::Diagnose => self.nudge_cooldown_ms,
+            Rung::Nudge | Rung::Diagnose => self.nudge_cooldown_ms,
             Rung::Fresh | Rung::Fork | Rung::Escalate | Rung::Replan => self.restart_cooldown_ms,
             Rung::Inbox => 0,
         }
@@ -132,8 +127,6 @@ pub struct RungOptions {
     pub live: bool,
     /// A message on its next tool call would reach it.
     pub reachable: bool,
-    /// JEV is configured and the user agreed to it.
-    pub judge: bool,
     /// A checkpoint from before the trouble exists.
     pub checkpoint: bool,
     /// A stronger model than the current one is configured.
@@ -167,8 +160,6 @@ pub struct Ladder {
     /// The lowest rung not tried yet.
     next: usize,
     restarts: u32,
-    /// Nothing is tried before this (a judgement said carry on).
-    quiet_until: Option<Millis>,
 }
 
 impl Ladder {
@@ -184,12 +175,11 @@ impl Ladder {
         if self.escalated() {
             return NextRung::Done;
         }
-        if o.live {
-            let after_rung = self.taken.last().map(|t| t.at + policy.cooldown(t.rung));
-            let until = after_rung.max(self.quiet_until).unwrap_or(Millis::MIN);
-            if now < until {
-                return NextRung::Wait { until };
-            }
+        if o.live
+            && let Some(until) = self.taken.last().map(|t| t.at + policy.cooldown(t.rung))
+            && now < until
+        {
+            return NextRung::Wait { until };
         }
         let can_restart = self.restarts < policy.max_restarts;
         Rung::ALL[self.next..]
@@ -210,19 +200,6 @@ impl Ladder {
         if rung.restarts() {
             self.restarts += 1;
         }
-    }
-
-    /// A judgement said the agent is fine: leave it alone until `until`.
-    pub fn stand_down(&mut self, until: Millis) {
-        self.quiet_until = Some(self.quiet_until.map_or(until, |q| q.max(until)));
-    }
-
-    /// A judgement said stop: the next rung may follow at once.
-    pub fn hurry(&mut self) {
-        if let Some(last) = self.taken.last_mut() {
-            last.at = Millis::MIN / 2;
-        }
-        self.quiet_until = None;
     }
 
     pub fn taken(&self) -> &[Taken] {
@@ -248,7 +225,6 @@ fn applies(rung: Rung, kind: AlarmKind, o: &RungOptions, can_restart: bool) -> b
     match rung {
         // Telling an agent its context is full doesn't empty it.
         Rung::Nudge => o.live && o.reachable && kind != AlarmKind::Context,
-        Rung::Judge => o.live && o.judge && kind != AlarmKind::Context,
         Rung::Fresh | Rung::Replan => can_restart,
         Rung::Diagnose => kind != AlarmKind::Context,
         Rung::Fork => can_restart && o.checkpoint,
@@ -282,25 +258,9 @@ mod tests {
             l.plan(AlarmKind::Loop, 10_000, &p, &live()),
             NextRung::Wait { until: 90_000 }
         );
-        // JEV is off: its rung is skipped.
         assert_eq!(
             l.plan(AlarmKind::Loop, 90_000, &p, &live()),
             NextRung::Take(Rung::Fresh)
-        );
-    }
-
-    #[test]
-    fn judge_when_on_and_live() {
-        let p = LadderPolicy::default();
-        let mut l = Ladder::default();
-        l.record(Rung::Nudge, AlarmKind::Loop, 0);
-        let o = RungOptions {
-            judge: true,
-            ..live()
-        };
-        assert_eq!(
-            l.plan(AlarmKind::Loop, 90_000, &p, &o),
-            NextRung::Take(Rung::Judge)
         );
     }
 
@@ -394,20 +354,37 @@ mod tests {
     }
 
     #[test]
-    fn stand_down_and_hurry() {
+    fn the_ladder_has_no_model_rung_and_climbs_all_the_way_to_the_inbox() {
+        let names: Vec<&str> = Rung::ALL.iter().map(|r| r.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "nudge", "fresh", "diagnose", "fork", "escalate", "replan", "inbox"
+            ]
+        );
+        // From a nudge onward every rung is taken in turn once the one
+        // before it has settled, with nothing configured but the defaults.
         let p = LadderPolicy::default();
         let mut l = Ladder::default();
-        l.record(Rung::Judge, AlarmKind::Loop, 0);
-        l.stand_down(500_000);
-        assert_eq!(
-            l.plan(AlarmKind::Loop, 200_000, &p, &live()),
-            NextRung::Wait { until: 500_000 }
-        );
-        l.hurry();
-        assert_eq!(
-            l.plan(AlarmKind::Loop, 1, &p, &live()),
-            NextRung::Take(Rung::Fresh)
-        );
+        let o = RungOptions {
+            checkpoint: true,
+            stronger_model: true,
+            ..live()
+        };
+        let mut taken = Vec::new();
+        let mut now = 0;
+        while let NextRung::Take(r) = l.plan(AlarmKind::Loop, now, &p, &o) {
+            taken.push(r);
+            l.record(r, AlarmKind::Loop, now);
+            if r == Rung::Inbox {
+                break;
+            }
+            now += 1_000_000;
+        }
+        assert_eq!(taken.first(), Some(&Rung::Nudge));
+        assert_eq!(taken.last(), Some(&Rung::Inbox));
+        assert!(taken.contains(&Rung::Diagnose));
+        assert!(l.escalated());
     }
 
     #[test]
@@ -416,6 +393,8 @@ mod tests {
             assert_eq!(Rung::parse(r.as_str()), Some(r));
         }
         assert_eq!(Rung::parse("nope"), None);
+        // The rung JEV had was removed with it; its name is no rung.
+        assert_eq!(Rung::parse("judge"), None);
         assert!(Rung::Fresh.restarts() && !Rung::Diagnose.restarts());
     }
 }

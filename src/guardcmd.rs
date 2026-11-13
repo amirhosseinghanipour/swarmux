@@ -24,9 +24,9 @@ pub enum Action {
         #[command(subcommand)]
         action: RulesAction,
     },
-    /// Check the `[guard]` and `[jev]` settings and the rules file: every
-    /// line that was replaced by its default is named. Exits 1 when there
-    /// is one.
+    /// Check the `[guard]` settings and the rules file: every line that was
+    /// replaced by its default, and any section left from JEV (removed), is
+    /// named. Exits 1 when there is one.
     Lint,
 }
 
@@ -157,9 +157,10 @@ fn lint(paths: &Paths) -> anyhow::Result<bool> {
         g.protected_paths.len()
     );
     println!(
-        "jev.max_allow = {} (irreversible calls are never JEV's to allow)",
-        settings.jev.max_allow.as_str()
+        "guard.unmatched = {} (a call no rule matches; no model is asked)",
+        format!("{:?}", g.unmatched).to_lowercase()
     );
+    println!("irreversible calls (R4) are allowed only by a typed confirmation");
     if problems.is_empty() {
         println!("ok   no setting was replaced by a default");
     }

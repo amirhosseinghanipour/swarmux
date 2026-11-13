@@ -2347,7 +2347,6 @@ dependencies = [
  "anyhow",
  "clap",
  "ratatui",
- "rpassword",
  "serde_json",
  "swarmux-application",
  "swarmux-domain",

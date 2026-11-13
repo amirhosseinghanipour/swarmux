@@ -1,5 +1,5 @@
-//! "Let swarmux route": picks the session a prompt should go to, with JEV
-//! when it is on and confident, else one Haiku call, else the selected session.
+//! "Let swarmux route": picks the session a prompt should go to with one
+//! Haiku call, else the selected session.
 
 use std::collections::VecDeque;
 use std::rc::Rc;
@@ -7,12 +7,11 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 
 use swarmux_domain::{Millis, Session, SessionId};
 
-use crate::jev::{SUMMARY_MAX, summarize};
 use crate::ports::{
-    AdviceAnswer, AdviceReply, Clock, DecisionRepository, JobRepository, PromptRouter,
-    RouteCandidate, RouteReply, RouteRequest, SessionRepository,
+    Clock, DecisionRepository, JobRepository, PromptRouter, RouteCandidate, RouteReply,
+    RouteRequest, SessionRepository,
 };
-use crate::{AppError, AppResult, DecisionRecord, Jev, Outcome, Source};
+use crate::{AppError, AppResult, DecisionRecord, Outcome, Source};
 
 /// How much of the prompt the router reads.
 pub const ROUTE_PROMPT_MAX: usize = 2000;
@@ -23,6 +22,8 @@ const PREVIEW_MAX: usize = 100;
 const HISTORY_SCAN: usize = 200;
 /// Routing decisions kept in memory for the dashboard.
 const RECENT: usize = 20;
+/// Longest prompt summary written to the decision log.
+const SUMMARY_MAX: usize = 200;
 
 /// Where a routed prompt goes, and why.
 #[derive(Clone, Debug, PartialEq)]
@@ -34,7 +35,6 @@ pub struct Routed {
     pub model_hint: Option<String>,
     pub reason: String,
     pub source: Source,
-    pub confidence: Option<f64>,
     /// What asking the router cost.
     pub cost_usd: f64,
 }
@@ -42,11 +42,7 @@ pub struct Routed {
 impl Routed {
     /// One line for the status bar and the job log.
     pub fn summary(&self) -> String {
-        let by = match (self.source, self.confidence) {
-            (Source::Jev, Some(c)) => format!("jev {c:.2}"),
-            (source, _) => source.as_str().to_string(),
-        };
-        let mut notes = vec![by];
+        let mut notes = vec![self.source.as_str().to_string()];
         notes.extend(self.notes());
         format!(
             "routed → {} ({}): {}",
@@ -86,11 +82,6 @@ pub struct RouteReport {
     pub errors: Vec<AppError>,
 }
 
-enum Msg {
-    Jev(AdviceReply),
-    Router(RouteReply),
-}
-
 struct Pending {
     ticket: u64,
     prompt: String,
@@ -107,9 +98,8 @@ pub struct RoutingService {
     decisions: Rc<dyn DecisionRepository>,
     clock: Rc<dyn Clock>,
     router: Option<Rc<dyn PromptRouter>>,
-    jev: Option<Rc<Jev>>,
-    tx: Sender<(u64, Msg)>,
-    rx: Receiver<(u64, Msg)>,
+    tx: Sender<(u64, RouteReply)>,
+    rx: Receiver<(u64, RouteReply)>,
     pending: Vec<Pending>,
     /// Routed prompts not yet reported, with the prompt and start time.
     ready: Vec<(Routed, String, Millis)>,
@@ -131,7 +121,6 @@ impl RoutingService {
             decisions,
             clock,
             router: None,
-            jev: None,
             tx,
             rx,
             pending: Vec::new(),
@@ -143,12 +132,6 @@ impl RoutingService {
 
     pub fn with_router(mut self, router: Rc<dyn PromptRouter>) -> RoutingService {
         self.router = Some(router);
-        self
-    }
-
-    /// JEV is asked first while it is on.
-    pub fn with_jev(mut self, jev: Rc<Jev>) -> RoutingService {
-        self.jev = Some(jev);
         self
     }
 
@@ -173,10 +156,6 @@ impl RoutingService {
         if pending.candidates.len() == 1 {
             let routed = fallback_route(&pending, Source::Fallback, "the only session".into());
             self.finish(&pending, routed);
-        } else if let Some(jev) = self.jev.as_ref().filter(|j| j.is_on()) {
-            let names = pending.candidates.iter().map(|s| s.name.clone()).collect();
-            jev.ask_session(&pending.prompt, names, self.sink(pending.ticket, Msg::Jev));
-            self.pending.push(pending);
         } else {
             self.ask_router(pending);
         }
@@ -197,24 +176,18 @@ impl RoutingService {
     /// last call.
     pub fn pump(&mut self) -> RouteReport {
         let mut report = RouteReport::default();
-        while let Ok((ticket, msg)) = self.rx.try_recv() {
+        while let Ok((ticket, reply)) = self.rx.try_recv() {
             let Some(i) = self.pending.iter().position(|p| p.ticket == ticket) else {
                 continue;
             };
             let pending = self.pending.remove(i);
-            match msg {
-                Msg::Jev(reply) => self.on_jev(pending, reply, &mut report),
-                Msg::Router(reply) => {
-                    let routed = on_router(&pending, reply);
-                    self.finish(&pending, routed);
-                }
-            }
+            let routed = on_router(&pending, reply);
+            self.finish(&pending, routed);
         }
         for (routed, prompt, started) in std::mem::take(&mut self.ready) {
             let latency = u64::try_from(self.clock.now() - started).unwrap_or(0);
             let record = DecisionRecord {
                 source: routed.source,
-                confidence: routed.confidence,
                 latency_us: latency.saturating_mul(1000),
                 ..self.record(&prompt, routed.rule())
             };
@@ -222,53 +195,6 @@ impl RoutingService {
             report.routed.push(routed);
         }
         report
-    }
-
-    fn on_jev(&mut self, pending: Pending, reply: AdviceReply, report: &mut RouteReport) {
-        let threshold = self.jev.as_ref().map_or(1.0, |j| j.threshold());
-        let latency_us = reply.latency_ms.saturating_mul(1000);
-        let picked = match reply.result {
-            Ok(advice) => match advice.answer {
-                AdviceAnswer::Session(name) => match find(&pending.candidates, &name) {
-                    Some(session) => Ok((session.clone(), advice.confidence)),
-                    None => Err(format!("unknown session {name:?}")),
-                },
-                _ => Err("answered another question".into()),
-            },
-            Err(e) => Err(e.to_string()),
-        };
-        let (rule, source, confidence) = match picked {
-            Ok((session, confidence)) if confidence >= threshold => {
-                let routed = Routed {
-                    ticket: pending.ticket,
-                    session,
-                    model_hint: None,
-                    reason: "jev's pick".into(),
-                    source: Source::Jev,
-                    confidence: Some(confidence),
-                    cost_usd: 0.0,
-                };
-                self.finish(&pending, routed);
-                return;
-            }
-            Ok((session, confidence)) => (
-                format!(
-                    "→ {}? {confidence:.2} < {threshold:.2}, asking haiku",
-                    session.name
-                ),
-                Source::Jev,
-                Some(confidence),
-            ),
-            Err(why) => (format!("jev: {why}"), Source::JevError, None),
-        };
-        let record = DecisionRecord {
-            source,
-            confidence,
-            latency_us,
-            ..self.record(&pending.prompt, rule)
-        };
-        report.errors.extend(self.save(record).err());
-        self.ask_router(pending);
     }
 
     fn ask_router(&mut self, pending: Pending) {
@@ -281,18 +207,14 @@ impl RoutingService {
             prompt: pending.prompt.clone(),
             candidates: self.candidates(&pending.candidates),
         };
-        router.route(request, self.sink(pending.ticket, Msg::Router));
+        router.route(request, self.sink(pending.ticket));
         self.pending.push(pending);
     }
 
-    fn sink<T: Send + 'static>(
-        &self,
-        ticket: u64,
-        wrap: fn(T) -> Msg,
-    ) -> Box<dyn FnOnce(T) + Send> {
+    fn sink(&self, ticket: u64) -> Box<dyn FnOnce(RouteReply) + Send> {
         let tx = self.tx.clone();
         Box::new(move |reply| {
-            let _ = tx.send((ticket, wrap(reply)));
+            let _ = tx.send((ticket, reply));
         })
     }
 
@@ -359,7 +281,6 @@ fn on_router(pending: &Pending, reply: RouteReply) -> Routed {
             model_hint: answer.model,
             reason: answer.reason,
             source: Source::Haiku,
-            confidence: None,
             cost_usd: 0.0,
         },
         Err(why) => fallback_route(
@@ -379,8 +300,16 @@ fn fallback_route(pending: &Pending, source: Source, reason: String) -> Routed {
         model_hint: None,
         reason,
         source,
-        confidence: None,
         cost_usd: 0.0,
+    }
+}
+
+/// `s` on one line, cut to `max` characters.
+fn summarize(s: &str, max: usize) -> String {
+    let flat = s.split_whitespace().collect::<Vec<_>>().join(" ");
+    match flat.char_indices().nth(max) {
+        Some((i, _)) => flat[..i].to_string(),
+        None => flat,
     }
 }
 

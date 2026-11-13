@@ -11,7 +11,7 @@ use swarmux_domain::{
     ReviewState, ReviewVerdict, STALL_AFTER_MS, SessionId, SessionState, rank,
 };
 
-use crate::{DecisionRecord, GuardService, JobFact, JobService, Outcome, PendingApproval, Source};
+use crate::{DecisionRecord, GuardService, JobFact, JobService, Outcome, PendingApproval};
 
 mod service;
 pub mod store;
@@ -106,8 +106,7 @@ impl AttentionService {
         extra: Vec<AttentionItem>,
         now: Millis,
     ) -> Vec<AttentionItem> {
-        let worries: Vec<Worry> = guard.recent().filter_map(worry).collect();
-        self.gather(&guard.approvals(), &jobs.facts(), extra, &worries, now)
+        self.gather(&guard.approvals(), &jobs.facts(), extra, now)
     }
 
     /// [`collect`](Self::collect) from plain values.
@@ -117,7 +116,7 @@ impl AttentionService {
         facts: &[JobFact],
         now: Millis,
     ) -> Vec<AttentionItem> {
-        self.gather(approvals, facts, Vec::new(), &[], now)
+        self.gather(approvals, facts, Vec::new(), now)
     }
 
     fn gather(
@@ -125,7 +124,6 @@ impl AttentionService {
         approvals: &[PendingApproval],
         facts: &[JobFact],
         extra: Vec<AttentionItem>,
-        worries: &[Worry],
         now: Millis,
     ) -> Vec<AttentionItem> {
         let mut items = extra;
@@ -157,10 +155,6 @@ impl AttentionService {
                 novelty: novelty(&tally),
                 track_record: session.map_or(0.5, |s| track_record(s, facts)),
                 taint: false,
-                jev: worries
-                    .iter()
-                    .find(|w| w.tool == r.tool_name && w.subject == r.subject)
-                    .map(|w| w.worry),
             };
             let mut item = AttentionItem::approval_scored(&call, &ctx, since, deadline);
             if let Some(rule) = &a.rule {
@@ -246,24 +240,6 @@ impl AttentionService {
         let decisions: Vec<&DecisionRecord> = guard.recent().collect();
         changes_from(&jobs.facts(), &decisions, extra, limit)
     }
-}
-
-/// What a decision model once said about a call it wasn't sure of.
-struct Worry {
-    tool: String,
-    subject: String,
-    worry: f64,
-}
-
-fn worry(d: &DecisionRecord) -> Option<Worry> {
-    if d.source != Source::Jev || !matches!(d.outcome, Outcome::Ask | Outcome::Deny) {
-        return None;
-    }
-    Some(Worry {
-        tool: d.tool.clone(),
-        subject: d.subject.clone(),
-        worry: d.confidence?,
-    })
 }
 
 /// How a session's earlier jobs went: the share that finished well, `0.5`

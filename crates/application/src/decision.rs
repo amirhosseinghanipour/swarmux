@@ -59,9 +59,10 @@ pub enum Source {
     #[default]
     Guard,
     Loop,
-    /// The hosted JEV model.
+    /// Legacy: records of the hosted JEV model, which was removed. Never
+    /// written any more; kept so history made with it still reads.
     Jev,
-    /// JEV was asked but gave no usable answer.
+    /// Legacy: JEV was asked but gave no usable answer. See [`Source::Jev`].
     JevError,
     /// The Haiku prompt router.
     Haiku,
@@ -97,18 +98,16 @@ impl Source {
     pub fn parse(s: &str) -> Option<Source> {
         Source::ALL.into_iter().find(|x| x.as_str() == s)
     }
-}
 
-/// How a model's answer came about: enough to tell, later, which model said
-/// what about which exact question.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct JevTrace {
-    pub provider: String,
-    pub model: String,
-    /// SHA-256 (hex) of what was sent.
-    pub prompt_sha256: String,
-    /// The summary of the call was cut before it was sent.
-    pub truncated: bool,
+    /// What a list shows: the stored word, and for the sources of the
+    /// removed JEV a note that it no longer exists.
+    pub fn label(self) -> &'static str {
+        match self {
+            Source::Jev => "jev (removed)",
+            Source::JevError => "jev-error (removed)",
+            other => other.as_str(),
+        }
+    }
 }
 
 /// What a decision record carries beyond the call and its outcome.
@@ -117,10 +116,9 @@ pub struct DecisionExtra {
     /// The subagent that made the call, when it was one.
     pub agent_id: Option<String>,
     pub agent_type: Option<String>,
-    /// Set on records of a model's answer.
-    pub jev: Option<JevTrace>,
-    /// What resolved the call: `human-typed`, `human-key`, `rule`, `model`
-    /// or `timeout`; unset for calls decided at once.
+    /// What resolved the call: `human-typed`, `human-key`, `rule` or
+    /// `timeout` (`model` on records made while JEV existed); unset for
+    /// calls decided at once.
     pub resolver: Option<String>,
 }
 
@@ -135,7 +133,8 @@ pub struct DecisionRecord {
     pub latency_us: u64,
     pub ts: Millis,
     pub source: Source,
-    /// Only for model answers that came with one; never made up.
+    /// Only for model answers that came with one (those of the removed JEV);
+    /// never made up.
     pub confidence: Option<f64>,
     pub extra: DecisionExtra,
 }
@@ -161,5 +160,19 @@ mod tests {
             assert_eq!(Source::parse(s.as_str()), Some(s));
         }
         assert_eq!(Source::parse("x"), None);
+    }
+
+    #[test]
+    fn records_made_by_the_removed_jev_still_read() {
+        // Stored decisions and ledger entries name their source as text.
+        assert_eq!(Source::parse("jev"), Some(Source::Jev));
+        assert_eq!(Source::parse("jev-error"), Some(Source::JevError));
+        assert_eq!(Source::Jev.as_str(), "jev");
+        assert_eq!(Source::JevError.as_str(), "jev-error");
+        assert_eq!(Source::Jev.label(), "jev (removed)");
+        assert_eq!(Source::JevError.label(), "jev-error (removed)");
+        assert_eq!(Source::Haiku.label(), "haiku");
+        // Nothing new is ever made with them: the default is the guard.
+        assert_eq!(Source::default(), Source::Guard);
     }
 }

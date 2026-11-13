@@ -1,10 +1,9 @@
-//! The keys of `[guard]` and `[jev]` that are read line by line: a value
+//! The keys of `[guard]` that are read line by line: a value
 //! that is wrong is replaced by its default and said so in
 //! `Settings::warnings`, never a reason to refuse the file.
 
 use swarmux_application::{OnUnreachable, Settings};
 use swarmux_domain::RuleScope;
-use swarmux_domain::alarm::Reversibility;
 use toml::Value;
 
 /// Longest an "always allow" may last, in days.
@@ -20,14 +19,9 @@ pub(crate) struct GuardExtras {
     pub hook_on_failure_block: Option<Value>,
 }
 
-/// Applies `[guard]` extras and `max_allow` of `[jev]` to `settings`,
-/// adding a warning for each value that was replaced.
-pub(crate) fn apply(
-    extras: GuardExtras,
-    max_allow: Option<Value>,
-    text: &str,
-    settings: &mut Settings,
-) {
+/// Applies `[guard]` extras to `settings`, adding a warning for each value
+/// that was replaced.
+pub(crate) fn apply(extras: GuardExtras, text: &str, settings: &mut Settings) {
     let mut warnings: Vec<String> = Vec::new();
     let mut warn = |key: &str, message: String| {
         let line =
@@ -101,27 +95,6 @@ pub(crate) fn apply(
             ),
         }
     }
-    if let Some(v) = max_allow {
-        let tier = v.as_str().map(str::trim).and_then(|s| {
-            [
-                Reversibility::R0,
-                Reversibility::R1,
-                Reversibility::R2,
-                Reversibility::R3,
-            ]
-            .into_iter()
-            .find(|r| r.as_str() == s)
-        });
-        match tier {
-            Some(r) => settings.jev.max_allow = r,
-            None => warn(
-                "max_allow",
-                format!(
-                    "jev.max_allow {v} is not \"R0\", \"R1\", \"R2\" or \"R3\" (irreversible calls are never JEV's to allow); using \"R1\""
-                ),
-            ),
-        }
-    }
     settings.warnings.extend(warnings);
 }
 
@@ -131,7 +104,6 @@ mod tests {
 
     use swarmux_application::{OnUnreachable, Settings};
     use swarmux_domain::RuleScope;
-    use swarmux_domain::alarm::Reversibility;
 
     use crate::config::parse_settings;
 
@@ -147,21 +119,19 @@ mod tests {
         assert_eq!(s.guard.always_expiry_days, Some(30));
         assert!(s.guard.protected_paths.is_empty());
         assert!(!s.guard.hook_on_failure_block);
-        assert_eq!(s.jev.max_allow, Reversibility::R1);
         assert!(s.warnings.is_empty());
     }
 
     #[test]
     fn good_values_are_read() {
         let s = parse(
-            "[guard]\non_unreachable = \"deny\"\nalways_scope = \"workspace\"\nalways_expiry_days = 7\nprotected_paths = [\"deploy/**\", \"Makefile\"]\nhook_on_failure_block = true\n[jev]\nmax_allow = \"R2\"\n",
+            "[guard]\non_unreachable = \"deny\"\nalways_scope = \"workspace\"\nalways_expiry_days = 7\nprotected_paths = [\"deploy/**\", \"Makefile\"]\nhook_on_failure_block = true\n",
         );
         assert_eq!(s.guard.on_unreachable, OnUnreachable::Deny);
         assert_eq!(s.guard.always_scope, RuleScope::Workspace);
         assert_eq!(s.guard.always_expiry_days, Some(7));
         assert_eq!(s.guard.protected_paths, ["deploy/**", "Makefile"]);
         assert!(s.guard.hook_on_failure_block);
-        assert_eq!(s.jev.max_allow, Reversibility::R2);
         assert!(s.warnings.is_empty(), "{:?}", s.warnings);
         assert!(s.guard.protected_globs().contains(&"deploy/**".to_string()));
         assert!(s.guard.protected_globs().contains(&".mcp.json".to_string()));
@@ -177,7 +147,7 @@ mod tests {
     #[test]
     fn bad_lines_fall_back_to_defaults_with_a_warning_each() {
         let s = parse(
-            "max_concurrent = 2\n[guard]\non_unreachable = \"sometimes\"\nalways_scope = 3\nalways_expiry_days = 0\nprotected_paths = \"x\"\nhook_on_failure_block = \"yes\"\n[jev]\nmax_allow = \"R4\"\n",
+            "max_concurrent = 2\n[guard]\non_unreachable = \"sometimes\"\nalways_scope = 3\nalways_expiry_days = 0\nprotected_paths = \"x\"\nhook_on_failure_block = \"yes\"\n",
         );
         assert_eq!(s.max_concurrent, 2, "the rest of the file is read");
         assert_eq!(s.guard.on_unreachable, OnUnreachable::Auto);
@@ -185,8 +155,7 @@ mod tests {
         assert_eq!(s.guard.always_expiry_days, Some(30));
         assert!(s.guard.protected_paths.is_empty());
         assert!(!s.guard.hook_on_failure_block);
-        assert_eq!(s.jev.max_allow, Reversibility::R1, "R4 is never JEV's");
-        assert_eq!(s.warnings.len(), 6, "{:#?}", s.warnings);
+        assert_eq!(s.warnings.len(), 5, "{:#?}", s.warnings);
         assert!(s.warnings[0].contains("line 3"), "{}", s.warnings[0]);
         assert!(s.warnings[0].contains("on_unreachable"));
     }

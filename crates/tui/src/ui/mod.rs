@@ -98,15 +98,7 @@ fn draw_screens(frame: &mut Frame, app: &App, t: &Theme) {
     draw_tabs(frame, tabs, app, t);
 
     def.draw(frame, body, app);
-    if app.engine.guard.jev().is_some_and(|j| j.wants_consent()) {
-        let h = guard::CONSENT_HEIGHT.min(body.height);
-        let overlay = Rect {
-            y: body.y + body.height - h,
-            height: h,
-            ..body
-        };
-        guard::render_consent(frame, overlay, app);
-    } else if let Mode::Confirm(c) = &app.mode {
+    if let Mode::Confirm(c) = &app.mode {
         let h = confirm::HEIGHT.min(body.height);
         let overlay = Rect {
             y: body.y + body.height - h,
@@ -165,12 +157,10 @@ fn draw_screens(frame: &mut Frame, app: &App, t: &Theme) {
     frame.render_widget(stats, right);
 }
 
-/// Rows the approval or consent overlay takes at the bottom of a body
-/// `body_height` rows tall.
+/// Rows the approval overlay takes at the bottom of a body `body_height`
+/// rows tall.
 pub(crate) fn overlay_rows(app: &App, body_height: u16) -> u16 {
-    if app.engine.guard.jev().is_some_and(|j| j.wants_consent()) {
-        guard::CONSENT_HEIGHT.min(body_height)
-    } else if app.engine.guard.pending_count() > 0 {
+    if app.engine.guard.pending_count() > 0 {
         if body_height < guard::COMPACT_BELOW {
             1
         } else {

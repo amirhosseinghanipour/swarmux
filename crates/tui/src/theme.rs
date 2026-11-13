@@ -38,7 +38,7 @@ pub struct Theme {
     pub builder: Color,
     /// Haiku.
     pub haiku: Color,
-    /// The Guard / JEV panel.
+    /// The Guard panel.
     pub guard: Color,
     /// The reviewer when its model is unknown.
     pub reviewer: Color,

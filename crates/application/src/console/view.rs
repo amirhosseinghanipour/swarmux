@@ -994,7 +994,10 @@ mirror!(
 pub enum DecisionSource {
     Guard,
     Loop,
+    /// Legacy: made by the hosted JEV model, which was removed. Never sent
+    /// for new decisions; the word stays so history made with it reads.
     Jev,
+    /// Legacy: JEV was asked and gave no usable answer. See `Jev`.
     JevError,
     Haiku,
     HaikuError,

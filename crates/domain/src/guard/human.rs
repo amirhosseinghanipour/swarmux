@@ -20,7 +20,9 @@ pub enum Resolver {
     HumanKey,
     /// A configured, learned or built-in rule.
     Rule,
-    /// A hosted decision model (JEV).
+    /// An automated decider. None ships: the hosted JEV model was one, and
+    /// was removed. Kept so a later extension cannot allow an irreversible
+    /// call either (and so old records that name it still read).
     Model,
     /// Nobody answered in time.
     Timeout,

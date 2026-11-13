@@ -52,7 +52,7 @@ pub enum LedgerKind {
     JobStarted,
     /// Something a running agent reported (stream-json).
     AgentEvent,
-    /// A guard, loop-breaker, JEV or routing decision.
+    /// A guard, loop-breaker or routing decision.
     GuardDecision,
     ReviewVerdict,
     JobFinished,

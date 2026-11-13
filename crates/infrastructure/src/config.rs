@@ -5,10 +5,9 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
-use serde::de::IgnoredAny;
 use swarmux_application::{
-    GuardSettings, JevProvider, JevSettings, LayoutSettings, MotionSetting, ReviewSettings,
-    ReviewWhen, RowSettings, Settings, ThemeDef, UiSettings,
+    GuardSettings, LayoutSettings, MotionSetting, ReviewSettings, ReviewWhen, RowSettings,
+    Settings, ThemeDef, UiSettings,
 };
 use swarmux_domain::{Pattern, Unmatched};
 
@@ -39,7 +38,9 @@ struct RawConfig {
     min_free_ram_mb: Option<i64>,
     default_model: Option<String>,
     guard: Option<RawGuard>,
-    jev: Option<RawJev>,
+    /// JEV was removed: a `[jev]` section is read as anything and ignored,
+    /// with a warning, so an old config still loads.
+    jev: Option<toml::Value>,
     review: Option<RawReview>,
     telemetry: Option<crate::config_telemetry::RawTelemetry>,
     pricing: Option<crate::config_telemetry::RawPricing>,
@@ -91,18 +92,6 @@ struct RawReview {
     enabled: Option<bool>,
     model: Option<String>,
     when: Option<String>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawJev {
-    provider: Option<String>,
-    threshold: Option<f64>,
-    timeout_ms: Option<i64>,
-    /// Read line by line: see `config_guard`.
-    max_allow: Option<toml::Value>,
-    /// Only to refuse it with a clear message; its value is never read.
-    api_key: Option<IgnoredAny>,
 }
 
 #[derive(Deserialize)]
@@ -182,12 +171,10 @@ pub fn parse_settings(text: &str, path: &Path) -> Result<Settings, ConfigError> 
         extras.hook_on_failure_block = guard.hook_on_failure_block.take();
         settings.guard = parse_guard(guard, text, path)?;
     }
-    let mut max_allow = None;
-    if let Some(mut jev) = raw.jev {
-        max_allow = jev.max_allow.take();
-        settings.jev = parse_jev(jev, text, path)?;
+    if let Some(jev) = &raw.jev {
+        settings.warnings.push(removed_jev_warning(jev, text));
     }
-    crate::config_guard::apply(extras, max_allow, text, &mut settings);
+    crate::config_guard::apply(extras, text, &mut settings);
     if let Some(review) = raw.review {
         settings.review = parse_review(review, text, path)?;
     }
@@ -207,7 +194,8 @@ pub fn parse_settings(text: &str, path: &Path) -> Result<Settings, ConfigError> 
         settings.notify = crate::config_notify::parse_notify(notify, text, path)?;
     }
     if let Some(watchdog) = raw.watchdog {
-        settings.watchdog = crate::config_watchdog::parse_watchdog(watchdog, text, path)?;
+        settings.watchdog =
+            crate::config_watchdog::parse_watchdog(watchdog, text, path, &mut settings.warnings)?;
     }
     if let Some(board) = raw.board {
         settings.board = crate::config_board::parse_board(board);
@@ -443,42 +431,26 @@ fn parse_review(raw: RawReview, text: &str, path: &Path) -> Result<ReviewSetting
     Ok(review)
 }
 
-fn parse_jev(raw: RawJev, text: &str, path: &Path) -> Result<JevSettings, ConfigError> {
-    let error = |key: &str, message: &str| ConfigError {
-        path: path.to_path_buf(),
-        line: key_line(text, key),
-        message: message.to_string(),
-    };
-    if raw.api_key.is_some() {
-        return Err(error(
-            "api_key",
-            "keys aren't read from config.toml: run `swarmux jev set-key <provider>`              or set TYPESAFE_API_KEY / OPENROUTER_API_KEY",
-        ));
+/// What is said about an old `[jev]` section (the hosted decision model,
+/// removed): that it is ignored, where it is, and what is left to do. Never
+/// shows a value from it.
+fn removed_jev_warning(section: &toml::Value, text: &str) -> String {
+    let line = text
+        .lines()
+        .position(|l| {
+            let l = l.trim_start();
+            l.starts_with("[jev]") || l.starts_with("[jev.")
+        })
+        .map(|i| i + 1)
+        .or_else(|| key_line(text, "jev"))
+        .map_or(String::new(), |l| format!(" (line {l})"));
+    let mut warning = format!(
+        "config.toml{line}: JEV was removed; this section is ignored. Delete it; `swarmux doctor` says whether a key you stored for it is still in the OS keychain. Tool calls no rule matches are settled by you or by guard.unmatched, never by a model"
+    );
+    if section.get("api_key").is_some() {
+        warning.push_str(". Take the api_key line out of this file");
     }
-    let mut jev = JevSettings::default();
-    if let Some(p) = raw.provider {
-        jev.provider = JevProvider::parse(p.trim()).ok_or_else(|| {
-            error(
-                "provider",
-                "provider must be \"off\", \"typesafe\" or \"openrouter\"",
-            )
-        })?;
-    }
-    if let Some(t) = raw.threshold {
-        if !(0.0..=1.0).contains(&t) {
-            return Err(error("threshold", "threshold must be between 0 and 1"));
-        }
-        jev.threshold = t;
-    }
-    if let Some(ms) = raw.timeout_ms {
-        jev.timeout_ms = Some(
-            u64::try_from(ms)
-                .ok()
-                .filter(|ms| (100..=60_000).contains(ms))
-                .ok_or_else(|| error("timeout_ms", "timeout_ms must be between 100 and 60000"))?,
-        );
-    }
-    Ok(jev)
+    warning
 }
 
 fn parse_guard(raw: RawGuard, text: &str, path: &Path) -> Result<GuardSettings, ConfigError> {
@@ -722,77 +694,50 @@ alow = []",
     }
 
     #[test]
-    fn jev_section_is_read() {
+    fn an_old_jev_section_is_ignored_with_a_warning_and_the_rest_still_loads() {
         let s = parse(
-            "[jev]
+            "max_concurrent = 2
+[jev]
 provider = \"openrouter\"
 threshold = 0.9
 timeout_ms = 3000
+max_allow = \"R2\"
+api_key = \"sk-SECRET-123\"
+[guard]
+unmatched = \"pass\"
 ",
         )
         .unwrap();
-        assert_eq!(
-            s.jev,
-            JevSettings {
-                provider: JevProvider::OpenRouter,
-                threshold: 0.9,
-                timeout_ms: Some(3000),
-                max_allow: swarmux_domain::alarm::Reversibility::R1,
-            }
+        assert_eq!(s.max_concurrent, 2, "the rest of the file is read");
+        assert_eq!(s.guard.unmatched, Unmatched::Pass);
+        assert_eq!(s.warnings.len(), 1, "{:#?}", s.warnings);
+        let w = &s.warnings[0];
+        assert!(
+            w.contains("JEV was removed; this section is ignored"),
+            "{w}"
         );
-        assert_eq!(parse("").unwrap().jev.provider, JevProvider::Off);
-        let only = parse(
-            "[jev]
-provider = \"typesafe\"",
-        )
-        .unwrap()
-        .jev;
-        assert_eq!((only.threshold, only.timeout_ms()), (0.85, 2000));
+        assert!(w.contains("line 2"), "{w}");
+        assert!(w.contains("swarmux doctor"), "{w}");
+        assert!(w.contains("api_key"), "{w}");
+        assert!(!w.contains("SECRET"), "the key is never echoed: {w}");
     }
 
     #[test]
-    fn bad_jev_values_are_rejected() {
-        let e = parse(
-            "[jev]
-provider = \"gpt\"",
-        )
-        .unwrap_err();
-        assert_eq!(e.line, Some(2));
-        assert!(e.message.contains("typesafe"), "{e}");
-        assert!(
-            parse(
-                "[jev]
-threshold = 1.5"
-            )
-            .is_err()
-        );
-        assert!(
-            parse(
-                "[jev]
-timeout_ms = 0"
-            )
-            .is_err()
-        );
-        assert!(
-            parse(
-                "[jev]
-model = \"x\""
-            )
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn keys_in_config_are_refused_without_echoing_them() {
-        let e = parse(
-            "[jev]
-provider = \"typesafe\"
-api_key = \"sk-SECRET-123\"",
-        )
-        .unwrap_err();
-        assert_eq!(e.line, Some(3));
-        assert!(e.message.contains("swarmux jev set-key"), "{e}");
-        assert!(!e.to_string().contains("SECRET"), "{e}");
+    fn a_jev_section_of_any_shape_never_breaks_loading() {
+        for text in [
+            "[jev]\n",
+            "[jev]\nprovider = \"gpt\"\nthreshold = 1.5\ntimeout_ms = 0\nmodel = \"x\"\n",
+            "jev = { provider = \"typesafe\" }\n",
+            "jev = \"typesafe\"\n",
+        ] {
+            let s = parse(text).unwrap_or_else(|e| panic!("{text:?}: {e}"));
+            assert_eq!(s.warnings.len(), 1, "{text:?}: {:?}", s.warnings);
+            assert!(s.warnings[0].contains("JEV was removed"), "{text:?}");
+        }
+        // Without one there is nothing to say.
+        assert!(parse("").unwrap().warnings.is_empty());
+        // Other unknown keys are still refused.
+        assert!(parse("[jevv]\nprovider = \"x\"\n").is_err());
     }
 
     #[test]
@@ -1061,6 +1006,32 @@ escalate_to = [\"opus\"]
             let e = parse(&format!("[watchdog]\n{bad}\n")).unwrap_err();
             assert!(e.to_string().contains(why), "{bad}: {e}");
         }
+    }
+
+    #[test]
+    fn an_old_rung_list_naming_the_removed_judge_rung_still_loads() {
+        let s = parse(
+            "[watchdog]
+rungs = [\"nudge\", \"judge\", \"fresh\", \"inbox\"]
+",
+        )
+        .unwrap();
+        assert_eq!(
+            s.watchdog.ladder.rungs,
+            [
+                swarmux_domain::Rung::Nudge,
+                swarmux_domain::Rung::Fresh,
+                swarmux_domain::Rung::Inbox
+            ],
+            "the removed rung is skipped, the others kept in order"
+        );
+        assert_eq!(s.warnings.len(), 1, "{:?}", s.warnings);
+        assert!(s.warnings[0].contains("line 2"), "{}", s.warnings[0]);
+        assert!(
+            s.warnings[0].contains("JEV was removed"),
+            "{}",
+            s.warnings[0]
+        );
     }
 
     #[test]

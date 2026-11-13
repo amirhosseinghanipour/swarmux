@@ -4,7 +4,6 @@ mod alarms;
 mod anchors;
 mod board;
 mod cache;
-mod consents;
 mod contracts;
 mod decisions;
 mod evidence;
@@ -117,7 +116,9 @@ const SCHEMA_V4: &str = "
 ALTER TABLE sessions ADD COLUMN lean INTEGER NOT NULL DEFAULT 0;
 ";
 
-/// JEV providers the user agreed to send decision context to.
+/// JEV providers the user agreed to send decision context to. JEV was
+/// removed and nothing reads or writes this table any more; it stays, with
+/// what it holds, because a migration never drops a user's data.
 const SCHEMA_V5: &str = "
 CREATE TABLE jev_consent (
     provider TEXT PRIMARY KEY,
@@ -590,6 +591,33 @@ pub(crate) mod tests {
     #[test]
     fn migrate_sets_latest_schema_version() {
         let s = SqliteStore::open_in_memory().unwrap();
+        assert_eq!(s.schema_version().unwrap(), MIGRATIONS.len() as i64);
+    }
+
+    #[test]
+    fn the_inert_jev_consent_table_and_its_rows_are_left_alone() {
+        // JEV was removed, but no migration may drop what a user stored: a
+        // database that holds a consent keeps it through every reopening.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("consent.db");
+        drop(SqliteStore::open(&path).unwrap());
+        let conn = Connection::open(&path).unwrap();
+        conn.execute(
+            "INSERT INTO jev_consent (provider, granted_at) VALUES ('typesafe', 5)",
+            [],
+        )
+        .unwrap();
+        drop(conn);
+        let s = SqliteStore::open(&path).unwrap();
+        let kept: i64 = s
+            .conn
+            .query_row(
+                "SELECT granted_at FROM jev_consent WHERE provider = 'typesafe'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(kept, 5);
         assert_eq!(s.schema_version().unwrap(), MIGRATIONS.len() as i64);
     }
 

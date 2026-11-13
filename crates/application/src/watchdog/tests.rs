@@ -10,11 +10,8 @@ use swarmux_domain::{
 
 use super::*;
 use crate::guard::SharedPolicy;
-use crate::ports::{AdviceRequest, HookRequest, RunnerMsg};
-use crate::testing::{
-    FakeAdvisor, FakeConsents, FakeDiagnoser, FakeRestore, FakeRunner, WorktreeRig, advice,
-    diagnosis,
-};
+use crate::ports::{HookRequest, RunnerMsg};
+use crate::testing::{FakeDiagnoser, FakeRestore, FakeRunner, WorktreeRig, diagnosis};
 use crate::{GuardSettings, Settings};
 
 pub(super) const SEC: Millis = 1_000;
@@ -31,17 +28,16 @@ pub(super) struct Rig {
     pub policy: SharedPolicy,
     pub diagnoser: Rc<FakeDiagnoser>,
     pub restore: Rc<FakeRestore>,
-    pub advisor: Rc<FakeAdvisor>,
     pub compactions: HashMap<JobId, u32>,
     next_id: u64,
 }
 
 impl Rig {
-    pub fn new(jev: bool) -> Rig {
-        Rig::with(WatchdogSettings::default(), jev)
+    pub fn new() -> Rig {
+        Rig::with(WatchdogSettings::default())
     }
 
-    pub fn with(settings: WatchdogSettings, jev: bool) -> Rig {
+    pub fn with(settings: WatchdogSettings) -> Rig {
         let wt = WorktreeRig::new();
         let runner = Rc::new(FakeRunner::default());
         let guard = GuardSettings::default();
@@ -59,8 +55,7 @@ impl Rig {
         let policy = SharedPolicy::new(guard.policy()).with_nudges(board.clone());
         let diagnoser = Rc::new(FakeDiagnoser::default());
         let restore = Rc::new(FakeRestore::default());
-        let advisor = Rc::new(FakeAdvisor::default());
-        let mut dog = Watchdog::new(
+        let dog = Watchdog::new(
             settings,
             Rc::new(HookMessenger(board.clone())),
             wt.clock.clone(),
@@ -69,12 +64,6 @@ impl Rig {
         .with_checkpoints(wt.checkpoints.clone())
         .with_restore(restore.clone())
         .with_diagnoser(diagnoser.clone());
-        if jev {
-            let consents = Rc::new(FakeConsents::default());
-            let j = Jev::new(advisor.clone(), consents, wt.clock.clone(), 0.85).unwrap();
-            j.grant().unwrap();
-            dog = dog.with_jev(Rc::new(j));
-        }
         Rig {
             wt,
             runner,
@@ -84,7 +73,6 @@ impl Rig {
             policy,
             diagnoser,
             restore,
-            advisor,
             compactions: HashMap::new(),
             next_id: 0,
         }
@@ -325,7 +313,7 @@ fn loop_twice(rig: &mut Rig, job: JobId) {
 
 #[test]
 fn a_loop_is_nudged_on_the_next_identical_call() {
-    let mut rig = Rig::new(false);
+    let mut rig = Rig::new();
     let job = rig.dispatch("fix the build");
     loop_twice(&mut rig, job);
     assert_eq!(rig.dog.health(job), Some(AlarmKind::Loop));
@@ -358,7 +346,7 @@ fn a_loop_is_nudged_on_the_next_identical_call() {
 
 #[test]
 fn rungs_wait_for_their_cooldown() {
-    let mut rig = Rig::new(false);
+    let mut rig = Rig::new();
     let job = rig.dispatch("fix the build");
     loop_twice(&mut rig, job);
     rig.call(job, "Bash", "cargo test", false, ERR); // the nudge
@@ -374,8 +362,8 @@ fn rungs_wait_for_their_cooldown() {
 }
 
 #[test]
-fn without_jev_the_judgement_is_skipped_for_a_fresh_session() {
-    let mut rig = Rig::new(false);
+fn after_a_nudge_a_loop_goes_on_to_a_fresh_session_with_a_handoff() {
+    let mut rig = Rig::new();
     let job = rig.dispatch("fix the build\nsecond line");
     loop_twice(&mut rig, job);
     rig.wait(2 * MIN);
@@ -385,7 +373,6 @@ fn without_jev_the_judgement_is_skipped_for_a_fresh_session() {
         rig.call(job, "Bash", "cargo test", false, ERR);
     }
     rig.pump();
-    assert!(rig.advisor.requests().is_empty());
     assert_eq!(rig.rungs(), ["nudge", "fresh"]);
     assert_eq!(rig.status(job), JobStatus::Cancelled);
     let next = rig.running().unwrap();
@@ -405,87 +392,8 @@ fn without_jev_the_judgement_is_skipped_for_a_fresh_session() {
 }
 
 #[test]
-fn jev_can_say_change_approach() {
-    let mut rig = Rig::new(true);
-    rig.advisor
-        .answer_with(advice(crate::ports::AdviceAnswer::ChangeApproach, 0.93));
-    let job = rig.dispatch("fix the build");
-    loop_twice(&mut rig, job);
-    rig.call(job, "Bash", "cargo test", false, ERR); // nudged
-    rig.wait(100 * SEC);
-    rig.call(job, "Bash", "cargo test", false, ERR);
-    rig.call(job, "Bash", "cargo test", false, ERR);
-    rig.pump();
-    rig.pump();
-    assert_eq!(rig.rungs(), ["nudge", "judge"]);
-    let AdviceRequest::Recovery { situation, tried } = &rig.advisor.requests()[0] else {
-        panic!()
-    };
-    assert!(
-        situation.starts_with("loop: Bash `cargo test`"),
-        "{situation}"
-    );
-    assert_eq!(tried.len(), 1);
-    let nudge = rig.call(job, "Read", "x", true, "").unwrap();
-    assert!(nudge.contains("independent check"), "{nudge}");
-    assert!(
-        rig.dog
-            .trail(job)
-            .iter()
-            .any(|t| t.starts_with("JEV: change approach (0.93)"))
-    );
-}
-
-#[test]
-fn jev_saying_carry_on_stands_the_watchdog_down() {
-    let mut rig = Rig::new(true);
-    rig.advisor
-        .answer_with(advice(crate::ports::AdviceAnswer::Continue, 0.9));
-    let job = rig.dispatch("long refactor");
-    // Repeats earlier calls for a while: looks like a stall.
-    rig.call(job, "Read", "a.rs", true, "");
-    rig.call(job, "Read", "b.rs", true, "");
-    for i in 0..15u32 {
-        let f = if i.is_multiple_of(2) { "a.rs" } else { "b.rs" };
-        rig.call(job, "Read", f, true, "");
-    }
-    rig.pump();
-    assert_eq!(rig.rungs(), ["nudge"]);
-    rig.wait(2 * MIN);
-    rig.pump();
-    assert_eq!(rig.rungs(), ["nudge", "judge"]);
-    rig.pump();
-    assert_eq!(rig.dog.health(job), None);
-    rig.wait(MIN);
-    rig.pump();
-    assert_eq!(rig.rungs(), ["nudge", "judge"], "stood down");
-}
-
-#[test]
-fn an_unsure_jev_changes_nothing() {
-    let mut rig = Rig::new(true);
-    rig.advisor
-        .answer_with(advice(crate::ports::AdviceAnswer::Stop, 0.5));
-    let job = rig.dispatch("x");
-    loop_twice(&mut rig, job);
-    rig.call(job, "Bash", "cargo test", false, ERR); // the nudge
-    rig.wait(2 * MIN);
-    rig.call(job, "Bash", "cargo test", false, ERR);
-    rig.call(job, "Bash", "cargo test", false, ERR);
-    rig.pump();
-    rig.pump();
-    assert!(
-        rig.dog
-            .trail(job)
-            .iter()
-            .any(|t| t == "JEV unsure (0.50): nothing changed")
-    );
-    assert_eq!(rig.status(job), JobStatus::Running);
-}
-
-#[test]
 fn a_silent_stall_is_found_within_three_minutes_and_skips_the_nudge() {
-    let mut rig = Rig::new(false);
+    let mut rig = Rig::new();
     let job = rig.dispatch("x");
     rig.call(job, "Read", "a.rs", true, "");
     rig.pump();
@@ -506,17 +414,16 @@ fn a_silent_stall_is_found_within_three_minutes_and_skips_the_nudge() {
 
 #[test]
 fn context_pressure_goes_straight_to_a_fresh_session() {
-    let mut rig = Rig::new(true);
+    let mut rig = Rig::new();
     let job = rig.dispatch("x");
     rig.usage(job, 900_000, 10);
     rig.pump();
     assert_eq!(rig.rungs(), ["fresh"]);
-    assert!(rig.advisor.requests().is_empty());
 }
 
 #[test]
 fn compactions_count_as_pressure() {
-    let mut rig = Rig::new(false);
+    let mut rig = Rig::new();
     let job = rig.dispatch("x");
     rig.compactions.insert(job, 2);
     rig.pump();
@@ -525,7 +432,7 @@ fn compactions_count_as_pressure() {
 
 #[test]
 fn diagnosis_then_fork_from_the_checkpoint_before_the_trouble() {
-    let mut rig = Rig::new(false);
+    let mut rig = Rig::new();
     rig.diagnoser.answer_with(diagnosis(
         "the test edits the fixture",
         "Leave tests/fixture.json alone.",
@@ -590,7 +497,7 @@ fn replan_when_there_is_nothing_stronger() {
         escalate_to: vec!["sonnet".into()],
         ..WatchdogSettings::default()
     };
-    let mut rig = Rig::with(settings, false);
+    let mut rig = Rig::with(settings);
     rig.dispatch("x");
     rig.loop_until_escalated();
     assert_eq!(
@@ -607,7 +514,7 @@ fn replan_when_there_is_nothing_stronger() {
 
 #[test]
 fn waiting_for_the_user_is_left_alone() {
-    let mut rig = Rig::new(false);
+    let mut rig = Rig::new();
     let job = rig.dispatch("x");
     rig.state(job, SessionState::RequiresAction);
     for _ in 0..20 {
@@ -623,7 +530,7 @@ fn turned_off_it_does_nothing_and_the_loop_breaker_stops_as_before() {
         enabled: false,
         ..WatchdogSettings::default()
     };
-    let mut rig = Rig::with(settings, false);
+    let mut rig = Rig::with(settings);
     let job = rig.dispatch("x");
     loop_twice(&mut rig, job);
     assert!(rig.entries().is_empty());
@@ -632,7 +539,7 @@ fn turned_off_it_does_nothing_and_the_loop_breaker_stops_as_before() {
 
 #[test]
 fn a_job_that_simply_fails_is_not_retried() {
-    let mut rig = Rig::new(false);
+    let mut rig = Rig::new();
     let job = rig.dispatch("x");
     rig.call(job, "Read", "a", true, "");
     rig.emit(
@@ -695,7 +602,7 @@ fn the_board_matches_cut_summaries_and_any_call() {
 
 #[test]
 fn stronger_models_follow_the_list_then_the_family() {
-    let rig = Rig::new(false);
+    let rig = Rig::new();
     let up = |m: &str| rig.dog.stronger(m);
     assert_eq!(up("sonnet").as_deref(), Some("opus"));
     assert_eq!(up("claude-sonnet-4-5").as_deref(), Some("opus"));

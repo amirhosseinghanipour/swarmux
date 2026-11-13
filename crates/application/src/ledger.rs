@@ -672,14 +672,6 @@ impl LedgerService {
             .opt_str("resolver", d.extra.resolver.as_deref())
             .opt_str("agent_id", d.extra.agent_id.as_deref())
             .opt_str("agent_type", d.extra.agent_type.as_deref());
-        let payload = match &d.extra.jev {
-            Some(j) => payload
-                .str("jev_provider", &j.provider)
-                .str("jev_model", &j.model)
-                .str("jev_prompt_sha256", &j.prompt_sha256)
-                .bool("jev_truncated", j.truncated),
-            None => payload,
-        };
         self.append(
             d.ts,
             LedgerKind::GuardDecision,

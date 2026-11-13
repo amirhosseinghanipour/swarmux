@@ -43,7 +43,7 @@ pub struct JobProgress {
     pub subagents: Vec<Subagent>,
     /// The lead's own usage.
     pub lead_tokens: TokenTally,
-    /// When guard, routing and JEV decisions were made for this job.
+    /// When guard and routing decisions were made for this job.
     pub decision_marks: Vec<u32>,
     /// Why the loop breaker stopped an agent, oldest first.
     pub loop_stops: Vec<String>,
@@ -153,7 +153,7 @@ impl JobProgress {
         }
     }
 
-    /// Notes a guard, routing or JEV decision made for this job.
+    /// Notes a guard or routing decision made for this job.
     pub fn record_decision(&mut self, tick: u32) {
         self.decision_marks.push(tick);
         self.refresh_phase(tick);

@@ -1,4 +1,4 @@
-//! "Let swarmux route" and the JEV consent question, as the app handles them.
+//! "Let swarmux route", as the app handles it.
 
 use std::collections::HashMap;
 
@@ -82,34 +82,16 @@ impl App {
             }
         }
     }
-
-    /// The user's answer to the JEV consent question.
-    pub(crate) fn answer_consent(&mut self, yes: bool) -> AppResult<()> {
-        let Some(jev) = self.engine.guard.jev().cloned() else {
-            return Ok(());
-        };
-        if yes {
-            jev.grant()?;
-            self.notice = Some(format!(
-                "JEV ({}) is on: unmatched tool calls and routing ask it first",
-                jev.provider()
-            ));
-        } else {
-            jev.decline();
-            self.notice = Some("JEV stays off for this run".into());
-        }
-        Ok(())
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use crossterm::event::KeyCode;
-    use swarmux_application::ports::AdviceAnswer;
-    use swarmux_application::testing::{advice, picks};
-    use swarmux_application::{JevState, Source};
+    use swarmux_application::ports::DecisionRepository;
+    use swarmux_application::testing::picks;
+    use swarmux_application::{DecisionRecord, Outcome, Source};
 
-    use crate::app::tests_support::{test_app, test_app_with_jev};
+    use crate::app::tests_support::test_app;
     use crate::app::{InputPurpose, Mode, Screen};
     use crate::ui::render_to_string;
 
@@ -190,93 +172,71 @@ mod tests {
     }
 
     #[test]
-    fn consent_overlay_asks_once_and_y_turns_jev_on() {
-        let mut t = test_app_with_jev(false);
-        t.app.screen = Screen::Dashboard;
-        let out = render_to_string(&t.app, 160, 48);
-        assert!(out.contains("fake.example"), "{out}");
-        assert!(out.contains("Never file contents"), "{out}");
-        t.keys([KeyCode::Char('y')]);
-        let jev = t.app.engine.guard.jev().unwrap().clone();
-        assert_eq!(jev.state(), JevState::On);
-        let out = render_to_string(&t.app, 160, 48);
-        assert!(!out.contains("Never file contents"), "{out}");
-        assert!(out.contains("JEV typesafe · threshold 0.85"), "{out}");
-    }
-
-    #[test]
-    fn n_keeps_jev_off_and_nothing_is_sent() {
-        let mut t = test_app_with_jev(false);
-        t.app.screen = Screen::Dashboard;
-        t.keys([KeyCode::Char('n')]);
-        assert_eq!(
-            t.app.engine.guard.jev().unwrap().state(),
-            JevState::Declined
-        );
-        let out = render_to_string(&t.app, 160, 48);
-        assert!(out.contains("JEV typesafe off for this run"), "{out}");
-        t.inbox.push(None, "Bash", "make");
-        t.app.update();
-        assert!(t.advisor.as_ref().unwrap().requests().is_empty());
-        assert_eq!(t.app.engine.guard.pending_count(), 1);
-    }
-
-    #[test]
-    fn jev_decisions_show_with_confidence_bars() {
-        let mut t = test_app_with_jev(true);
+    fn routing_goes_straight_to_haiku_and_the_guard_panel_has_no_jev() {
+        let mut t = test_app();
         t.with_session("api");
         t.with_session("web");
-        let advisor = t.advisor.clone().unwrap();
-        t.inbox.push(None, "Bash", "make deploy");
-        t.app.update();
-        advisor.reply(0, advice(AdviceAnswer::Allow, 0.91));
+        t.app.screen = Screen::Dashboard;
+        let out = render_to_string(&t.app, 160, 48);
+        assert!(out.contains("GUARD · fork layer"), "{out}");
+        assert!(!out.to_lowercase().contains("jev"), "{out}");
+        assert!(!out.contains("consent"), "{out}");
         t.keys([KeyCode::Char('P')]);
         t.keys("deploy".chars().map(KeyCode::Char));
         t.keys([KeyCode::Enter]);
-        advisor.reply(1, advice(AdviceAnswer::Session("api".into()), 0.93));
+        assert_eq!(t.router.requests().len(), 1, "Haiku is asked at once");
+        t.router.reply(0, picks("api", None, "back-end"));
         t.app.update();
-        assert!(t.router.requests().is_empty(), "confident jev skips haiku");
         let out = render_to_string(&t.app, 160, 48);
-        assert!(out.contains("GUARD · fork layer"), "{out}");
-        assert!(
-            out.contains("Bash make deploy █████████░ 0.91 → allow"),
-            "{out}"
-        );
-        assert!(
-            out.contains("which session ███████████▏ 0.93 → api"),
-            "{out}"
-        );
+        assert!(out.contains("haiku → api"), "{out}");
         let rows = t.decisions.rows();
         assert!(
             rows.iter()
-                .any(|r| r.source == Source::Jev && r.confidence == Some(0.93))
+                .all(|r| r.source != Source::Jev && r.source != Source::JevError)
         );
+        assert!(rows.iter().any(|r| r.source == Source::Haiku));
     }
 
     #[test]
-    fn jev_off_panel_explains_how_to_turn_it_on() {
+    fn an_unmatched_call_waits_for_the_owner_and_y_n_answer_it_with_no_model() {
         let mut t = test_app();
         t.app.screen = Screen::Dashboard;
+        t.inbox.push(None, "Bash", "make deploy");
+        t.app.update();
+        assert_eq!(t.app.engine.guard.pending_count(), 1);
         let out = render_to_string(&t.app, 160, 48);
-        assert!(
-            out.contains("JEV off · bring your own key: swarmux jev set-key typesafe"),
-            "{out}"
-        );
+        assert!(out.contains("approval needed"), "{out}");
+        assert!(out.contains("Bash make deploy"), "{out}");
+        assert!(!out.to_lowercase().contains("jev"), "{out}");
+        t.keys([KeyCode::Char('y')]);
+        assert_eq!(t.app.engine.guard.pending_count(), 0);
+        let row = t.decisions.rows().pop().unwrap();
+        assert_eq!((row.source, row.outcome), (Source::Guard, Outcome::Allow));
+        assert_eq!(row.extra.resolver.as_deref(), Some("human-key"));
     }
 
     #[test]
-    fn without_a_key_no_consent_is_asked() {
-        let mut t = test_app_with_jev(false);
+    fn a_route_made_by_the_removed_jev_shows_as_removed() {
+        let mut t = test_app();
         t.app.screen = Screen::Dashboard;
-        t.advisor.as_ref().unwrap().set_no_key(true);
-        let out = render_to_string(&t.app, 160, 48);
-        assert!(!out.contains("Never file contents"), "{out}");
-        assert!(out.contains("no key found"), "{out}");
-        t.with_session("a");
-        assert_eq!(
-            t.app.sessions.len(),
-            1,
-            "n wasn't taken as a consent answer"
-        );
+        t.decisions
+            .record(&DecisionRecord {
+                job_id: None,
+                tool: "route".into(),
+                subject: "deploy".into(),
+                outcome: Outcome::Route,
+                rule: Some("→ api: jev's pick".into()),
+                latency_us: 40_000,
+                ts: 1_000,
+                source: Source::Jev,
+                confidence: Some(0.93),
+                extra: swarmux_application::DecisionExtra::default(),
+            })
+            .unwrap();
+        assert_eq!(Source::Jev.label(), "jev (removed)");
+        let rows = t.decisions.rows();
+        let line = crate::ui::guard::decision_line(&rows[0], &t.app.look.theme);
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(text.contains("jev (removed)"), "{text}");
     }
 }

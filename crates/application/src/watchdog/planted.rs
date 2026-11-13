@@ -16,8 +16,7 @@ use std::collections::HashMap;
 use swarmux_domain::{CheckpointReason, JobId, JobStatus, Millis, SessionState};
 
 use super::tests::{MIN, Rig, SEC};
-use crate::ports::AdviceAnswer;
-use crate::testing::{advice, diagnosis};
+use crate::testing::diagnosis;
 
 const TICK: Millis = 5 * SEC;
 /// The longest a case may run, in simulated time.
@@ -46,8 +45,6 @@ enum Trouble {
 enum Cure {
     /// Being told, on its next call.
     Nudge,
-    /// JEV saying change approach.
-    Judge,
     /// A new session with a handoff.
     Fresh,
     /// The diagnosis, delivered.
@@ -106,9 +103,9 @@ const FAILURES: [Case; 14] = [
         false,
     ),
     case(
-        "oscillation, needs JEV",
+        "oscillation, needs a fresh session",
         Trouble::Oscillation,
-        Cure::Judge,
+        Cure::Fresh,
         false,
     ),
     case(
@@ -260,7 +257,6 @@ struct Outcome {
 #[derive(Default)]
 struct Heard {
     nudged: bool,
-    told_to_change: bool,
     diagnosed: bool,
     step: usize,
     cured_steps: Option<usize>,
@@ -270,7 +266,6 @@ fn is_cured(rig: &Rig, job: JobId, cure: Cure, heard: &Heard) -> bool {
     let prompt = rig.prompt_of(job);
     match cure {
         Cure::Nudge => heard.nudged,
-        Cure::Judge => heard.told_to_change,
         // Told on a call, or handed over in a new session's briefing.
         Cure::Diagnosis => heard.diagnosed || prompt.contains("Add the method before"),
         Cure::Fresh => prompt.contains("Handoff from the previous session"),
@@ -311,7 +306,6 @@ fn play(rig: &mut Rig, job: JobId, act: Act, heard: &mut Heard) -> bool {
         Act::Call(tool, summary, ok, preview) => {
             if let Some(text) = rig.call(job, tool, &summary, ok, preview) {
                 heard.nudged = true;
-                heard.told_to_change |= text.contains("independent check");
                 heard.diagnosed |= text.contains("diagnosis");
             }
         }
@@ -340,12 +334,8 @@ thread_local! {
 }
 
 /// Runs one agent script (healthy) or planted trouble (stuck) to its end.
-fn run(jev: bool, case: Option<&Case>, script: &[Act]) -> Outcome {
-    let mut rig = Rig::new(jev);
-    if jev {
-        rig.advisor
-            .answer_with(advice(AdviceAnswer::ChangeApproach, 0.9));
-    }
+fn run(case: Option<&Case>, script: &[Act]) -> Outcome {
+    let mut rig = Rig::new();
     rig.diagnoser.answer_with(diagnosis(
         "the same command keeps failing on a missing method",
         "Add the method before running the tests again.",
@@ -412,14 +402,14 @@ fn run(jev: bool, case: Option<&Case>, script: &[Act]) -> Outcome {
     out
 }
 
-fn suite(jev: bool) {
+fn suite() {
     let mut rescued = 0;
     let mut nudges = 0;
     let mut false_nudges = 0;
     let mut false_rungs = 0;
-    eprintln!("planted failures (JEV {}):", if jev { "on" } else { "off" });
+    eprintln!("planted failures:");
     for c in &FAILURES {
-        let o = run(jev, Some(c), &[]);
+        let o = run(Some(c), &[]);
         rescued += u32::from(o.rescued);
         nudges += o.nudges;
         let how = if o.rescued {
@@ -450,7 +440,7 @@ fn suite(jev: bool) {
         }
     }
     for (name, script) in healthy() {
-        let o = run(jev, None, &script);
+        let o = run(None, &script);
         false_nudges += o.nudges;
         false_rungs += o.rungs.len();
         eprintln!(
@@ -481,21 +471,6 @@ fn suite(jev: bool) {
 }
 
 #[test]
-fn planted_failures_without_jev() {
-    suite(false);
-}
-
-#[test]
-fn planted_failures_with_jev() {
-    suite(true);
-}
-
-#[test]
-fn the_judge_cure_needs_jev() {
-    let c = &FAILURES[7];
-    assert_eq!(c.cure, Cure::Judge);
-    assert!(!run(false, Some(c), &[]).rescued);
-    let on = run(true, Some(c), &[]);
-    assert!(on.rescued, "{:?}", on.rungs);
-    assert_eq!(on.rungs[..2], ["nudge", "judge"]);
+fn planted_failures() {
+    suite();
 }

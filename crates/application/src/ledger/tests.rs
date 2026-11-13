@@ -452,9 +452,47 @@ fn spooled_fallbacks_reach_the_ledger_once_and_the_spool_is_emptied() {
 }
 
 #[test]
-fn decisions_carry_their_rule_hash_resolver_attribution_and_model_trace() {
+fn decisions_carry_their_rule_hash_resolver_and_attribution() {
     let f = fixture();
     let record = DecisionRecord {
+        job_id: Some(JobId(1)),
+        tool: "Bash".into(),
+        subject: "make".into(),
+        outcome: Outcome::Allow,
+        rule: Some("approved in swarmux".into()),
+        latency_us: 5,
+        ts: 9,
+        source: Source::Guard,
+        confidence: None,
+        extra: crate::DecisionExtra {
+            agent_id: Some("agent-7".into()),
+            agent_type: Some("Explore".into()),
+            resolver: Some("human-key".into()),
+        },
+    };
+    f.service.record_decision(&record).unwrap();
+    let last = f.ledger.entries().pop().unwrap();
+    let p = &last.draft.payload_json;
+    for part in [
+        "\"rule_sha256\":\"",
+        "\"resolver\":\"human-key\"",
+        "\"agent_id\":\"agent-7\"",
+        "\"agent_type\":\"Explore\"",
+    ] {
+        assert!(p.contains(part), "{part} in {p}");
+    }
+    assert!(
+        !p.contains("jev"),
+        "nothing about JEV is written any more: {p}"
+    );
+}
+
+#[test]
+fn a_decision_made_by_the_removed_jev_still_records_and_the_chain_holds() {
+    // History written while JEV existed names it as the source; such a
+    // record is still a record, and the ledger it joins still verifies.
+    let f = fixture();
+    let legacy = DecisionRecord {
         job_id: Some(JobId(1)),
         tool: "Bash".into(),
         subject: "make".into(),
@@ -465,30 +503,16 @@ fn decisions_carry_their_rule_hash_resolver_attribution_and_model_trace() {
         source: Source::Jev,
         confidence: Some(0.97),
         extra: crate::DecisionExtra {
-            agent_id: Some("agent-7".into()),
-            agent_type: Some("Explore".into()),
-            jev: Some(crate::JevTrace {
-                provider: "typesafe".into(),
-                model: "jev-1".into(),
-                prompt_sha256: "ef".repeat(32),
-                truncated: true,
-            }),
             resolver: Some("model".into()),
+            ..crate::DecisionExtra::default()
         },
     };
-    f.service.record_decision(&record).unwrap();
+    f.service.record_decision(&legacy).unwrap();
     let last = f.ledger.entries().pop().unwrap();
+    assert_eq!(last.draft.kind, LedgerKind::GuardDecision);
     let p = &last.draft.payload_json;
-    for part in [
-        "\"rule_sha256\":\"",
-        "\"resolver\":\"model\"",
-        "\"agent_id\":\"agent-7\"",
-        "\"agent_type\":\"Explore\"",
-        "\"jev_provider\":\"typesafe\"",
-        "\"jev_model\":\"jev-1\"",
-        "\"jev_truncated\":true",
-    ] {
-        assert!(p.contains(part), "{part} in {p}");
-    }
-    assert!(p.contains(&"ef".repeat(32)));
+    assert!(p.contains("\"source\":\"jev\""), "{p}");
+    assert!(p.contains("\"confidence\":0.97"), "{p}");
+    assert!(p.contains("\"resolver\":\"model\""), "{p}");
+    assert!(verify_all(&*f.ledger).unwrap().is_ok());
 }

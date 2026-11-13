@@ -6,7 +6,7 @@ use crate::{JobStatus, ReviewState, ReviewVerdict};
 pub enum Phase {
     /// The lead works alone: no subagent and no guard decision yet.
     Plan,
-    /// The first guard, routing or JEV decisions are being made.
+    /// The first guard or routing decisions are being made.
     Fork,
     /// One subagent is running.
     Delegate,
@@ -53,7 +53,7 @@ impl Phase {
 #[derive(Clone, Copy, Debug)]
 pub struct PhaseInput<'a> {
     pub status: JobStatus,
-    /// Guard, routing and JEV decisions made for the job.
+    /// Guard and routing decisions made for the job.
     pub decisions: u32,
     pub subagents_started: usize,
     pub subagents_running: usize,

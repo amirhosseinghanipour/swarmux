@@ -61,13 +61,11 @@ pub(crate) fn render_with(
         too_small(frame, area, app);
         return;
     }
-    // The approval, consent and typed-confirm overlays sit on the bottom
+    // The approval and typed-confirm overlays sit on the bottom
     // rows of the body: leave them room, so no pane is hidden under them.
     let reserved = if matches!(app.mode, crate::app::Mode::Confirm(_)) {
         crate::ui::confirm::HEIGHT.min(area.height)
-    } else if app.engine.guard.jev().is_some_and(|j| j.wants_consent())
-        || app.approval_target().is_some()
-    {
+    } else if app.approval_target().is_some() {
         crate::ui::overlay_rows(app, area.height)
     } else {
         0

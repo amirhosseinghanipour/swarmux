@@ -1021,7 +1021,7 @@ impl JobService {
             .map(|t| &t.progress)
     }
 
-    /// Notes a guard, routing or JEV decision made for `job`.
+    /// Notes a guard or routing decision made for `job`.
     pub fn observe_decision(&mut self, job: JobId) {
         if let Some(i) = self.find(job) {
             let tick = self.tick_of(i);

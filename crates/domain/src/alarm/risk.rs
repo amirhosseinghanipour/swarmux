@@ -75,8 +75,6 @@ pub struct RiskInputs {
     pub taint: bool,
     /// How well the agent's earlier work went, `0.0..=1.0`; `0.5` is unknown.
     pub track_record: f64,
-    /// The decision model's worry about the call, when it has voiced one.
-    pub jev: Option<f64>,
 }
 
 impl RiskInputs {
@@ -88,7 +86,6 @@ impl RiskInputs {
             novelty: 0.5,
             taint: false,
             track_record: 0.5,
-            jev: None,
         }
     }
 }
@@ -128,13 +125,11 @@ fn clamp01(v: f64) -> f64 {
 /// scales it. Irreversible calls never score below `0.9`.
 pub fn assess(inputs: &RiskInputs, secret: bool) -> Risk {
     let taint = if inputs.taint { 1.0 } else { 0.0 };
-    let jev = inputs.jev.map_or(0.0, clamp01);
     let mut score = inputs.reversibility.base()
         * (1.0 + 0.5 * clamp01(inputs.blast))
         * (1.0 + 0.4 * clamp01(inputs.novelty))
         * (1.0 + 0.6 * taint)
-        * (1.3 - 0.6 * clamp01(inputs.track_record))
-        * (1.0 + 0.5 * jev);
+        * (1.3 - 0.6 * clamp01(inputs.track_record));
     if inputs.reversibility == Reversibility::R4 {
         score = score.max(0.9);
     }
@@ -377,7 +372,6 @@ mod tests {
             .score
                 < base.score
         );
-        assert!(with(|i| i.jev = Some(0.9)).score > base.score);
         let r4 = assess(
             &RiskInputs {
                 track_record: 1.0,
@@ -406,7 +400,6 @@ mod tests {
                 novelty: 1.0,
                 taint: true,
                 track_record: 0.0,
-                jev: Some(1.0),
                 ..RiskInputs::bare(Reversibility::R3)
             },
             false,

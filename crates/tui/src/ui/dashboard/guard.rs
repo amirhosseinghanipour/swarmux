@@ -1,4 +1,4 @@
-//! The Guard / JEV box: decisions settled in code (or by JEV), never by the lead.
+//! The Guard box: decisions settled in code, never by the lead.
 
 use ratatui::{
     Frame,
@@ -7,14 +7,14 @@ use ratatui::{
     text::{Line, Span},
     widgets::Paragraph,
 };
-use swarmux_application::{Outcome, Source};
+use swarmux_application::Outcome;
 
 use super::parts::{dim, fit, label};
 use crate::app::App;
 use crate::theme::{Theme, mix};
 use crate::ui::grid::chrome::{self, fingerprint};
 use crate::ui::grid::{Panel, PanelId, ViewModel};
-use crate::ui::guard::{decision_line, jev_decision_line, jev_line, latency};
+use crate::ui::guard::{decision_line, latency};
 use crate::ui::look::Icon;
 use crate::ui::widgets::bar_spans;
 
@@ -143,14 +143,10 @@ fn rows<'a>(vm: &ViewModel<'a>, t: &Theme, width: usize) -> Vec<(u8, Line<'a>)> 
 
     let latest = app.engine.guard.recent().next().map_or_else(
         || Line::from(dim(t, "every tool call your jobs make is checked here")),
-        |d| match (d.source, d.confidence) {
-            (Source::Jev, Some(c)) => jev_decision_line(d, c, t),
-            _ => decision_line(d, t),
-        },
+        |d| decision_line(d, t),
     );
     rows.push((3, latest));
-    rows.push((4, jev_line(app, t)));
-    rows.push((5, alarm_line(app, t, width)));
+    rows.push((4, alarm_line(app, t, width)));
     rows
 }
 
@@ -218,8 +214,7 @@ fn row(
     Line::from(spans)
 }
 
-/// The latest routing decision: JEV's confidence when it decided, else
-/// who picked (Haiku has no confidence to show).
+/// The latest routing decision: who picked, and where the prompt went.
 fn route_row(vm: &ViewModel, t: &Theme) -> Line<'static> {
     let app = vm.app;
     let Some(d) = app.routing.recent().find(|d| d.outcome == Outcome::Route) else {
@@ -239,16 +234,15 @@ fn route_row(vm: &ViewModel, t: &Theme) -> Line<'static> {
         .and_then(|r| r.split([':', ' ']).next())
         .unwrap_or("?")
         .to_string();
-    let text = match d.confidence {
-        Some(c) => format!("{c:.2} → {target}"),
-        None => format!("{} → {target}", d.source.as_str()),
-    };
     row(
         vm,
         t,
         "which session",
-        d.confidence,
-        Span::styled(text, Style::new().fg(t.haiku)),
+        None,
+        Span::styled(
+            format!("{} → {target}", d.source.label()),
+            Style::new().fg(t.haiku),
+        ),
         t.haiku,
     )
 }

@@ -4,7 +4,6 @@ mod shared;
 
 use std::collections::VecDeque;
 use std::rc::Rc;
-use std::sync::mpsc::{Receiver, Sender, channel};
 
 use swarmux_domain::alarm::{Challenge, Reversibility, reversibility};
 use swarmux_domain::{
@@ -12,10 +11,8 @@ use swarmux_domain::{
     Verdict, always_rule, may_resolve,
 };
 
-use crate::ports::{
-    AdviceAnswer, AdviceReply, Clock, DecisionRepository, HookInbox, HookRequest, RuleStore,
-};
-use crate::{AppError, AppResult, DecisionExtra, DecisionRecord, Jev, JevTrace, Outcome, Source};
+use crate::ports::{Clock, DecisionRepository, HookInbox, HookRequest, RuleStore};
+use crate::{AppError, AppResult, DecisionExtra, DecisionRecord, Outcome, Source};
 
 use shared::owner_only;
 pub use shared::{IRREVERSIBLE_REASON, PROTECTED_REASON, Protection, SharedPolicy, UnattendedJobs};
@@ -36,8 +33,6 @@ pub struct GuardStats {
     pub asked: usize,
     pub passed: usize,
     pub stopped: usize,
-    /// Records JEV made (answers and errors).
-    pub jev: usize,
 }
 
 impl GuardStats {
@@ -122,29 +117,21 @@ pub struct GuardReport {
 struct Held {
     request: HookRequest,
     asked_at: Millis,
-    /// JEV is being asked; the user isn't shown the call yet.
-    consulting: bool,
     /// The knowledge rule that asked; such calls are the owner's alone.
     rule: Option<String>,
     /// Held by a knowledge rule, a protected path or the irreversibility
-    /// rule: no model sees it and no "always" is made from it.
+    /// rule: no "always" is made from it, and no automated decider may
+    /// take it from the owner.
     owner_only: bool,
-    /// What JEV was sent, while it is being asked.
-    trace: Option<JevTrace>,
 }
 
 /// How a held call ended, for the log.
 struct Resolution {
     verdict: Verdict,
     rule: String,
-    source: Source,
     by: Resolver,
-    confidence: Option<f64>,
-    /// `None`: the time the call was held.
-    latency_us: Option<u64>,
     /// The user's words for the agent, delivered with a denial.
     note: Option<String>,
-    jev: Option<JevTrace>,
 }
 
 impl Resolution {
@@ -152,21 +139,14 @@ impl Resolution {
         Resolution {
             verdict,
             rule,
-            source: Source::Guard,
             by,
-            confidence: None,
-            latency_us: None,
             note: None,
-            jev: None,
         }
     }
 }
 
-type Reply = (u64, AdviceReply);
-type Replies = (Sender<Reply>, Receiver<Reply>);
-
-/// Decides tool calls against the policy, puts unmatched ones to JEV when it
-/// is on, holds the ones that need the user and logs every decision.
+/// Decides tool calls against the policy, holds the ones it can't settle
+/// for the user (see [`GuardService::hold`]) and logs every decision.
 pub struct GuardService {
     policy: SharedPolicy,
     inbox: Rc<dyn HookInbox>,
@@ -178,10 +158,6 @@ pub struct GuardService {
     unsaved: Vec<StoredRule>,
     always: AlwaysSettings,
     last_reload: Option<Millis>,
-    jev: Option<Rc<Jev>>,
-    /// The riskiest call JEV may allow.
-    jev_cap: Reversibility,
-    replies: Replies,
     timeout_ms: Millis,
     held: Vec<Held>,
     stats: GuardStats,
@@ -208,9 +184,6 @@ impl GuardService {
             unsaved: Vec::new(),
             always: AlwaysSettings::default(),
             last_reload: None,
-            jev: None,
-            jev_cap: Reversibility::R1,
-            replies: channel(),
             timeout_ms: 120_000,
             held: Vec::new(),
             stats: GuardStats::default(),
@@ -238,18 +211,6 @@ impl GuardService {
         self
     }
 
-    /// The riskiest call JEV may allow (it may deny any).
-    pub fn with_jev_cap(mut self, cap: Reversibility) -> GuardService {
-        self.jev_cap = cap.min(Reversibility::R3);
-        self
-    }
-
-    /// Calls no rule matches go to JEV first while it is on.
-    pub fn with_jev(mut self, jev: Rc<Jev>) -> GuardService {
-        self.jev = Some(jev);
-        self
-    }
-
     /// Takes the rules kept in the store into the policy. Ones that don't
     /// parse are returned.
     pub fn load_rules(&mut self) -> AppResult<Vec<StoredRule>> {
@@ -270,8 +231,8 @@ impl GuardService {
         self.policy.learned()
     }
 
-    /// Takes new requests from the inbox, decides them, applies JEV's answers
-    /// and expires old approvals. Never waits for JEV.
+    /// Takes new requests from the inbox, decides them and expires old
+    /// approvals.
     pub fn pump(&mut self) -> GuardReport {
         let mut report = GuardReport::default();
         let due = self
@@ -298,34 +259,10 @@ impl GuardService {
             };
             let outcome = Outcome::from(decision.verdict);
             if decision.verdict == Verdict::Ask {
-                // A rule that asks wants the owner, not a model.
-                let owner = owner_only(decision.rule.as_deref());
-                let rule = decision
-                    .rule
-                    .clone()
-                    .filter(|r| swarmux_domain::knowledge::is_rule_reason(r));
-                let trace = if owner {
-                    None
-                } else {
-                    self.consult(&item.request)
-                };
-                self.held.push(Held {
-                    request: item.request.clone(),
-                    asked_at: self.clock.now(),
-                    consulting: trace.is_some(),
-                    rule,
-                    owner_only: owner,
-                    trace,
-                });
+                self.hold(&item.request, decision.rule.as_deref());
             }
             let result = self.log(&item.request, outcome, decision.rule, latency);
             report.errors.extend(result.err());
-        }
-        while let Ok((id, reply)) = self.replies.1.try_recv() {
-            report.changed = true;
-            if let Err(e) = self.apply_advice(id, reply) {
-                report.errors.push(e);
-            }
         }
         let now = self.clock.now();
         let expired: Vec<u64> = self
@@ -367,7 +304,6 @@ impl GuardService {
         let now = self.clock.now();
         self.held
             .iter()
-            .filter(|h| !h.consulting)
             .map(|h| PendingApproval {
                 request: h.request.clone(),
                 rule: h.rule.clone(),
@@ -379,17 +315,7 @@ impl GuardService {
 
     /// Calls waiting for the user.
     pub fn pending_count(&self) -> usize {
-        self.held.iter().filter(|h| !h.consulting).count()
-    }
-
-    /// Calls JEV is deciding right now.
-    pub fn consulting_count(&self) -> usize {
-        self.held.iter().filter(|h| h.consulting).count()
-    }
-
-    /// JEV, when it is configured.
-    pub fn jev(&self) -> Option<&Rc<Jev>> {
-        self.jev.as_ref()
+        self.held.len()
     }
 
     /// Allows a held call. An irreversible one is refused: only
@@ -637,97 +563,29 @@ impl GuardService {
         &self.policy
     }
 
-    /// Puts `request` to JEV if it is on and the call may be put to it:
-    /// never an irreversible one (only a person confirms those), and never
-    /// one with nothing to judge (a tool whose subject is unknown). What
-    /// was sent is returned.
-    fn consult(&self, request: &HookRequest) -> Option<JevTrace> {
-        let jev = self.jev.as_ref().filter(|j| j.is_on())?;
-        if reversibility(&request.tool_name, &request.subject, &request.cwd) == Reversibility::R4 {
-            return None;
-        }
-        let tx = self.replies.0.clone();
-        let id = request.request_id;
-        jev.ask_tool(
-            request,
-            Box::new(move |reply| {
-                let _ = tx.send((id, reply));
-            }),
-        )
-    }
-
-    /// A confident answer decides the call; anything else shows it to the
-    /// user. A confident allow decides only calls up to the configured risk;
-    /// above it the call goes to the user, whatever JEV said. Answers for
-    /// calls decided meanwhile are dropped.
-    fn apply_advice(&mut self, id: u64, reply: AdviceReply) -> AppResult<()> {
-        let Some(i) = self
-            .held
-            .iter()
-            .position(|h| h.request.request_id == id && h.consulting)
-        else {
-            return Ok(());
-        };
-        let threshold = self.jev.as_ref().map_or(1.0, |j| j.threshold());
-        let latency_us = reply.latency_ms.saturating_mul(1000);
-        let trace = self.held[i].trace.clone();
-        let request = self.held[i].request.clone();
-        let risk = reversibility(&request.tool_name, &request.subject, &request.cwd);
-        let answer = match &reply.result {
-            Ok(advice) => match advice.answer {
-                AdviceAnswer::Allow => Ok((Verdict::Allow, advice.confidence)),
-                AdviceAnswer::Deny => Ok((Verdict::Deny, advice.confidence)),
-                _ => Err("answered another question".to_string()),
-            },
-            Err(e) => Err(e.to_string()),
-        };
-        let too_risky = |v: Verdict| v == Verdict::Allow && risk > self.jev_cap;
-        if let Ok((verdict, confidence)) = answer
-            && confidence >= threshold
-            && !too_risky(verdict)
-        {
-            return self.resolve(
-                id,
-                Resolution {
-                    verdict,
-                    rule: format!("jev {confidence:.2}"),
-                    source: Source::Jev,
-                    by: Resolver::Model,
-                    confidence: Some(confidence),
-                    latency_us: Some(latency_us),
-                    note: None,
-                    jev: trace,
-                },
-            );
-        }
-        self.held[i].consulting = false;
-        let (rule, source, confidence) = match answer {
-            Ok((Verdict::Allow, confidence)) if confidence >= threshold => (
-                format!(
-                    "jev: allow {confidence:.2}, but {} is above what it may allow ({}), asking you",
-                    risk.as_str(),
-                    self.jev_cap.as_str()
-                ),
-                Source::Jev,
-                Some(confidence),
-            ),
-            Ok((verdict, confidence)) => (
-                format!(
-                    "jev: {} {confidence:.2} < {threshold:.2}, asking you",
-                    verdict.as_str()
-                ),
-                Source::Jev,
-                Some(confidence),
-            ),
-            Err(why) => (format!("jev: {why}; asking you"), Source::JevError, None),
-        };
-        let mut record = self.record_for(&request, Outcome::Ask, Some(rule), latency_us);
-        record.extra.jev = trace;
-        self.save(DecisionRecord {
-            source,
-            confidence,
-            ..record
-        })
+    /// The seam for what happens to a call the policy could not settle: a
+    /// call no rule matched under `unmatched = "ask"`, or one a rule asked
+    /// about. It is held for the owner, who answers in the terminal, and
+    /// denied if nobody does within the approval timeout. No model is asked.
+    /// (`unmatched = "pass"` never gets here: the policy passes such calls
+    /// straight back to Claude Code.)
+    ///
+    /// A later "decider" extension plugs in here and nowhere else: it would
+    /// look at the held call (never one that is `owner_only`) and resolve it
+    /// through `resolve`, which refuses any automated allow of an
+    /// irreversible call whoever asks (`swarmux_domain::may_resolve`).
+    fn hold(&mut self, request: &HookRequest, rule: Option<&str>) {
+        // A rule that asks wants the owner and nobody else.
+        let owner_only = owner_only(rule);
+        let rule = rule
+            .filter(|r| swarmux_domain::knowledge::is_rule_reason(r))
+            .map(str::to_string);
+        self.held.push(Held {
+            request: request.clone(),
+            asked_at: self.clock.now(),
+            rule,
+            owner_only,
+        });
     }
 
     fn resolve(&mut self, request_id: u64, how: Resolution) -> AppResult<()> {
@@ -752,15 +610,10 @@ impl GuardService {
         }
         self.inbox.respond(request_id, &decision);
         let waited = u64::try_from(self.clock.now() - held.asked_at).unwrap_or(0);
-        let latency = how.latency_us.unwrap_or(waited.saturating_mul(1000));
+        let latency = waited.saturating_mul(1000);
         let mut record = self.record_for(&held.request, how.verdict.into(), decision.rule, latency);
         record.extra.resolver = Some(how.by.as_str().to_string());
-        record.extra.jev = how.jev;
-        self.save(DecisionRecord {
-            source: how.source,
-            confidence: how.confidence,
-            ..record
-        })
+        self.save(record)
     }
 
     fn log(
@@ -801,12 +654,9 @@ impl GuardService {
 
     /// Counts, stores and remembers a record.
     fn save(&mut self, record: DecisionRecord) -> AppResult<()> {
-        let by_jev = matches!(record.source, Source::Jev | Source::JevError);
         let counter = match record.outcome {
             Outcome::Allow => Some(&mut self.stats.allowed),
             Outcome::Deny => Some(&mut self.stats.denied),
-            // JEV handing a held call to the user isn't a second ask.
-            Outcome::Ask if by_jev => None,
             Outcome::Ask => Some(&mut self.stats.asked),
             Outcome::Pass => Some(&mut self.stats.passed),
             Outcome::Stop => Some(&mut self.stats.stopped),
@@ -814,9 +664,6 @@ impl GuardService {
         };
         if let Some(counter) = counter {
             *counter += 1;
-        }
-        if by_jev {
-            self.stats.jev += 1;
         }
         let saved = self.decisions.record(&record);
         self.fresh.push(record.clone());

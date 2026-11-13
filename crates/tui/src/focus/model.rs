@@ -108,7 +108,7 @@ pub enum LaneKind {
     Lead,
     Subagent,
     Reviewer,
-    /// Guard, routing and JEV decisions.
+    /// Guard and routing decisions.
     Guard,
 }
 

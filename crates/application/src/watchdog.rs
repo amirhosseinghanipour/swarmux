@@ -3,14 +3,12 @@
 //! recoveries, cheapest first, before it puts the job in the inbox:
 //!
 //! 1. a nudge on the agent's next tool call,
-//! 2. JEV's judgement: carry on, change approach or stop (only when JEV is
-//!    configured and the user agreed to it),
-//! 3. a checkpoint, a handoff and a fresh session,
-//! 4. a Haiku diagnosis of the last steps,
-//! 5. a fresh session from the last checkpoint before the trouble,
-//! 6. a fresh session on a stronger model,
-//! 7. a fresh session that plans smaller steps first,
-//! 8. the inbox.
+//! 2. a checkpoint, a handoff and a fresh session,
+//! 3. a Haiku diagnosis of the last steps,
+//! 4. a fresh session from the last checkpoint before the trouble,
+//! 5. a fresh session on a stronger model,
+//! 6. a fresh session that plans smaller steps first,
+//! 7. the inbox.
 //!
 //! Every alarm, rung and outcome is written to the ledger.
 
@@ -30,9 +28,8 @@ use swarmux_domain::{
 
 use crate::attention::{Change, ChangeKind};
 use crate::checkpoint::{CheckpointService, Notes};
-use crate::jev::Jev;
 use crate::ledger::{LedgerService, WatchdogEntry};
-use crate::ports::{AdviceAnswer, AdviceReply, Clock};
+use crate::ports::Clock;
 use crate::{AppError, AppResult, JobFact, JobService, Restart};
 
 #[cfg(test)]
@@ -241,7 +238,7 @@ pub trait CheckpointRestore {
 pub struct WatchStats {
     pub alarms: u32,
     /// Rungs taken, in [`Rung::ALL`] order.
-    pub rungs: [u32; 8],
+    pub rungs: [u32; 7],
     /// Work that finished after at least one rung, below the inbox.
     pub rescued: u32,
     /// Work handed to the user.
@@ -289,10 +286,8 @@ struct Chain {
     closed: bool,
 }
 
-enum Reply {
-    Judge(JobId, AdviceReply),
-    Diagnosis(JobId, DiagnosisReply),
-}
+/// A diagnosis that came back, with the root of the work it is for.
+type Reply = (JobId, DiagnosisReply);
 
 /// Watches running jobs and recovers stuck ones.
 pub struct Watchdog {
@@ -303,7 +298,6 @@ pub struct Watchdog {
     checkpoints: Option<Rc<CheckpointService>>,
     restore: Option<Rc<dyn CheckpointRestore>>,
     diagnoser: Option<Rc<dyn Diagnoser>>,
-    jev: Option<Rc<Jev>>,
     detectors: HashMap<JobId, Detector>,
     steps: HashMap<JobId, VecDeque<String>>,
     chains: Vec<Chain>,
@@ -328,7 +322,6 @@ impl Watchdog {
             checkpoints: None,
             restore: None,
             diagnoser: None,
-            jev: None,
             detectors: HashMap::new(),
             steps: HashMap::new(),
             chains: Vec::new(),
@@ -359,12 +352,6 @@ impl Watchdog {
 
     pub fn with_diagnoser(mut self, diagnoser: Rc<dyn Diagnoser>) -> Watchdog {
         self.diagnoser = Some(diagnoser);
-        self
-    }
-
-    /// Asks JEV on the judgement rung, when the user agreed to it.
-    pub fn with_jev(mut self, jev: Rc<Jev>) -> Watchdog {
-        self.jev = Some(jev);
         self
     }
 
@@ -743,7 +730,6 @@ impl Watchdog {
         RungOptions {
             live,
             reachable: alarm.reachable,
-            judge: self.jev.as_ref().is_some_and(|j| j.is_on()),
             checkpoint: self.restore.is_some() && self.before_trouble(i).is_some(),
             stronger_model: self.stronger(&fact.model).is_some(),
         }
@@ -810,21 +796,6 @@ impl Watchdog {
                     Ok(("no way to reach the agent".into(), None))
                 }
             }
-            Rung::Judge => match &self.jev {
-                Some(jev) => {
-                    let tx = self.tx.clone();
-                    let situation = format!("{}: {}", alarm.kind.as_str(), alarm.detail);
-                    jev.ask_recovery(
-                        &situation,
-                        &self.chains[i].trail,
-                        Box::new(move |reply| {
-                            let _ = tx.send(Reply::Judge(root, reply));
-                        }),
-                    );
-                    Ok(("asked JEV".into(), None))
-                }
-                None => Ok(("JEV is off".into(), None)),
-            },
             Rung::Diagnose => match &self.diagnoser {
                 Some(d) => {
                     let request = DiagnosisRequest {
@@ -842,7 +813,7 @@ impl Watchdog {
                     d.diagnose(
                         request,
                         Box::new(move |reply| {
-                            let _ = tx.send(Reply::Diagnosis(root, reply));
+                            let _ = tx.send((root, reply));
                         }),
                     );
                     self.chains[i].diagnosing_until =
@@ -1059,9 +1030,7 @@ impl Watchdog {
 
     fn on_reply(&mut self, reply: Reply, jobs: &mut JobService, report: &mut WatchReport) {
         let now = self.clock.now();
-        let root = match &reply {
-            Reply::Judge(r, _) | Reply::Diagnosis(r, _) => *r,
-        };
+        let (root, reply) = reply;
         let Some(i) = self.chains.iter().position(|c| c.root == root) else {
             return;
         };
@@ -1071,77 +1040,29 @@ impl Watchdog {
             .facts()
             .iter()
             .any(|f| f.job_id == job && f.status == JobStatus::Running);
-        let (rung, text) = match reply {
-            Reply::Judge(_, reply) => (Rung::Judge, self.on_judge(i, job, live, reply)),
-            Reply::Diagnosis(_, reply) => match reply.result {
-                Ok(d) => {
-                    let text = format!("{}. {}", d.suspect, d.instruction);
-                    if live && !self.chains[i].closed {
-                        self.messenger.send(
-                            job,
-                            Nudge {
-                                text: format!("a diagnosis of your last steps: {text}"),
-                                call: None,
-                            },
-                        );
-                    }
-                    self.chains[i].diagnosis = Some(d);
-                    (Rung::Diagnose, format!("diagnosis: {text}"))
+        let text = match reply.result {
+            Ok(d) => {
+                let text = format!("{}. {}", d.suspect, d.instruction);
+                if live && !self.chains[i].closed {
+                    self.messenger.send(
+                        job,
+                        Nudge {
+                            text: format!("a diagnosis of your last steps: {text}"),
+                            call: None,
+                        },
+                    );
                 }
-                Err(e) => (Rung::Diagnose, format!("no diagnosis: {e}")),
-            },
+                self.chains[i].diagnosis = Some(d);
+                format!("diagnosis: {text}")
+            }
+            Err(e) => format!("no diagnosis: {e}"),
         };
+        let rung = Rung::Diagnose;
         let line = cut(&text, 200);
         self.chains[i].trail.push(line.clone());
         jobs.record_recovery(job, &line);
         self.change(now, job, &format!("watchdog: {line}"));
         self.ledger(i, job, "reply", &kind, Some(rung), &text, None, now, report);
-    }
-
-    fn on_judge(&mut self, i: usize, job: JobId, live: bool, reply: AdviceReply) -> String {
-        let now = self.clock.now();
-        let threshold = self.jev.as_ref().map_or(1.0, |j| j.threshold());
-        let advice = match reply.result {
-            Ok(a) => a,
-            Err(e) => return format!("JEV gave no answer: {e}"),
-        };
-        let sure = format!("{:.2}", advice.confidence);
-        if advice.confidence < threshold {
-            return format!("JEV unsure ({sure}): nothing changed");
-        }
-        match advice.answer {
-            AdviceAnswer::Continue => {
-                let c = &mut self.chains[i];
-                c.ladder
-                    .stand_down(now + self.settings.ladder.restart_cooldown_ms);
-                c.open = None;
-                format!("JEV: carry on ({sure})")
-            }
-            AdviceAnswer::ChangeApproach => {
-                if live {
-                    let what = self.chains[i]
-                        .open
-                        .as_ref()
-                        .map(|a| format!(" ({}: {})", a.kind.as_str(), a.detail))
-                        .unwrap_or_default();
-                    self.messenger.send(
-                        job,
-                        Nudge {
-                            text: format!(
-                                "an independent check judged that the current approach is not working{what}. Change approach."
-                            ),
-                            call: None,
-                        },
-                    );
-                }
-                format!("JEV: change approach ({sure})")
-            }
-            AdviceAnswer::Stop => {
-                self.chains[i].ladder.hurry();
-                format!("JEV: stop this attempt ({sure})")
-            }
-            _ => "JEV answered another question".into(),
-        }
     }
 
     fn change(&mut self, at: Millis, job: JobId, text: &str) {

@@ -147,3 +147,47 @@ fn lint_names_the_lines_replaced_by_defaults() {
     assert!(ok.status.success(), "{}", text(&ok));
     assert!(text(&ok).contains("unattended jobs: closed, other jobs: closed"));
 }
+
+#[test]
+fn an_old_jev_section_loads_and_lint_says_it_is_ignored() {
+    let home = tempfile::tempdir().unwrap();
+    let dir = home.path().join(".swarmux");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("config.toml"),
+        "max_concurrent = 2\n[jev]\nprovider = \"typesafe\"\nthreshold = 0.9\nmax_allow = \"R2\"\n[guard]\nunmatched = \"ask\"\n",
+    )
+    .unwrap();
+    let lint = swarmux(home.path(), &["guard", "lint"]);
+    let out = text(&lint);
+    println!("{out}");
+    assert!(
+        out.contains("warn config.toml (line 2): JEV was removed; this section is ignored"),
+        "{out}"
+    );
+    assert!(
+        !lint.status.success(),
+        "a section left over is named, as a replaced line is"
+    );
+    // The file still loaded: the rest of it is read, and no model is asked.
+    assert!(
+        out.contains("guard.unmatched = ask (a call no rule matches; no model is asked)"),
+        "{out}"
+    );
+    assert!(!out.contains("jev.max_allow"), "{out}");
+
+    // Without the section there is nothing to say.
+    std::fs::write(dir.join("config.toml"), "[guard]\nunmatched = \"ask\"\n").unwrap();
+    let ok = swarmux(home.path(), &["guard", "lint"]);
+    assert!(ok.status.success(), "{}", text(&ok));
+    assert!(!text(&ok).contains("JEV"), "{}", text(&ok));
+}
+
+#[test]
+fn the_jev_command_is_gone() {
+    let home = tempfile::tempdir().unwrap();
+    for args in [["jev", "test"], ["jev", "set-key"]] {
+        let out = swarmux(home.path(), &args);
+        assert!(!out.status.success(), "{args:?}");
+    }
+}

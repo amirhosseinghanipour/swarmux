@@ -20,8 +20,8 @@ pub const PROTECTED_REASON: &str = "protected path";
 /// The reason of a call held because only a typed confirmation allows it.
 pub const IRREVERSIBLE_REASON: &str = "irreversible";
 
-/// Whether a held call's reason makes it the owner's alone: no model sees
-/// it and no rule can be made from it.
+/// Whether a held call's reason makes it the owner's alone: no automated
+/// decider may take it from the owner and no rule can be made from it.
 pub(crate) fn owner_only(reason: Option<&str>) -> bool {
     reason.is_some_and(|r| {
         swarmux_domain::knowledge::is_rule_reason(r)

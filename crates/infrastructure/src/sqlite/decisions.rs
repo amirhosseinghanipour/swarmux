@@ -134,7 +134,7 @@ mod tests {
     }
 
     #[test]
-    fn jev_records_keep_source_and_confidence() {
+    fn records_made_by_the_removed_jev_keep_source_and_confidence() {
         let s = SqliteStore::open_in_memory().unwrap();
         let jev = DecisionRecord {
             source: Source::Jev,
@@ -149,6 +149,32 @@ mod tests {
         s.record(&jev).unwrap();
         s.record(&route).unwrap();
         assert_eq!(s.recent_decisions(10).unwrap(), [route, jev]);
+    }
+
+    #[test]
+    fn rows_an_older_swarmux_wrote_for_jev_still_read() {
+        // As the removed code wrote them: the source in `fork`, the model's
+        // confidence beside it, a rule text naming JEV.
+        let s = SqliteStore::open_in_memory().unwrap();
+        s.conn
+            .execute_batch(
+                "INSERT INTO decisions (fork, input_hash, output, rule, latency_us, ts, tool, subject, confidence)
+                   VALUES ('jev', 'h', 'allow', 'jev 0.93', 40000, 10, 'Bash', 'make deploy', 0.93);
+                 INSERT INTO decisions (fork, input_hash, output, rule, latency_us, ts, tool, subject, confidence)
+                   VALUES ('jev-error', 'h', 'ask', 'jev: HTTP 401; asking you', 9000, 11, 'Bash', 'make', NULL);",
+            )
+            .unwrap();
+        let rows = s.recent_decisions(10).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(
+            (rows[0].source, rows[0].outcome, rows[0].confidence),
+            (Source::JevError, Outcome::Ask, None)
+        );
+        assert_eq!(
+            (rows[1].source, rows[1].outcome, rows[1].confidence),
+            (Source::Jev, Outcome::Allow, Some(0.93))
+        );
+        assert_eq!(rows[1].rule.as_deref(), Some("jev 0.93"));
     }
 
     #[test]

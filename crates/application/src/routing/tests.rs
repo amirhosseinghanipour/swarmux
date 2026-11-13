@@ -1,9 +1,6 @@
 use super::*;
-use crate::ports::{AdviceAnswer, AdviceError, AdviceRequest, NewJob};
-use crate::testing::{
-    FakeAdvisor, FakeConsents, FakeDecisionRepo, FakeRouter, FixedClock, InMemoryStore, advice,
-    picks,
-};
+use crate::ports::NewJob;
+use crate::testing::{FakeDecisionRepo, FakeRouter, FixedClock, InMemoryStore, picks};
 
 struct Fixture {
     svc: RoutingService,
@@ -47,22 +44,6 @@ fn fixture(names: &[&str]) -> Fixture {
         clock,
         sessions,
     }
-}
-
-fn with_jev(f: Fixture, consented: bool) -> (Fixture, Rc<FakeAdvisor>) {
-    let advisor = Rc::new(FakeAdvisor::default());
-    let jev = Jev::new(
-        advisor.clone(),
-        Rc::new(FakeConsents::default()),
-        f.clock.clone(),
-        0.85,
-    )
-    .unwrap();
-    if consented {
-        jev.grant().unwrap();
-    }
-    let svc = f.svc.with_jev(Rc::new(jev));
-    (Fixture { svc, ..f }, advisor)
 }
 
 #[test]
@@ -196,53 +177,25 @@ fn no_sessions_is_an_error() {
 }
 
 #[test]
-fn confident_jev_skips_haiku() {
-    let (mut f, advisor) = with_jev(fixture(&["api", "web"]), true);
+fn a_prompt_goes_straight_to_haiku_with_no_other_model_in_between() {
+    let mut f = fixture(&["api", "web"]);
     f.svc.start("deploy the api", f.sessions[1].id).unwrap();
-    let AdviceRequest::Session { prompt, candidates } = &advisor.requests()[0] else {
-        panic!()
-    };
-    assert_eq!(prompt, "deploy the api");
-    assert_eq!(candidates, &["web", "api"]);
-    advisor.reply(0, advice(AdviceAnswer::Session("api".into()), 0.91));
-    let routed = f.svc.pump().routed.remove(0);
-    assert_eq!(routed.session.name, "api");
-    assert_eq!(
-        (routed.source, routed.confidence),
-        (Source::Jev, Some(0.91))
+    // The router is asked at once, in the same call that started routing.
+    assert_eq!(f.router.requests().len(), 1);
+    assert_eq!(f.router.requests()[0].prompt, "deploy the api");
+    assert!(
+        f.decisions.rows().is_empty(),
+        "nothing logged before the answer"
     );
-    assert!(f.router.requests().is_empty());
-    let row = f.decisions.rows().pop().unwrap();
-    assert_eq!(row.confidence, Some(0.91));
-}
-
-#[test]
-fn unsure_or_failing_jev_hands_over_to_haiku() {
-    let (mut f, advisor) = with_jev(fixture(&["api", "web"]), true);
-    f.svc.start("x", f.sessions[0].id).unwrap();
-    advisor.reply(0, advice(AdviceAnswer::Session("api".into()), 0.5));
-    assert!(f.svc.pump().routed.is_empty());
-    assert_eq!(f.router.requests().len(), 1);
-    let row = f.decisions.rows().pop().unwrap();
-    assert_eq!((row.source, row.confidence), (Source::Jev, Some(0.5)));
-    f.router.reply(0, picks("web", None, "ui"));
-    assert_eq!(f.svc.pump().routed[0].source, Source::Haiku);
-
-    f.svc.start("y", f.sessions[0].id).unwrap();
-    advisor.reply(1, Err(AdviceError::Status(401)));
-    f.svc.pump();
-    let row = f.decisions.rows().pop().unwrap();
-    assert_eq!(row.source, Source::JevError);
-    assert!(row.rule.unwrap().contains("HTTP 401"));
-    assert_eq!(f.router.requests().len(), 2);
-}
-
-#[test]
-fn jev_without_consent_is_not_asked() {
-    let (mut f, advisor) = with_jev(fixture(&["api", "web"]), false);
-    f.svc.start("x", f.sessions[0].id).unwrap();
-    assert!(advisor.requests().is_empty());
-    assert_eq!(f.router.requests().len(), 1);
+    f.router.reply(0, picks("api", None, "back-end"));
+    let routed = f.svc.pump().routed.remove(0);
+    assert_eq!(
+        (routed.session.name.as_str(), routed.source),
+        ("api", Source::Haiku)
+    );
+    let rows = f.decisions.rows();
+    assert_eq!(rows.len(), 1, "one decision, made by Haiku");
+    assert_eq!((rows[0].source, rows[0].confidence), (Source::Haiku, None));
 }
 
 #[test]

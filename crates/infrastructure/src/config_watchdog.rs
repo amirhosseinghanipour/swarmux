@@ -30,6 +30,7 @@ pub(crate) fn parse_watchdog(
     raw: RawWatchdog,
     text: &str,
     path: &Path,
+    warnings: &mut Vec<String>,
 ) -> Result<WatchdogSettings, ConfigError> {
     let error = |key: &str, message: String| ConfigError {
         path: path.to_path_buf(),
@@ -50,6 +51,16 @@ pub(crate) fn parse_watchdog(
     if let Some(names) = raw.rungs {
         let mut rungs = Vec::new();
         for name in &names {
+            // The rung JEV had was removed with it. An old list that names
+            // it still loads: the name is skipped, and said so.
+            if name.trim() == "judge" {
+                let line =
+                    key_line(text, "rungs").map_or(String::new(), |l| format!(" (line {l})"));
+                warnings.push(format!(
+                    "config.toml{line}: watchdog.rungs names \"judge\", the JEV rung; JEV was removed, so it is skipped"
+                ));
+                continue;
+            }
             let rung = Rung::parse(name).ok_or_else(|| {
                 let all: Vec<&str> = Rung::ALL.iter().map(|r| r.as_str()).collect();
                 error(

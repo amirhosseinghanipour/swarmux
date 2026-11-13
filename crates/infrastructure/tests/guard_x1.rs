@@ -1,8 +1,8 @@
 //! Guard hardening end to end, over the real hook socket and SQLite:
 //!
 //! * a held irreversible call is released by the typed confirmation and by
-//!   nothing else, even with a decision model answering "allow" with full
-//!   confidence;
+//!   nothing else: not a key press, "always allow", an accepted rule or the
+//!   approval timeout;
 //! * a job whose app can't be reached is denied, and after a restart the
 //!   fallback is in the ledger.
 //!
@@ -14,59 +14,15 @@ use std::sync::mpsc::{TryRecvError, channel};
 use std::time::{Duration, Instant};
 
 use swarmux_application::ledger::{Ledger, LedgerService, ingest_fallbacks, verify_all};
-use swarmux_application::ports::{
-    Advice, AdviceAnswer, AdviceReply, AdviceRequest, AdviceSink, Clock, ConsentStore,
-    DecisionAdvisor, DecisionRepository,
-};
+use swarmux_application::ports::{Clock, DecisionRepository};
 use swarmux_application::{
-    AppResult, Confirmation, DecisionRecord, FailMode, GuardService, Jev, SharedPolicy,
+    AppResult, Confirmation, DecisionRecord, FailMode, GuardService, SharedPolicy,
 };
 use swarmux_domain::alarm::{ARMING_MS, Challenge};
 use swarmux_domain::ledger::LedgerKind;
 use swarmux_domain::{GuardPolicy, Pattern, Unmatched};
 use swarmux_infrastructure::hook::{HookEnv, HookServer, endpoint_for, pre_tool_in, spool_file};
 use swarmux_infrastructure::{SqliteLedger, SystemClock};
-
-/// A decision model that always says "allow", and sure of it.
-#[derive(Default)]
-struct YesMan {
-    asked: RefCell<Vec<String>>,
-}
-
-impl DecisionAdvisor for YesMan {
-    fn provider(&self) -> &str {
-        "typesafe"
-    }
-    fn host(&self) -> &str {
-        "fake.example"
-    }
-    fn has_key(&self) -> bool {
-        true
-    }
-    fn advise(&self, request: AdviceRequest, sink: AdviceSink) {
-        if let AdviceRequest::ToolCall { summary, .. } = request {
-            self.asked.borrow_mut().push(summary);
-        }
-        sink(AdviceReply {
-            result: Ok(Advice {
-                answer: AdviceAnswer::Allow,
-                confidence: 1.0,
-            }),
-            latency_ms: 1,
-        });
-    }
-}
-
-struct Consent;
-
-impl ConsentStore for Consent {
-    fn has_consent(&self, _: &str) -> AppResult<bool> {
-        Ok(true)
-    }
-    fn grant_consent(&self, _: &str, _: i64) -> AppResult<()> {
-        Ok(())
-    }
-}
 
 #[derive(Default)]
 struct Log(RefCell<Vec<DecisionRecord>>);
@@ -104,7 +60,7 @@ fn pump_until(guard: &mut GuardService, what: &str, done: impl Fn(&GuardService)
 }
 
 #[test]
-fn an_irreversible_call_waits_for_the_typed_confirmation_whatever_jev_says() {
+fn an_irreversible_call_waits_for_the_typed_confirmation_and_nothing_automated_allows_it() {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(1)
         .enable_all()
@@ -120,11 +76,8 @@ fn an_irreversible_call_waits_for_the_typed_confirmation_whatever_jev_says() {
     let server = Rc::new(HookServer::start(rt.handle(), &pipe, policy.clone()).unwrap());
     let clock = Rc::new(SystemClock);
     let log = Rc::new(Log::default());
-    let advisor = Rc::new(YesMan::default());
-    let jev = Rc::new(Jev::new(advisor.clone(), Rc::new(Consent), clock.clone(), 0.85).unwrap());
-    let mut guard = GuardService::new(policy, server.clone(), log.clone(), clock.clone())
-        .with_timeout_secs(60)
-        .with_jev(jev);
+    let mut guard =
+        GuardService::new(policy, server.clone(), log.clone(), clock.clone()).with_timeout_secs(60);
 
     // The hook process Claude Code would run, for `rm -rf build`.
     let (tx, rx) = channel();
@@ -148,13 +101,8 @@ fn an_irreversible_call_waits_for_the_typed_confirmation_whatever_jev_says() {
         held.request.subject,
         log.0.borrow().last().and_then(|r| r.rule.clone())
     );
-    println!("jev asked: {} time(s)", advisor.asked.borrow().len());
-    assert!(
-        advisor.asked.borrow().is_empty(),
-        "JEV is never consulted about it"
-    );
 
-    // Nothing but the typed confirmation: a key, an allow rule, the model.
+    // Nothing but the typed confirmation: a key, "always", an allow rule.
     let id = held.request.request_id;
     let key = guard.approve(id);
     println!("approve(): {key:?}");
@@ -195,9 +143,56 @@ fn an_irreversible_call_waits_for_the_typed_confirmation_whatever_jev_says() {
             .unwrap()
             .contains("confirmed by naming build")
     );
-    assert!(advisor.asked.borrow().is_empty());
     let last = log.0.borrow().last().cloned().unwrap();
     assert_eq!(last.extra.resolver.as_deref(), Some("human-typed"));
+}
+
+/// The approval timeout is an automated resolver too: it denies a held
+/// irreversible call, it never lets it through.
+#[test]
+fn an_irreversible_call_nobody_confirms_is_denied_by_the_timeout_never_allowed() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .unwrap();
+    let pipe = endpoint_for(std::process::id() ^ 0x5252);
+    let policy = SharedPolicy::new(GuardPolicy::new(
+        vec![Pattern::parse("Bash").unwrap()],
+        vec![],
+        Unmatched::Ask,
+    ));
+    let server = Rc::new(HookServer::start(rt.handle(), &pipe, policy.clone()).unwrap());
+    let clock = Rc::new(SystemClock);
+    let log = Rc::new(Log::default());
+    let mut guard =
+        GuardService::new(policy, server.clone(), log.clone(), clock.clone()).with_timeout_secs(1);
+    let (tx, rx) = channel();
+    let env = HookEnv {
+        pipe: Some(pipe.clone()),
+        job: Some("7".into()),
+        fail: FailMode::Closed,
+        spool: None,
+        now: clock.now(),
+    };
+    std::thread::spawn(move || {
+        let _ = tx.send(pre_tool_in(&hook_input("rm -rf build"), &env));
+    });
+    pump_until(&mut guard, "the call is held for the owner", |g| {
+        g.pending_count() == 1
+    });
+    let id = guard.approvals().remove(0).request.request_id;
+    assert!(guard.approve(id).is_err());
+    pump_until(&mut guard, "the timeout passes", |g| g.pending_count() == 0);
+    let out = rx
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .expect("the hook prints the decision");
+    println!("nobody confirmed: the hook printed {out}");
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["hookSpecificOutput"]["permissionDecision"], "deny");
+    let last = log.0.borrow().last().cloned().unwrap();
+    assert_eq!(last.extra.resolver.as_deref(), Some("timeout"));
 }
 
 #[test]

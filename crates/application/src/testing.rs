@@ -13,12 +13,11 @@ use swarmux_domain::{
 use crate::followup::{FollowStore, Intent, IntentStore};
 use crate::ledger::Ledger;
 use crate::ports::{
-    Advice, AdviceAnswer, AdviceError, AdviceReply, AdviceRequest, AdviceSink, AgentCatalog,
-    AgentProfile, AgentRunner, Clock, ConsentStore, DecisionAdvisor, DecisionRepository,
-    FallbackRecord, FallbackSpool, HookInbox, HookRequest, InboxItem, JobRepository, NewJob,
-    PromptRepository, PromptRouter, RepoRoots, RouteAnswer, RouteReply, RouteRequest, RouteSink,
-    RuleStore, RuleWriter, RunRequest, RunSink, RunnerMsg, SessionRepository, StoredEvent,
-    SystemMonitor, TelemetryFeed, TelemetryStore, Workspace,
+    AgentCatalog, AgentProfile, AgentRunner, Clock, DecisionRepository, FallbackRecord,
+    FallbackSpool, HookInbox, HookRequest, InboxItem, JobRepository, NewJob, PromptRepository,
+    PromptRouter, RepoRoots, RouteAnswer, RouteReply, RouteRequest, RouteSink, RuleStore,
+    RuleWriter, RunRequest, RunSink, RunnerMsg, SessionRepository, StoredEvent, SystemMonitor,
+    TelemetryFeed, TelemetryStore, Workspace,
 };
 use crate::{AppError, AppResult, DecisionRecord, JobSummary, TelemetrySnapshot};
 use swarmux_domain::followup::FollowUp;
@@ -779,95 +778,6 @@ impl FallbackSpool for FakeSpool {
 
     fn clear(&self) -> AppResult<()> {
         self.0.borrow_mut().clear();
-        Ok(())
-    }
-}
-
-/// Records advice requests; tests answer them with [`FakeAdvisor::reply`],
-/// or set an answer given at once with [`FakeAdvisor::answer_with`].
-#[derive(Default)]
-pub struct FakeAdvisor {
-    requests: RefCell<Vec<AdviceRequest>>,
-    sinks: RefCell<Vec<Option<AdviceSink>>>,
-    instant: RefCell<Option<Result<Advice, AdviceError>>>,
-    no_key: Cell<bool>,
-}
-
-impl FakeAdvisor {
-    pub fn requests(&self) -> Vec<AdviceRequest> {
-        self.requests.borrow().clone()
-    }
-
-    /// Answers the `i`-th request (once).
-    pub fn reply(&self, i: usize, result: Result<Advice, AdviceError>) {
-        if let Some(sink) = self.sinks.borrow_mut()[i].take() {
-            sink(AdviceReply {
-                result,
-                latency_ms: 40,
-            });
-        }
-    }
-
-    /// Every later request gets `result` at once.
-    pub fn answer_with(&self, result: Result<Advice, AdviceError>) {
-        *self.instant.borrow_mut() = Some(result);
-    }
-
-    pub fn set_no_key(&self, no_key: bool) {
-        self.no_key.set(no_key);
-    }
-}
-
-/// An advice answer with `confidence`.
-pub fn advice(answer: AdviceAnswer, confidence: f64) -> Result<Advice, AdviceError> {
-    Ok(Advice { answer, confidence })
-}
-
-impl DecisionAdvisor for FakeAdvisor {
-    fn provider(&self) -> &str {
-        "typesafe"
-    }
-
-    fn host(&self) -> &str {
-        "fake.example"
-    }
-
-    fn has_key(&self) -> bool {
-        !self.no_key.get()
-    }
-
-    fn advise(&self, request: AdviceRequest, sink: AdviceSink) {
-        self.requests.borrow_mut().push(request);
-        match self.instant.borrow().clone() {
-            Some(result) => {
-                sink(AdviceReply {
-                    result,
-                    latency_ms: 40,
-                });
-                self.sinks.borrow_mut().push(None);
-            }
-            None => self.sinks.borrow_mut().push(Some(sink)),
-        }
-    }
-}
-
-/// Consents in memory.
-#[derive(Default)]
-pub struct FakeConsents(RefCell<Vec<(String, Millis)>>);
-
-impl FakeConsents {
-    pub fn granted(&self) -> Vec<(String, Millis)> {
-        self.0.borrow().clone()
-    }
-}
-
-impl ConsentStore for FakeConsents {
-    fn has_consent(&self, provider: &str) -> AppResult<bool> {
-        Ok(self.0.borrow().iter().any(|(p, _)| p == provider))
-    }
-
-    fn grant_consent(&self, provider: &str, now: Millis) -> AppResult<()> {
-        self.0.borrow_mut().push((provider.to_string(), now));
         Ok(())
     }
 }

@@ -13,7 +13,6 @@ mod followup;
 mod gate;
 mod guardcmd;
 mod holdout;
-mod jev;
 mod keys;
 mod knowledge;
 mod stats;
@@ -35,7 +34,7 @@ use swarmux_application::ledger::{
 use swarmux_application::ports::Clock;
 use swarmux_application::{
     AlwaysSettings, Board, BoardDigest, BoardService, CombinedStatusline, GateKeeper, GateService,
-    Governor, GuardService, HandoffBoard, HistoryService, HookBus, HookMessenger, Jev, JobService,
+    Governor, GuardService, HandoffBoard, HistoryService, HookBus, HookMessenger, JobService,
     MissionService, NotifyService, NudgeBoard, PromptService, RoutingService, ScopeClaims,
     SessionService, SharedPolicy, StatuslineFeed, TruthBoard, UnattendedJobs, Watchdog,
 };
@@ -93,11 +92,6 @@ enum Command {
     Guard {
         #[command(subcommand)]
         action: guardcmd::Action,
-    },
-    /// JEV, the optional hosted decision model (bring your own key).
-    Jev {
-        #[command(subcommand)]
-        action: JevAction,
     },
     /// A neofetch-style card: the logo, your sessions, spend, limits and
     /// ledger head, in the colours of your theme. Honours NO_COLOR.
@@ -251,20 +245,6 @@ enum Command {
     Hook {
         /// The hook event: pre-tool, stop, session-start, … (or Claude Code's own name).
         event: String,
-    },
-}
-
-#[derive(Subcommand)]
-enum JevAction {
-    /// Store a provider's API key in the OS keychain (read without echo).
-    SetKey {
-        /// typesafe or openrouter
-        provider: String,
-    },
-    /// Send one sample decision and print the verdict, confidence and latency.
-    Test {
-        /// typesafe or openrouter (default: the one in config.toml)
-        provider: Option<String>,
     },
 }
 
@@ -554,12 +534,6 @@ fn main() -> anyhow::Result<ExitCode> {
             ThemeAction::List => theme::list(),
             ThemeAction::Export { name, format } => theme::export_cmd(name.as_deref(), &format),
         },
-        Some(Command::Jev {
-            action: JevAction::SetKey { provider },
-        }) => jev::set_key(&provider),
-        Some(Command::Jev {
-            action: JevAction::Test { provider },
-        }) => jev::test(provider.as_deref()),
         Some(Command::Statusline { print_settings }) => statusline(print_settings),
         Some(Command::Install {
             dir,
@@ -834,7 +808,7 @@ fn build_app(
     });
     // Stuck agents: detectors on every job, and a ladder of recoveries,
     // cheapest first, before the inbox.
-    let mut watchdog = Watchdog::new(
+    let watchdog = Watchdog::new(
         settings.watchdog.clone(),
         Rc::new(HookMessenger(nudges)),
         clock.clone(),
@@ -860,8 +834,7 @@ fn build_app(
         .with_always(AlwaysSettings {
             scope: guard_settings.always_scope,
             expiry_days: guard_settings.always_expiry_days,
-        })
-        .with_jev_cap(settings.jev.max_allow);
+        });
     // Rules added in earlier runs, and the hook calls that fell back while
     // swarmux was not running.
     let mut startup_notes: Vec<String> = settings.warnings.clone();
@@ -900,20 +873,8 @@ fn build_app(
         Err(e) => startup_notes.push(format!("guard fallbacks: {e}")),
     }
     let router = HaikuRouter::new(doctor::claude_bin(), rt.handle().clone());
-    let mut routing =
-        RoutingService::new(store.clone(), jobs_log.clone(), decisions, clock.clone())
-            .with_router(Rc::new(router));
-    if let Some((advisor, _)) = jev::advisor(&settings.jev, rt.handle().clone())? {
-        let jev = Rc::new(Jev::new(
-            Rc::new(advisor),
-            store.clone(),
-            clock.clone(),
-            settings.jev.threshold,
-        )?);
-        guard = guard.with_jev(jev.clone());
-        watchdog = watchdog.with_jev(jev.clone());
-        routing = routing.with_jev(jev);
-    }
+    let routing = RoutingService::new(store.clone(), jobs_log.clone(), decisions, clock.clone())
+        .with_router(Rc::new(router));
 
     let workspace = Rc::new(GitCli::default());
     let sessions = SessionService::new(store.clone(), clock.clone())

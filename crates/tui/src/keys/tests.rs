@@ -41,7 +41,7 @@ const TODAYS_KEYS: &[(&str, &str, &str)] = &[
     ("global", "7", "nav.go_board"),
     ("global", "8", "nav.go_knowledge"),
     ("global", "9", "nav.go_followups"),
-    // What answers a plan, the JEV consent or a held call.
+    // What answers a plan or a held call.
     ("decide", "y", "decide.yes"),
     ("decide", "n", "decide.no"),
     ("decide", "a", "decide.always"),

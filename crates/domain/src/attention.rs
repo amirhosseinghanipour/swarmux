@@ -169,8 +169,6 @@ pub struct CallContext {
     pub track_record: f64,
     /// The run came from untrusted text.
     pub taint: bool,
-    /// The decision model's worry, when it has one.
-    pub jev: Option<f64>,
 }
 
 impl Default for CallContext {
@@ -179,7 +177,6 @@ impl Default for CallContext {
             novelty: 0.5,
             track_record: 0.5,
             taint: false,
-            jev: None,
         }
     }
 }
@@ -207,7 +204,6 @@ impl AttentionItem {
                 novelty: ctx.novelty,
                 taint: ctx.taint,
                 track_record: ctx.track_record,
-                jev: ctx.jev,
             },
             secret,
         );
