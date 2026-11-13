@@ -1,0 +1,1851 @@
+{
+  "schema": 1,
+  "revision": 1,
+  "taken_at": 10000000,
+  "header": {
+    "counts": {
+      "decide": 4,
+      "ready_to_land": 1,
+      "running": 1,
+      "landed": 1,
+      "idle": 1
+    },
+    "queue": {
+      "running": 1,
+      "queued": 1,
+      "max_concurrent": 4,
+      "deferred": 0,
+      "awaiting_reset": 0,
+      "held_for_attention": 0
+    },
+    "limits": [],
+    "spend": {
+      "today_usd": null,
+      "week_usd": null,
+      "missions_usd": 2.94,
+      "jobs_usd": 5.34
+    }
+  },
+  "groups": [
+    {
+      "kind": "decide",
+      "total": 4,
+      "outcomes": [
+        {
+          "id": "job:2",
+          "kind": "job",
+          "title": "job 2: web-checkout",
+          "mission": null,
+          "lifecycle": "running",
+          "group": "decide",
+          "priority": "p1",
+          "since_at": 1100000,
+          "created_at": 1000000,
+          "updated_at": 1000000,
+          "asks": [
+            {
+              "id": "approval:7",
+              "kind": "approval",
+              "priority": "p1",
+              "title": "Bash git push origin HEAD:main",
+              "detail": "waiting for your answer",
+              "since_at": 1700100,
+              "deadline_at": 13000000,
+              "request": 7,
+              "decides": true
+            }
+          ],
+          "holds": [
+            "hold:7"
+          ],
+          "contract": null,
+          "jobs": [
+            {
+              "id": 2,
+              "repo": "web-checkout",
+              "session": "web-checkout",
+              "model": "sonnet",
+              "state": "running",
+              "task": null,
+              "spend_usd": 0.5,
+              "context_use": 0.25,
+              "started_at": 1100000,
+              "finished_at": null,
+              "error": null
+            }
+          ],
+          "plan": null,
+          "checks": {
+            "source": "none",
+            "runs": [],
+            "total": 0,
+            "passed": 0,
+            "failed": 0,
+            "gate": null,
+            "stages": [
+              {
+                "key": "protected_files",
+                "state": "not_run",
+                "summary": "the gate has not judged yet",
+                "items": [],
+                "ran": null,
+                "passed": null
+              },
+              {
+                "key": "test_weakening",
+                "state": "not_run",
+                "summary": "the gate has not judged yet",
+                "items": [],
+                "ran": null,
+                "passed": null
+              },
+              {
+                "key": "base_suite",
+                "state": "not_run",
+                "summary": "the gate has not judged yet",
+                "items": [],
+                "ran": null,
+                "passed": null
+              },
+              {
+                "key": "hidden_checks",
+                "state": "not_run",
+                "summary": "no hidden checks ran",
+                "items": [],
+                "ran": null,
+                "passed": null
+              },
+              {
+                "key": "evidence_gaps",
+                "state": "not_run",
+                "summary": "the gate has not judged yet",
+                "items": [],
+                "ran": null,
+                "passed": null
+              },
+              {
+                "key": "drift",
+                "state": "not_run",
+                "summary": "no plan to compare with",
+                "items": [],
+                "ran": null,
+                "passed": null
+              },
+              {
+                "key": "review",
+                "state": "not_run",
+                "summary": "no review was asked for",
+                "items": [],
+                "ran": null,
+                "passed": null
+              }
+            ]
+          },
+          "claim": null,
+          "evidence": null,
+          "diff": null,
+          "landing": null,
+          "spend": {
+            "total_usd": 0.5,
+            "plan_usd": 0.0,
+            "implement_usd": 0.5,
+            "verify_usd": 0.0,
+            "review_usd": 0.0
+          },
+          "actions": [
+            {
+              "kind": "kill",
+              "enabled": true,
+              "reason": null,
+              "job": 2,
+              "mission": null,
+              "request": 7
+            },
+            {
+              "kind": "retry",
+              "enabled": false,
+              "reason": "the job has not ended",
+              "job": 2,
+              "mission": null,
+              "request": 7
+            },
+            {
+              "kind": "resume",
+              "enabled": false,
+              "reason": "only an interrupted or failed job can resume",
+              "job": 2,
+              "mission": null,
+              "request": 7
+            },
+            {
+              "kind": "land_to_integration",
+              "enabled": false,
+              "reason": "a plain job has no integration branch",
+              "job": 2,
+              "mission": null,
+              "request": 7
+            },
+            {
+              "kind": "open_evidence",
+              "enabled": false,
+              "reason": "no evidence bundle yet: one is sealed when the gate passes",
+              "job": 2,
+              "mission": null,
+              "request": 7
+            },
+            {
+              "kind": "answer_held_call",
+              "enabled": true,
+              "reason": null,
+              "job": 2,
+              "mission": null,
+              "request": 7
+            },
+            {
+              "kind": "approve_plan",
+              "enabled": false,
+              "reason": "no plan waits for a decision",
+              "job": 2,
+              "mission": null,
+              "request": 7
+            },
+            {
+              "kind": "reject_plan",
+              "enabled": false,
+              "reason": "no plan waits for a decision",
+              "job": 2,
+              "mission": null,
+              "request": 7
+            }
+          ]
+        },
+        {
+          "id": "job:3",
+          "kind": "job",
+          "title": "job 3: data-pipeline",
+          "mission": null,
+          "lifecycle": "failed",
+          "group": "decide",
+          "priority": "p2",
+          "since_at": 5000,
+          "created_at": 1000000,
+          "updated_at": 5000,
+          "asks": [
+            {
+              "id": "job:3:failed",
+              "kind": "job_failed",
+              "priority": "p2",
+              "title": "Backfill the events table",
+              "detail": "claude exited with code 1",
+              "since_at": 5000,
+              "deadline_at": null,
+              "request": null,
+              "decides": true
+            }
+          ],
+          "holds": [],
+          "contract": null,
+          "jobs": [
+            {
+              "id": 3,
+              "repo": "data-pipeline",
+              "session": "data-pipeline",
+              "model": "sonnet",
+              "state": "failed",
+              "task": null,
+              "spend_usd": 0.5,
+              "context_use": 0.25,
+              "started_at": 1100000,
+              "finished_at": 5000,
+              "error": "claude exited with code 1"
+            }
+          ],
+          "plan": null,
+          "checks": {
+            "source": "gate",
+            "runs": [
+              {
+                "name": "cargo test",
+                "status": "failed",
+                "duration_ms": 4200,
+                "first_failure": "thread 'etl::counts' panicked at src/etl.rs:12"
+              },
+              {
+                "name": "clippy",
+                "status": "passed",
+                "duration_ms": 900,
+                "first_failure": null
+              }
+            ],
+            "total": 2,
+            "passed": 1,
+            "failed": 1,
+            "gate": {
+              "verdict": "escalate",
+              "blocks": 1,
+              "max_blocks": 3,
+              "at": 4000
+            },
+            "stages": [
+              {
+                "key": "protected_files",
+                "state": "failed",
+                "summary": "1 protected file(s) changed",
+                "items": [
+                  "changed tests/etl.rs"
+                ],
+                "ran": null,
+                "passed": null
+              },
+              {
+                "key": "test_weakening",
+                "state": "passed",
+                "summary": "no test was weakened",
+                "items": [],
+                "ran": null,
+                "passed": null
+              },
+              {
+                "key": "base_suite",
+                "state": "failed",
+                "summary": "base suite: etl::counts failed",
+                "items": [],
+                "ran": null,
+                "passed": null
+              },
+              {
+                "key": "hidden_checks",
+                "state": "not_run",
+                "summary": "no hidden checks ran",
+                "items": [],
+                "ran": null,
+                "passed": null
+              },
+              {
+                "key": "evidence_gaps",
+                "state": "failed",
+                "summary": "1 claim(s) nothing backs",
+                "items": [
+                  "says the tests pass; no test ran"
+                ],
+                "ran": null,
+                "passed": null
+              },
+              {
+                "key": "drift",
+                "state": "not_run",
+                "summary": "no plan to compare with",
+                "items": [],
+                "ran": null,
+                "passed": null
+              },
+              {
+                "key": "review",
+                "state": "not_run",
+                "summary": "no review was asked for",
+                "items": [],
+                "ran": null,
+                "passed": null
+              }
+            ]
+          },
+          "claim": null,
+          "evidence": null,
+          "diff": null,
+          "landing": null,
+          "spend": {
+            "total_usd": 0.5,
+            "plan_usd": 0.0,
+            "implement_usd": 0.5,
+            "verify_usd": 0.0,
+            "review_usd": 0.0
+          },
+          "actions": [
+            {
+              "kind": "kill",
+              "enabled": false,
+              "reason": "its jobs have all ended",
+              "job": 3,
+              "mission": null,
+              "request": null
+            },
+            {
+              "kind": "retry",
+              "enabled": true,
+              "reason": null,
+              "job": 3,
+              "mission": null,
+              "request": null
+            },
+            {
+              "kind": "resume",
+              "enabled": true,
+              "reason": null,
+              "job": 3,
+              "mission": null,
+              "request": null
+            },
+            {
+              "kind": "land_to_integration",
+              "enabled": false,
+              "reason": "a plain job has no integration branch",
+              "job": 3,
+              "mission": null,
+              "request": null
+            },
+            {
+              "kind": "open_evidence",
+              "enabled": false,
+              "reason": "no evidence bundle yet: one is sealed when the gate passes",
+              "job": 3,
+              "mission": null,
+              "request": null
+            },
+            {
+              "kind": "answer_held_call",
+              "enabled": false,
+              "reason": "no call is held",
+              "job": 3,
+              "mission": null,
+              "request": null
+            },
+            {
+              "kind": "approve_plan",
+              "enabled": false,
+              "reason": "no plan waits for a decision",
+              "job": 3,
+              "mission": null,
+              "request": null
+            },
+            {
+              "kind": "reject_plan",
+              "enabled": false,
+              "reason": "no plan waits for a decision",
+              "job": 3,
+              "mission": null,
+              "request": null
+            }
+          ]
+        },
+        {
+          "id": "mission:plan-me",
+          "kind": "mission",
+          "title": "plan me",
+          "mission": "plan-me",
+          "lifecycle": "linted",
+          "group": "decide",
+          "priority": "p2",
+          "since_at": 6000,
+          "created_at": 900000,
+          "updated_at": 6000,
+          "asks": [
+            {
+              "id": "plan:plan-me",
+              "kind": "plan_ready",
+              "priority": "p2",
+              "title": "plan me",
+              "detail": "1 task over 1 files: approve, change or cancel",
+              "since_at": 6000,
+              "deadline_at": null,
+              "request": null,
+              "decides": true
+            }
+          ],
+          "holds": [],
+          "contract": {
+            "goal": "plan me, as the spec says",
+            "repos": [],
+            "done_when": [
+              "cargo test"
+            ],
+            "human_signoff": false,
+            "protected": [
+              "tests/**"
+            ],
+            "work_in": [
+              "src/**"
+            ],
+            "budget": {
+              "usd": 5.0,
+              "wall_minutes": 90,
+              "on_exhaust": "escalate"
+            },
+            "note": null
+          },
+          "jobs": [],
+          "plan": {
+            "status": "proposed",
+            "summary": "split the checkout",
+            "tasks": [
+              {
+                "id": "a",
+                "title": "task a",
+                "files": [
+                  "src/a/**"
+                ],
+                "depends_on": [],
+                "acceptance": "cargo test",
+                "state": null,
+                "job": null
+              }
+            ],
+            "drift": null,
+            "topology": null,
+            "rounds": 1,
+            "note": null
+          },
+          "checks": {
+            "source": "none",
+            "runs": [],
+            "total": 1,
+            "passed": 0,
+            "failed": 0,
+            "gate": null,
+            "stages": [
+              {
+                "key": "protected_files",
+                "state": "not_run",
+                "summary": "the gate has not judged yet",
+                "items": [],
+                "ran": null,
+                "passed": null
+              },
+              {
+                "key": "test_weakening",
+                "state": "not_run",
+                "summary": "the gate has not judged yet",
+                "items": [],
+                "ran": null,
+                "passed": null
+              },
+              {
+                "key": "base_suite",
+                "state": "not_run",
+                "summary": "the gate has not judged yet",
+                "items": [],
+                "ran": null,
+                "passed": null
+              },
+              {
+                "key": "hidden_checks",
+                "state": "not_run",
+                "summary": "no hidden checks ran",
+                "items": [],
+                "ran": null,
+                "passed": null
+              },
+              {
+                "key": "evidence_gaps",
+                "state": "not_run",
+                "summary": "the gate has not judged yet",
+                "items": [],
+                "ran": null,
+                "passed": null
+              },
+              {
+                "key": "drift",
+                "state": "not_run",
+                "summary": "no plan to compare with",
+                "items": [],
+                "ran": null,
+                "passed": null
+              },
+              {
+                "key": "review",
+                "state": "not_run",
+                "summary": "no review was asked for",
+                "items": [],
+                "ran": null,
+                "passed": null
+              }
+            ]
+          },
+          "claim": null,
+          "evidence": null,
+          "diff": null,
+          "landing": null,
+          "spend": {
+            "total_usd": 0.0,
+            "plan_usd": 0.0,
+            "implement_usd": 0.0,
+            "verify_usd": 0.0,
+            "review_usd": 0.0
+          },
+          "actions": [
+            {
+              "kind": "kill",
+              "enabled": false,
+              "reason": "no job has started",
+              "job": null,
+              "mission": "plan-me",
+              "request": null
+            },
+            {
+              "kind": "retry",
+              "enabled": false,
+              "reason": "no job has run",
+              "job": null,
+              "mission": "plan-me",
+              "request": null
+            },
+            {
+              "kind": "resume",
+              "enabled": false,
+              "reason": "only an interrupted or failed job can resume",
+              "job": null,
+              "mission": "plan-me",
+              "request": null
+            },
+            {
+              "kind": "land_to_integration",
+              "enabled": false,
+              "reason": "swarmux lands the work itself when the gate passes; landing on request does not exist yet",
+              "job": null,
+              "mission": "plan-me",
+              "request": null
+            },
+            {
+              "kind": "open_evidence",
+              "enabled": false,
+              "reason": "no evidence bundle yet: one is sealed when the gate passes",
+              "job": null,
+              "mission": "plan-me",
+              "request": null
+            },
+            {
+              "kind": "answer_held_call",
+              "enabled": false,
+              "reason": "no call is held",
+              "job": null,
+              "mission": "plan-me",
+              "request": null
+            },
+            {
+              "kind": "approve_plan",
+              "enabled": true,
+              "reason": null,
+              "job": null,
+              "mission": "plan-me",
+              "request": null
+            },
+            {
+              "kind": "reject_plan",
+              "enabled": true,
+              "reason": null,
+              "job": null,
+              "mission": "plan-me",
+              "request": null
+            }
+          ]
+        },
+        {
+          "id": "mission:split-app",
+          "kind": "mission",
+          "title": "split app",
+          "mission": "split-app",
+          "lifecycle": "running",
+          "group": "decide",
+          "priority": "p2",
+          "since_at": 7000,
+          "created_at": 900000,
+          "updated_at": 7000,
+          "asks": [
+            {
+              "id": "merge:split-app:t2",
+              "kind": "merge",
+              "priority": "p2",
+              "title": "split app",
+              "detail": "task t2: its merge conflicts in src/db/mod.rs",
+              "since_at": 7000,
+              "deadline_at": null,
+              "request": null,
+              "decides": true
+            }
+          ],
+          "holds": [],
+          "contract": {
+            "goal": "split app, as the spec says",
+            "repos": [],
+            "done_when": [
+              "cargo test"
+            ],
+            "human_signoff": false,
+            "protected": [
+              "tests/**"
+            ],
+            "work_in": [
+              "src/**"
+            ],
+            "budget": {
+              "usd": 5.0,
+              "wall_minutes": 90,
+              "on_exhaust": "escalate"
+            },
+            "note": null
+          },
+          "jobs": [
+            {
+              "id": 7,
+              "repo": "monorepo",
+              "session": "monorepo",
+              "model": "sonnet",
+              "state": "done",
+              "task": "t1",
+              "spend_usd": 0.5,
+              "context_use": 0.25,
+              "started_at": 1100000,
+              "finished_at": null,
+              "error": null
+            },
+            {
+              "id": 8,
+              "repo": "monorepo",
+              "session": "monorepo",
+              "model": "sonnet",
+              "state": "failed",
+              "task": "t2",
+              "spend_usd": 0.5,
+              "context_use": 0.25,
+              "started_at": 1100000,
+              "finished_at": null,
+              "error": null
+            }
+          ],
+          "plan": {
+            "status": "approved",
+            "summary": "api, db, then the ui",
+            "tasks": [
+              {
+                "id": "t1",
+                "title": "task t1",
+                "files": [
+                  "src/api/**"
+                ],
+                "depends_on": [],
+                "acceptance": "cargo test",
+                "state": "merged",
+                "job": 7
+              },
+              {
+                "id": "t2",
+                "title": "task t2",
+                "files": [
+                  "src/db/**"
+                ],
+                "depends_on": [],
+                "acceptance": "cargo test",
+                "state": "failed",
+                "job": 8
+              },
+              {
+                "id": "t3",
+                "title": "task t3",
+                "files": [
+                  "src/ui/**"
+                ],
+                "depends_on": [
+                  "t1",
+                  "t2"
+                ],
+                "acceptance": "cargo test",
+                "state": "waiting",
+                "job": null
+              }
+            ],
+            "drift": {
+              "changed": 4,
+              "outside": [
+                "scripts/x.sh"
+              ],
+              "outside_count": 1,
+              "tasks": 3,
+              "untouched": [
+                "t3"
+              ],
+              "score": 0.33,
+              "threshold": 0.3,
+              "drifted": true,
+              "summary": "1 of 4 changed files outside the plan, 1 of 3 tasks with no change"
+            },
+            "topology": "fanout",
+            "rounds": 1,
+            "note": null
+          },
+          "checks": {
+            "source": "none",
+            "runs": [],
+            "total": 1,
+            "passed": 0,
+            "failed": 0,
+            "gate": null,
+            "stages": [
+              {
+                "key": "protected_files",
+                "state": "not_run",
+                "summary": "the gate has not judged yet",
+                "items": [],
+                "ran": null,
+                "passed": null
+              },
+              {
+                "key": "test_weakening",
+                "state": "not_run",
+                "summary": "the gate has not judged yet",
+                "items": [],
+                "ran": null,
+                "passed": null
+              },
+              {
+                "key": "base_suite",
+                "state": "not_run",
+                "summary": "the gate has not judged yet",
+                "items": [],
+                "ran": null,
+                "passed": null
+              },
+              {
+                "key": "hidden_checks",
+                "state": "not_run",
+                "summary": "no hidden checks ran",
+                "items": [],
+                "ran": null,
+                "passed": null
+              },
+              {
+                "key": "evidence_gaps",
+                "state": "not_run",
+                "summary": "the gate has not judged yet",
+                "items": [],
+                "ran": null,
+                "passed": null
+              },
+              {
+                "key": "drift",
+                "state": "flagged",
+                "summary": "1 of 4 changed files outside the plan, 1 of 3 tasks with no change",
+                "items": [
+                  "scripts/x.sh",
+                  "task t3 untouched"
+                ],
+                "ran": null,
+                "passed": null
+              },
+              {
+                "key": "review",
+                "state": "not_run",
+                "summary": "no review was asked for",
+                "items": [],
+                "ran": null,
+                "passed": null
+              }
+            ]
+          },
+          "claim": null,
+          "evidence": null,
+          "diff": null,
+          "landing": {
+            "mode": "preview",
+            "into": "swarmux/split-app/integration",
+            "repos": [],
+            "queue": [],
+            "complete": false,
+            "summary": "1 of 3 tasks merged into swarmux/split-app/integration",
+            "at": null
+          },
+          "spend": {
+            "total_usd": 1.0,
+            "plan_usd": 0.0,
+            "implement_usd": 0.0,
+            "verify_usd": 0.0,
+            "review_usd": 0.0
+          },
+          "actions": [
+            {
+              "kind": "kill",
+              "enabled": false,
+              "reason": "no job has started",
+              "job": null,
+              "mission": "split-app",
+              "request": null
+            },
+            {
+              "kind": "retry",
+              "enabled": false,
+              "reason": "no job has run",
+              "job": null,
+              "mission": "split-app",
+              "request": null
+            },
+            {
+              "kind": "resume",
+              "enabled": false,
+              "reason": "only an interrupted or failed job can resume",
+              "job": null,
+              "mission": "split-app",
+              "request": null
+            },
+            {
+              "kind": "land_to_integration",
+              "enabled": false,
+              "reason": "swarmux lands the work itself when the gate passes; landing on request does not exist yet",
+              "job": null,
+              "mission": "split-app",
+              "request": null
+            },
+            {
+              "kind": "open_evidence",
+              "enabled": false,
+              "reason": "no evidence bundle yet: one is sealed when the gate passes",
+              "job": null,
+              "mission": "split-app",
+              "request": null
+            },
+            {
+              "kind": "answer_held_call",
+              "enabled": false,
+              "reason": "no call is held",
+              "job": null,
+              "mission": "split-app",
+              "request": null
+            },
+            {
+              "kind": "approve_plan",
+              "enabled": false,
+              "reason": "no plan waits for a decision",
+              "job": null,
+              "mission": "split-app",
+              "request": null
+            },
+            {
+              "kind": "reject_plan",
+              "enabled": false,
+              "reason": "no plan waits for a decision",
+              "job": null,
+              "mission": "split-app",
+              "request": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "ready_to_land",
+      "total": 1,
+      "outcomes": [
+        {
+          "id": "job:6",
+          "kind": "job",
+          "title": "job 6: docs-site",
+          "mission": null,
+          "lifecycle": "done",
+          "group": "ready_to_land",
+          "priority": null,
+          "since_at": 3200000,
+          "created_at": 1000000,
+          "updated_at": 3100000,
+          "asks": [],
+          "holds": [],
+          "contract": null,
+          "jobs": [
+            {
+              "id": 6,
+              "repo": "docs-site",
+              "session": "docs-site",
+              "model": "sonnet",
+              "state": "done",
+              "task": null,
+              "spend_usd": 0.5,
+              "context_use": 0.25,
+              "started_at": 1100000,
+              "finished_at": 3100000,
+              "error": null
+            }
+          ],
+          "plan": null,
+          "checks": {
+            "source": "gate",
+            "runs": [
+              {
+                "name": "npm test",
+                "status": "passed",
+                "duration_ms": 2500,
+                "first_failure": null
+              }
+            ],
+            "total": 1,
+            "passed": 1,
+            "failed": 0,
+            "gate": {
+              "verdict": "pass",
+              "blocks": 1,
+              "max_blocks": 3,
+              "at": 3200000
+            },
+            "stages": [
+              {
+                "key": "protected_files",
+                "state": "passed",
+                "summary": "no protected file changed",
+                "items": [],
+                "ran": null,
+                "passed": null
+              },
+              {
+                "key": "test_weakening",
+                "state": "passed",
+                "summary": "no test was weakened",
+                "items": [],
+                "ran": null,
+                "passed": null
+              },
+              {
+                "key": "base_suite",
+                "state": "not_run",
+                "summary": "the base suite did not run",
+                "items": [],
+                "ran": null,
+                "passed": null
+              },
+              {
+                "key": "hidden_checks",
+                "state": "not_run",
+                "summary": "no hidden checks ran",
+                "items": [],
+                "ran": null,
+                "passed": null
+              },
+              {
+                "key": "evidence_gaps",
+                "state": "passed",
+                "summary": "every claim is backed by a run",
+                "items": [],
+                "ran": null,
+                "passed": null
+              },
+              {
+                "key": "drift",
+                "state": "not_run",
+                "summary": "no plan to compare with",
+                "items": [],
+                "ran": null,
+                "passed": null
+              },
+              {
+                "key": "review",
+                "state": "not_run",
+                "summary": "no review was asked for",
+                "items": [],
+                "ran": null,
+                "passed": null
+              }
+            ]
+          },
+          "claim": null,
+          "evidence": null,
+          "diff": null,
+          "landing": null,
+          "spend": {
+            "total_usd": 0.5,
+            "plan_usd": 0.0,
+            "implement_usd": 0.5,
+            "verify_usd": 0.0,
+            "review_usd": 0.0
+          },
+          "actions": [
+            {
+              "kind": "kill",
+              "enabled": false,
+              "reason": "its jobs have all ended",
+              "job": 6,
+              "mission": null,
+              "request": null
+            },
+            {
+              "kind": "retry",
+              "enabled": true,
+              "reason": null,
+              "job": 6,
+              "mission": null,
+              "request": null
+            },
+            {
+              "kind": "resume",
+              "enabled": false,
+              "reason": "only an interrupted or failed job can resume",
+              "job": 6,
+              "mission": null,
+              "request": null
+            },
+            {
+              "kind": "land_to_integration",
+              "enabled": false,
+              "reason": "a plain job has no integration branch",
+              "job": 6,
+              "mission": null,
+              "request": null
+            },
+            {
+              "kind": "open_evidence",
+              "enabled": false,
+              "reason": "no evidence bundle yet: one is sealed when the gate passes",
+              "job": 6,
+              "mission": null,
+              "request": null
+            },
+            {
+              "kind": "answer_held_call",
+              "enabled": false,
+              "reason": "no call is held",
+              "job": 6,
+              "mission": null,
+              "request": null
+            },
+            {
+              "kind": "approve_plan",
+              "enabled": false,
+              "reason": "no plan waits for a decision",
+              "job": 6,
+              "mission": null,
+              "request": null
+            },
+            {
+              "kind": "reject_plan",
+              "enabled": false,
+              "reason": "no plan waits for a decision",
+              "job": 6,
+              "mission": null,
+              "request": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "running",
+      "total": 1,
+      "outcomes": [
+        {
+          "id": "job:4",
+          "kind": "job",
+          "title": "job 4: web-checkout",
+          "mission": null,
+          "lifecycle": "queued",
+          "group": "running",
+          "priority": null,
+          "since_at": 1000000,
+          "created_at": 1000000,
+          "updated_at": 1000000,
+          "asks": [],
+          "holds": [],
+          "contract": null,
+          "jobs": [
+            {
+              "id": 4,
+              "repo": "web-checkout",
+              "session": "web-checkout",
+              "model": "sonnet",
+              "state": "queued",
+              "task": null,
+              "spend_usd": 0.5,
+              "context_use": null,
+              "started_at": null,
+              "finished_at": null,
+              "error": null
+            }
+          ],
+          "plan": null,
+          "checks": {
+            "source": "none",
+            "runs": [],
+            "total": 0,
+            "passed": 0,
+            "failed": 0,
+            "gate": null,
+            "stages": [
+              {
+                "key": "protected_files",
+                "state": "not_run",
+                "summary": "the gate has not judged yet",
+                "items": [],
+                "ran": null,
+                "passed": null
+              },
+              {
+                "key": "test_weakening",
+                "state": "not_run",
+                "summary": "the gate has not judged yet",
+                "items": [],
+                "ran": null,
+                "passed": null
+              },
+              {
+                "key": "base_suite",
+                "state": "not_run",
+                "summary": "the gate has not judged yet",
+                "items": [],
+                "ran": null,
+                "passed": null
+              },
+              {
+                "key": "hidden_checks",
+                "state": "not_run",
+                "summary": "no hidden checks ran",
+                "items": [],
+                "ran": null,
+                "passed": null
+              },
+              {
+                "key": "evidence_gaps",
+                "state": "not_run",
+                "summary": "the gate has not judged yet",
+                "items": [],
+                "ran": null,
+                "passed": null
+              },
+              {
+                "key": "drift",
+                "state": "not_run",
+                "summary": "no plan to compare with",
+                "items": [],
+                "ran": null,
+                "passed": null
+              },
+              {
+                "key": "review",
+                "state": "not_run",
+                "summary": "no review was asked for",
+                "items": [],
+                "ran": null,
+                "passed": null
+              }
+            ]
+          },
+          "claim": null,
+          "evidence": null,
+          "diff": null,
+          "landing": null,
+          "spend": {
+            "total_usd": 0.5,
+            "plan_usd": 0.0,
+            "implement_usd": 0.5,
+            "verify_usd": 0.0,
+            "review_usd": 0.0
+          },
+          "actions": [
+            {
+              "kind": "kill",
+              "enabled": true,
+              "reason": null,
+              "job": 4,
+              "mission": null,
+              "request": null
+            },
+            {
+              "kind": "retry",
+              "enabled": false,
+              "reason": "the job has not ended",
+              "job": 4,
+              "mission": null,
+              "request": null
+            },
+            {
+              "kind": "resume",
+              "enabled": false,
+              "reason": "only an interrupted or failed job can resume",
+              "job": 4,
+              "mission": null,
+              "request": null
+            },
+            {
+              "kind": "land_to_integration",
+              "enabled": false,
+              "reason": "a plain job has no integration branch",
+              "job": 4,
+              "mission": null,
+              "request": null
+            },
+            {
+              "kind": "open_evidence",
+              "enabled": false,
+              "reason": "no evidence bundle yet: one is sealed when the gate passes",
+              "job": 4,
+              "mission": null,
+              "request": null
+            },
+            {
+              "kind": "answer_held_call",
+              "enabled": false,
+              "reason": "no call is held",
+              "job": 4,
+              "mission": null,
+              "request": null
+            },
+            {
+              "kind": "approve_plan",
+              "enabled": false,
+              "reason": "no plan waits for a decision",
+              "job": 4,
+              "mission": null,
+              "request": null
+            },
+            {
+              "kind": "reject_plan",
+              "enabled": false,
+              "reason": "no plan waits for a decision",
+              "job": 4,
+              "mission": null,
+              "request": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "landed",
+      "total": 1,
+      "outcomes": [
+        {
+          "id": "mission:fix-invoice",
+          "kind": "mission",
+          "title": "fix invoice",
+          "mission": "fix-invoice",
+          "lifecycle": "delivered",
+          "group": "landed",
+          "priority": null,
+          "since_at": 2100000,
+          "created_at": 900000,
+          "updated_at": 2100000,
+          "asks": [
+            {
+              "id": "job:1:result",
+              "kind": "result_ready",
+              "priority": "p3",
+              "title": "Fix invoice rounding",
+              "detail": "Invoice totals round half up",
+              "since_at": 2000000,
+              "deadline_at": null,
+              "request": null,
+              "decides": false
+            }
+          ],
+          "holds": [],
+          "contract": {
+            "goal": "fix invoice, as the spec says",
+            "repos": [],
+            "done_when": [
+              "cargo test"
+            ],
+            "human_signoff": false,
+            "protected": [
+              "tests/**"
+            ],
+            "work_in": [
+              "src/**"
+            ],
+            "budget": {
+              "usd": 5.0,
+              "wall_minutes": 90,
+              "on_exhaust": "escalate"
+            },
+            "note": null
+          },
+          "jobs": [
+            {
+              "id": 1,
+              "repo": "api-gateway",
+              "session": "api-gateway",
+              "model": "sonnet",
+              "state": "done",
+              "task": null,
+              "spend_usd": 1.84,
+              "context_use": 0.25,
+              "started_at": 1100000,
+              "finished_at": 2000000,
+              "error": null
+            }
+          ],
+          "plan": null,
+          "checks": {
+            "source": "bundle",
+            "runs": [
+              {
+                "name": "cargo test",
+                "status": "passed",
+                "duration_ms": 4200,
+                "first_failure": null
+              }
+            ],
+            "total": 1,
+            "passed": 1,
+            "failed": 0,
+            "gate": {
+              "verdict": "pass",
+              "blocks": 1,
+              "max_blocks": null,
+              "at": 2100000
+            },
+            "stages": [
+              {
+                "key": "protected_files",
+                "state": "passed",
+                "summary": "no protected file changed",
+                "items": [],
+                "ran": null,
+                "passed": null
+              },
+              {
+                "key": "test_weakening",
+                "state": "passed",
+                "summary": "no test was weakened",
+                "items": [],
+                "ran": null,
+                "passed": null
+              },
+              {
+                "key": "base_suite",
+                "state": "not_run",
+                "summary": "not recorded in the bundle",
+                "items": [],
+                "ran": null,
+                "passed": null
+              },
+              {
+                "key": "hidden_checks",
+                "state": "not_run",
+                "summary": "no hidden checks ran",
+                "items": [],
+                "ran": null,
+                "passed": null
+              },
+              {
+                "key": "evidence_gaps",
+                "state": "passed",
+                "summary": "every claim is backed by a run",
+                "items": [],
+                "ran": null,
+                "passed": null
+              },
+              {
+                "key": "drift",
+                "state": "not_run",
+                "summary": "no plan to compare with",
+                "items": [],
+                "ran": null,
+                "passed": null
+              },
+              {
+                "key": "review",
+                "state": "not_run",
+                "summary": "no review was asked for",
+                "items": [],
+                "ran": null,
+                "passed": null
+              }
+            ]
+          },
+          "claim": {
+            "job": 1,
+            "text": "Invoice totals round half up; the suite passes.",
+            "truncated": false
+          },
+          "evidence": {
+            "bundle_hash": "df431738cd0c9c175dd34c3a2bfadccb90a4e1fdb8423a4d10c39e141983271d",
+            "sealed_at": 2100000,
+            "seq_from": 10,
+            "seq_to": 42,
+            "head_hash": "ab12cd",
+            "seal_seq": 43,
+            "signature": "valid",
+            "anchored": false
+          },
+          "diff": {
+            "files": 3,
+            "insertions": 20,
+            "deletions": 4,
+            "hash": "d1ff"
+          },
+          "landing": null,
+          "spend": {
+            "total_usd": 1.94,
+            "plan_usd": 0.0,
+            "implement_usd": 1.84,
+            "verify_usd": 0.1,
+            "review_usd": 0.0
+          },
+          "actions": [
+            {
+              "kind": "kill",
+              "enabled": false,
+              "reason": "its jobs have all ended",
+              "job": 1,
+              "mission": "fix-invoice",
+              "request": null
+            },
+            {
+              "kind": "retry",
+              "enabled": false,
+              "reason": "the mission is delivered",
+              "job": 1,
+              "mission": "fix-invoice",
+              "request": null
+            },
+            {
+              "kind": "resume",
+              "enabled": false,
+              "reason": "only an interrupted or failed job can resume",
+              "job": 1,
+              "mission": "fix-invoice",
+              "request": null
+            },
+            {
+              "kind": "land_to_integration",
+              "enabled": false,
+              "reason": "the work is delivered",
+              "job": 1,
+              "mission": "fix-invoice",
+              "request": null
+            },
+            {
+              "kind": "open_evidence",
+              "enabled": true,
+              "reason": null,
+              "job": 1,
+              "mission": "fix-invoice",
+              "request": null
+            },
+            {
+              "kind": "answer_held_call",
+              "enabled": false,
+              "reason": "no call is held",
+              "job": 1,
+              "mission": "fix-invoice",
+              "request": null
+            },
+            {
+              "kind": "approve_plan",
+              "enabled": false,
+              "reason": "no plan waits for a decision",
+              "job": 1,
+              "mission": "fix-invoice",
+              "request": null
+            },
+            {
+              "kind": "reject_plan",
+              "enabled": false,
+              "reason": "no plan waits for a decision",
+              "job": 1,
+              "mission": "fix-invoice",
+              "request": null
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "holds": [
+    {
+      "id": "hold:7",
+      "state": "held",
+      "request": 7,
+      "rule": "git push asks",
+      "knowledge_rule": null,
+      "tool": "Bash",
+      "target": "git push origin HEAD:main",
+      "cwd": "/work/web-checkout",
+      "risk": {
+        "tier": "destructive",
+        "score": 1.0,
+        "secret": false
+      },
+      "priority": "p1",
+      "destructive": true,
+      "decided_by": "guard",
+      "confidence": null,
+      "at": 1700100,
+      "deadline_at": 13000000,
+      "job": 2,
+      "outcome": "job:2",
+      "session": "web-checkout",
+      "agent_words": {
+        "label": "the agent's own words, quoted from its session stream",
+        "text": "Pushing the branch with the test as it was.",
+        "at": 1700000,
+        "truncated": false,
+        "steps_since": 0
+      },
+      "steps": [
+        {
+          "at": 1600000,
+          "kind": "text",
+          "actor": "lead",
+          "text": "The retry test is in the way. I will edit its expectations.",
+          "ok": null
+        },
+        {
+          "at": 1600500,
+          "kind": "tool_call",
+          "actor": "lead",
+          "text": "Edit tests/checkout_oracle.rs",
+          "ok": null
+        },
+        {
+          "at": 1600600,
+          "kind": "tool_result",
+          "actor": "lead",
+          "text": "denied by the Guard: protected path tests/** (gate)",
+          "ok": false
+        },
+        {
+          "at": 1700000,
+          "kind": "text",
+          "actor": "lead",
+          "text": "Pushing the branch with the test as it was.",
+          "ok": null
+        }
+      ]
+    },
+    {
+      "id": "denied:2:1600550",
+      "state": "denied",
+      "request": null,
+      "rule": "protected path tests/** (gate)",
+      "knowledge_rule": null,
+      "tool": "Edit",
+      "target": "tests/checkout_oracle.rs",
+      "cwd": null,
+      "risk": null,
+      "priority": null,
+      "destructive": false,
+      "decided_by": "guard",
+      "confidence": null,
+      "at": 1600550,
+      "deadline_at": null,
+      "job": 2,
+      "outcome": "job:2",
+      "session": "web-checkout",
+      "agent_words": {
+        "label": "the agent's own words, quoted from its session stream",
+        "text": "The retry test is in the way. I will edit its expectations.",
+        "at": 1600000,
+        "truncated": false,
+        "steps_since": 1
+      },
+      "steps": [
+        {
+          "at": 1600000,
+          "kind": "text",
+          "actor": "lead",
+          "text": "The retry test is in the way. I will edit its expectations.",
+          "ok": null
+        },
+        {
+          "at": 1600500,
+          "kind": "tool_call",
+          "actor": "lead",
+          "text": "Edit tests/checkout_oracle.rs",
+          "ok": null
+        }
+      ]
+    }
+  ],
+  "deck": {
+    "nodes": [
+      {
+        "id": "mission:fix-invoice",
+        "kind": "job",
+        "outcome": "mission:fix-invoice",
+        "title": "fix invoice",
+        "repo": "api-gateway",
+        "state": "done",
+        "group": "landed",
+        "checks": {
+          "total": 1,
+          "passed": 1,
+          "failed": 0
+        },
+        "depth": 0,
+        "spend_usd": 1.94,
+        "job": 1
+      },
+      {
+        "id": "mission:plan-me",
+        "kind": "job",
+        "outcome": "mission:plan-me",
+        "title": "plan me",
+        "repo": null,
+        "state": "queued",
+        "group": "decide",
+        "checks": {
+          "total": 1,
+          "passed": 0,
+          "failed": 0
+        },
+        "depth": 0,
+        "spend_usd": 0.0,
+        "job": null
+      },
+      {
+        "id": "task:split-app:t1",
+        "kind": "task",
+        "outcome": "mission:split-app",
+        "title": "task t1",
+        "repo": "monorepo",
+        "state": "done",
+        "group": "decide",
+        "checks": {
+          "total": 0,
+          "passed": 0,
+          "failed": 0
+        },
+        "depth": 0,
+        "spend_usd": 0.5,
+        "job": 7
+      },
+      {
+        "id": "task:split-app:t2",
+        "kind": "task",
+        "outcome": "mission:split-app",
+        "title": "task t2",
+        "repo": "monorepo",
+        "state": "failed",
+        "group": "decide",
+        "checks": {
+          "total": 0,
+          "passed": 0,
+          "failed": 0
+        },
+        "depth": 0,
+        "spend_usd": 0.5,
+        "job": 8
+      },
+      {
+        "id": "task:split-app:t3",
+        "kind": "task",
+        "outcome": "mission:split-app",
+        "title": "task t3",
+        "repo": null,
+        "state": "waiting",
+        "group": "decide",
+        "checks": {
+          "total": 0,
+          "passed": 0,
+          "failed": 0
+        },
+        "depth": 1,
+        "spend_usd": 0.0,
+        "job": null
+      },
+      {
+        "id": "job:2",
+        "kind": "job",
+        "outcome": "job:2",
+        "title": "job 2: web-checkout",
+        "repo": "web-checkout",
+        "state": "running",
+        "group": "decide",
+        "checks": {
+          "total": 0,
+          "passed": 0,
+          "failed": 0
+        },
+        "depth": 0,
+        "spend_usd": 0.5,
+        "job": 2
+      },
+      {
+        "id": "job:3",
+        "kind": "job",
+        "outcome": "job:3",
+        "title": "job 3: data-pipeline",
+        "repo": "data-pipeline",
+        "state": "failed",
+        "group": "decide",
+        "checks": {
+          "total": 2,
+          "passed": 1,
+          "failed": 1
+        },
+        "depth": 0,
+        "spend_usd": 0.5,
+        "job": 3
+      },
+      {
+        "id": "job:4",
+        "kind": "job",
+        "outcome": "job:4",
+        "title": "job 4: web-checkout",
+        "repo": "web-checkout",
+        "state": "queued",
+        "group": "running",
+        "checks": {
+          "total": 0,
+          "passed": 0,
+          "failed": 0
+        },
+        "depth": 0,
+        "spend_usd": 0.5,
+        "job": 4
+      },
+      {
+        "id": "job:5",
+        "kind": "job",
+        "outcome": "job:5",
+        "title": "job 5: docs-site",
+        "repo": "docs-site",
+        "state": "done",
+        "group": null,
+        "checks": {
+          "total": 0,
+          "passed": 0,
+          "failed": 0
+        },
+        "depth": 0,
+        "spend_usd": 0.5,
+        "job": 5
+      },
+      {
+        "id": "job:6",
+        "kind": "job",
+        "outcome": "job:6",
+        "title": "job 6: docs-site",
+        "repo": "docs-site",
+        "state": "ready",
+        "group": "ready_to_land",
+        "checks": {
+          "total": 1,
+          "passed": 1,
+          "failed": 0
+        },
+        "depth": 0,
+        "spend_usd": 0.5,
+        "job": 6
+      }
+    ],
+    "edges": [
+      {
+        "from": "task:split-app:t1",
+        "to": "task:split-app:t3",
+        "kind": "task_dependency",
+        "state": "met",
+        "detail": []
+      },
+      {
+        "from": "task:split-app:t2",
+        "to": "task:split-app:t3",
+        "kind": "task_dependency",
+        "state": "blocked",
+        "detail": []
+      },
+      {
+        "from": "job:2",
+        "to": "job:4",
+        "kind": "file_claim",
+        "state": "blocked",
+        "detail": [
+          "src/checkout/**"
+        ]
+      }
+    ],
+    "max_depth": 1
+  }
+}

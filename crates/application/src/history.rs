@@ -70,6 +70,12 @@ impl HistoryService {
         HistoryService { jobs }
     }
 
+    /// Where the jobs and their streams are stored, for what reads them
+    /// without a use case of its own (the console quotes a stream's tail).
+    pub fn repository(&self) -> &dyn JobRepository {
+        &*self.jobs
+    }
+
     /// Recent jobs matching `query` (prompt or session name), newest first.
     pub fn list(&self, query: &str) -> AppResult<Vec<JobSummary>> {
         let mut rows = self.jobs.summaries(HISTORY_LIMIT)?;

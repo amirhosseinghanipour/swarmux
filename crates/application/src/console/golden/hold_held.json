@@ -1,0 +1,61 @@
+{
+  "id": "hold:7",
+  "state": "held",
+  "request": 7,
+  "rule": "git push asks",
+  "knowledge_rule": null,
+  "tool": "Bash",
+  "target": "git push origin HEAD:main",
+  "cwd": "/work/web-checkout",
+  "risk": {
+    "tier": "destructive",
+    "score": 1.0,
+    "secret": false
+  },
+  "priority": "p1",
+  "destructive": true,
+  "decided_by": "guard",
+  "confidence": null,
+  "at": 1700100,
+  "deadline_at": 13000000,
+  "job": 2,
+  "outcome": "job:2",
+  "session": "web-checkout",
+  "agent_words": {
+    "label": "the agent's own words, quoted from its session stream",
+    "text": "Pushing the branch with the test as it was.",
+    "at": 1700000,
+    "truncated": false,
+    "steps_since": 0
+  },
+  "steps": [
+    {
+      "at": 1600000,
+      "kind": "text",
+      "actor": "lead",
+      "text": "The retry test is in the way. I will edit its expectations.",
+      "ok": null
+    },
+    {
+      "at": 1600500,
+      "kind": "tool_call",
+      "actor": "lead",
+      "text": "Edit tests/checkout_oracle.rs",
+      "ok": null
+    },
+    {
+      "at": 1600600,
+      "kind": "tool_result",
+      "actor": "lead",
+      "text": "denied by the Guard: protected path tests/** (gate)",
+      "ok": false
+    },
+    {
+      "at": 1700000,
+      "kind": "text",
+      "actor": "lead",
+      "text": "Pushing the branch with the test as it was.",
+      "ok": null
+    }
+  ]
+}

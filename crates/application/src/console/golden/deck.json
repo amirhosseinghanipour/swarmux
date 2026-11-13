@@ -1,0 +1,200 @@
+{
+  "nodes": [
+    {
+      "id": "mission:fix-invoice",
+      "kind": "job",
+      "outcome": "mission:fix-invoice",
+      "title": "fix invoice",
+      "repo": "api-gateway",
+      "state": "done",
+      "group": "landed",
+      "checks": {
+        "total": 1,
+        "passed": 1,
+        "failed": 0
+      },
+      "depth": 0,
+      "spend_usd": 1.94,
+      "job": 1
+    },
+    {
+      "id": "mission:plan-me",
+      "kind": "job",
+      "outcome": "mission:plan-me",
+      "title": "plan me",
+      "repo": null,
+      "state": "queued",
+      "group": "decide",
+      "checks": {
+        "total": 1,
+        "passed": 0,
+        "failed": 0
+      },
+      "depth": 0,
+      "spend_usd": 0.0,
+      "job": null
+    },
+    {
+      "id": "task:split-app:t1",
+      "kind": "task",
+      "outcome": "mission:split-app",
+      "title": "task t1",
+      "repo": "monorepo",
+      "state": "done",
+      "group": "decide",
+      "checks": {
+        "total": 0,
+        "passed": 0,
+        "failed": 0
+      },
+      "depth": 0,
+      "spend_usd": 0.5,
+      "job": 7
+    },
+    {
+      "id": "task:split-app:t2",
+      "kind": "task",
+      "outcome": "mission:split-app",
+      "title": "task t2",
+      "repo": "monorepo",
+      "state": "failed",
+      "group": "decide",
+      "checks": {
+        "total": 0,
+        "passed": 0,
+        "failed": 0
+      },
+      "depth": 0,
+      "spend_usd": 0.5,
+      "job": 8
+    },
+    {
+      "id": "task:split-app:t3",
+      "kind": "task",
+      "outcome": "mission:split-app",
+      "title": "task t3",
+      "repo": null,
+      "state": "waiting",
+      "group": "decide",
+      "checks": {
+        "total": 0,
+        "passed": 0,
+        "failed": 0
+      },
+      "depth": 1,
+      "spend_usd": 0.0,
+      "job": null
+    },
+    {
+      "id": "job:2",
+      "kind": "job",
+      "outcome": "job:2",
+      "title": "job 2: web-checkout",
+      "repo": "web-checkout",
+      "state": "running",
+      "group": "decide",
+      "checks": {
+        "total": 0,
+        "passed": 0,
+        "failed": 0
+      },
+      "depth": 0,
+      "spend_usd": 0.5,
+      "job": 2
+    },
+    {
+      "id": "job:3",
+      "kind": "job",
+      "outcome": "job:3",
+      "title": "job 3: data-pipeline",
+      "repo": "data-pipeline",
+      "state": "failed",
+      "group": "decide",
+      "checks": {
+        "total": 2,
+        "passed": 1,
+        "failed": 1
+      },
+      "depth": 0,
+      "spend_usd": 0.5,
+      "job": 3
+    },
+    {
+      "id": "job:4",
+      "kind": "job",
+      "outcome": "job:4",
+      "title": "job 4: web-checkout",
+      "repo": "web-checkout",
+      "state": "queued",
+      "group": "running",
+      "checks": {
+        "total": 0,
+        "passed": 0,
+        "failed": 0
+      },
+      "depth": 0,
+      "spend_usd": 0.5,
+      "job": 4
+    },
+    {
+      "id": "job:5",
+      "kind": "job",
+      "outcome": "job:5",
+      "title": "job 5: docs-site",
+      "repo": "docs-site",
+      "state": "done",
+      "group": null,
+      "checks": {
+        "total": 0,
+        "passed": 0,
+        "failed": 0
+      },
+      "depth": 0,
+      "spend_usd": 0.5,
+      "job": 5
+    },
+    {
+      "id": "job:6",
+      "kind": "job",
+      "outcome": "job:6",
+      "title": "job 6: docs-site",
+      "repo": "docs-site",
+      "state": "ready",
+      "group": "ready_to_land",
+      "checks": {
+        "total": 1,
+        "passed": 1,
+        "failed": 0
+      },
+      "depth": 0,
+      "spend_usd": 0.5,
+      "job": 6
+    }
+  ],
+  "edges": [
+    {
+      "from": "task:split-app:t1",
+      "to": "task:split-app:t3",
+      "kind": "task_dependency",
+      "state": "met",
+      "detail": []
+    },
+    {
+      "from": "task:split-app:t2",
+      "to": "task:split-app:t3",
+      "kind": "task_dependency",
+      "state": "blocked",
+      "detail": []
+    },
+    {
+      "from": "job:2",
+      "to": "job:4",
+      "kind": "file_claim",
+      "state": "blocked",
+      "detail": [
+        "src/checkout/**"
+      ]
+    }
+  ],
+  "max_depth": 1
+}

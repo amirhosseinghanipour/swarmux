@@ -13,4 +13,10 @@ test-support = []
 
 [dependencies]
 swarmux-domain.workspace = true
+# The console's view models: plain data any client (terminal, daemon API,
+# phone) reads as JSON.
+serde.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

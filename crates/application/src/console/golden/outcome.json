@@ -1,0 +1,235 @@
+{
+  "id": "mission:fix-invoice",
+  "kind": "mission",
+  "title": "fix invoice",
+  "mission": "fix-invoice",
+  "lifecycle": "delivered",
+  "group": "landed",
+  "priority": null,
+  "since_at": 2100000,
+  "created_at": 900000,
+  "updated_at": 2100000,
+  "asks": [
+    {
+      "id": "job:1:result",
+      "kind": "result_ready",
+      "priority": "p3",
+      "title": "Fix invoice rounding",
+      "detail": "Invoice totals round half up",
+      "since_at": 2000000,
+      "deadline_at": null,
+      "request": null,
+      "decides": false
+    }
+  ],
+  "holds": [],
+  "contract": {
+    "goal": "fix invoice, as the spec says",
+    "repos": [],
+    "done_when": [
+      "cargo test"
+    ],
+    "human_signoff": false,
+    "protected": [
+      "tests/**"
+    ],
+    "work_in": [
+      "src/**"
+    ],
+    "budget": {
+      "usd": 5.0,
+      "wall_minutes": 90,
+      "on_exhaust": "escalate"
+    },
+    "note": null
+  },
+  "jobs": [
+    {
+      "id": 1,
+      "repo": "api-gateway",
+      "session": "api-gateway",
+      "model": "sonnet",
+      "state": "done",
+      "task": null,
+      "spend_usd": 1.84,
+      "context_use": 0.25,
+      "started_at": 1100000,
+      "finished_at": 2000000,
+      "error": null
+    }
+  ],
+  "plan": null,
+  "checks": {
+    "source": "bundle",
+    "runs": [
+      {
+        "name": "cargo test",
+        "status": "passed",
+        "duration_ms": 4200,
+        "first_failure": null
+      }
+    ],
+    "total": 1,
+    "passed": 1,
+    "failed": 0,
+    "gate": {
+      "verdict": "pass",
+      "blocks": 1,
+      "max_blocks": null,
+      "at": 2100000
+    },
+    "stages": [
+      {
+        "key": "protected_files",
+        "state": "passed",
+        "summary": "no protected file changed",
+        "items": [],
+        "ran": null,
+        "passed": null
+      },
+      {
+        "key": "test_weakening",
+        "state": "passed",
+        "summary": "no test was weakened",
+        "items": [],
+        "ran": null,
+        "passed": null
+      },
+      {
+        "key": "base_suite",
+        "state": "not_run",
+        "summary": "not recorded in the bundle",
+        "items": [],
+        "ran": null,
+        "passed": null
+      },
+      {
+        "key": "hidden_checks",
+        "state": "not_run",
+        "summary": "no hidden checks ran",
+        "items": [],
+        "ran": null,
+        "passed": null
+      },
+      {
+        "key": "evidence_gaps",
+        "state": "passed",
+        "summary": "every claim is backed by a run",
+        "items": [],
+        "ran": null,
+        "passed": null
+      },
+      {
+        "key": "drift",
+        "state": "not_run",
+        "summary": "no plan to compare with",
+        "items": [],
+        "ran": null,
+        "passed": null
+      },
+      {
+        "key": "review",
+        "state": "not_run",
+        "summary": "no review was asked for",
+        "items": [],
+        "ran": null,
+        "passed": null
+      }
+    ]
+  },
+  "claim": {
+    "job": 1,
+    "text": "Invoice totals round half up; the suite passes.",
+    "truncated": false
+  },
+  "evidence": {
+    "bundle_hash": "df431738cd0c9c175dd34c3a2bfadccb90a4e1fdb8423a4d10c39e141983271d",
+    "sealed_at": 2100000,
+    "seq_from": 10,
+    "seq_to": 42,
+    "head_hash": "ab12cd",
+    "seal_seq": 43,
+    "signature": "valid",
+    "anchored": false
+  },
+  "diff": {
+    "files": 3,
+    "insertions": 20,
+    "deletions": 4,
+    "hash": "d1ff"
+  },
+  "landing": null,
+  "spend": {
+    "total_usd": 1.94,
+    "plan_usd": 0.0,
+    "implement_usd": 1.84,
+    "verify_usd": 0.1,
+    "review_usd": 0.0
+  },
+  "actions": [
+    {
+      "kind": "kill",
+      "enabled": false,
+      "reason": "its jobs have all ended",
+      "job": 1,
+      "mission": "fix-invoice",
+      "request": null
+    },
+    {
+      "kind": "retry",
+      "enabled": false,
+      "reason": "the mission is delivered",
+      "job": 1,
+      "mission": "fix-invoice",
+      "request": null
+    },
+    {
+      "kind": "resume",
+      "enabled": false,
+      "reason": "only an interrupted or failed job can resume",
+      "job": 1,
+      "mission": "fix-invoice",
+      "request": null
+    },
+    {
+      "kind": "land_to_integration",
+      "enabled": false,
+      "reason": "the work is delivered",
+      "job": 1,
+      "mission": "fix-invoice",
+      "request": null
+    },
+    {
+      "kind": "open_evidence",
+      "enabled": true,
+      "reason": null,
+      "job": 1,
+      "mission": "fix-invoice",
+      "request": null
+    },
+    {
+      "kind": "answer_held_call",
+      "enabled": false,
+      "reason": "no call is held",
+      "job": 1,
+      "mission": "fix-invoice",
+      "request": null
+    },
+    {
+      "kind": "approve_plan",
+      "enabled": false,
+      "reason": "no plan waits for a decision",
+      "job": 1,
+      "mission": "fix-invoice",
+      "request": null
+    },
+    {
+      "kind": "reject_plan",
+      "enabled": false,
+      "reason": "no plan waits for a decision",
+      "job": 1,
+      "mission": "fix-invoice",
+      "request": null
+    }
+  ]
+}

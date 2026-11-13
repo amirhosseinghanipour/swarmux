@@ -8,6 +8,7 @@ pub mod attention;
 pub mod board;
 pub mod cache;
 pub mod checkpoint;
+pub mod console;
 pub mod contracts;
 pub mod daemon;
 mod decision;
@@ -69,8 +70,8 @@ pub use followup::{
     ReplySource,
 };
 pub use gate::{
-    Checker, ExecutionLog, GateKeeper, GateRecord, GateService, GateSource, GateState, JobGates,
-    LoadedGate, WriteFence, run_checks,
+    Checker, ExecutionLog, GateDetail, GateKeeper, GateRecord, GateRun, GateService, GateSource,
+    GateState, JobGates, LoadedGate, WriteFence, run_checks,
 };
 pub use governor::{Governor, PendingResume, ResumeBook, UsageProbe};
 pub use guard::{

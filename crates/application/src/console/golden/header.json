@@ -1,0 +1,24 @@
+{
+  "counts": {
+    "decide": 4,
+    "ready_to_land": 1,
+    "running": 1,
+    "landed": 1,
+    "idle": 1
+  },
+  "queue": {
+    "running": 1,
+    "queued": 1,
+    "max_concurrent": 4,
+    "deferred": 0,
+    "awaiting_reset": 0,
+    "held_for_attention": 0
+  },
+  "limits": [],
+  "spend": {
+    "today_usd": null,
+    "week_usd": null,
+    "missions_usd": 2.94,
+    "jobs_usd": 5.34
+  }
+}

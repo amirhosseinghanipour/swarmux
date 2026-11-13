@@ -2362,6 +2362,8 @@ dependencies = [
 name = "swarmux-application"
 version = "0.1.0"
 dependencies = [
+ "serde",
+ "serde_json",
  "swarmux-domain",
  "thiserror 2.0.21",
 ]
