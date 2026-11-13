@@ -182,10 +182,9 @@ mod console {
                     "Add retry with backoff to the payment form submit",
                     Some(PriorityKind::P1)
                 ),
-                (
-                    "Regenerate the API reference and fix the broken links",
-                    Some(PriorityKind::P2)
-                ),
+                // The release mission's third task is that docs-site job,
+                // held on a call: the mission is what asks.
+                ("Release 2.4", Some(PriorityKind::P2)),
             ]
         );
         assert!(group(&snap, GroupKind::ReadyToLand).is_empty());
@@ -215,11 +214,12 @@ mod console {
         assert!(m.diff.is_some());
         assert_eq!(m.spend.total_usd, 1.84);
 
-        // The two jobs nobody asks about are on no queue.
+        // The two jobs nobody asked about are now the release's tasks, so
+        // no job is on no queue.
         let c = snap.header.counts;
         assert_eq!(
             (c.decide, c.ready_to_land, c.running, c.landed, c.idle),
-            (2, 0, 0, 1, 2)
+            (2, 0, 0, 1, 0)
         );
     }
 
@@ -309,13 +309,34 @@ mod console {
     #[test]
     fn the_demo_deck_has_a_card_per_job_and_header_figures() {
         let snap = played();
-        // Four jobs and the mission: five cards. The demo runs no plan, so
-        // it has no task graph, no contracts and no board claims: no edges.
+        // The release mission is a task graph of three tasks (the jobs of
+        // data-pipeline, mobile-app and docs-site); with the held push's
+        // job and the delivered mission that is five cards. The third task
+        // waits for the other two: two dependency edges, both met (their
+        // producers merged).
         assert_eq!(snap.deck.nodes.len(), 5);
-        assert!(snap.deck.edges.is_empty());
-        assert_eq!(snap.deck.max_depth, 0);
+        let ids: Vec<&str> = snap.deck.nodes.iter().map(|n| n.id.as_str()).collect();
+        for id in [
+            "task:release-2-4:t1",
+            "task:release-2-4:t2",
+            "task:release-2-4:t3",
+            "job:4",
+            "mission:fix-invoice-rounding",
+        ] {
+            assert!(ids.contains(&id), "{id} in {ids:?}");
+        }
+        assert_eq!(snap.deck.edges.len(), 2);
+        assert!(snap.deck.edges.iter().all(|e| {
+            e.kind == swarmux_application::console::EdgeKind::TaskDependency
+                && e.to == "task:release-2-4:t3"
+                && e.state == swarmux_application::console::DepState::Met
+        }));
+        assert_eq!(snap.deck.max_depth, 1);
         let on_queue = snap.deck.nodes.iter().filter(|n| n.group.is_some()).count();
-        assert_eq!(on_queue, 3, "two decisions and the landed mission");
+        assert_eq!(
+            on_queue, 5,
+            "the release's three tasks and the held push ask, the mission landed"
+        );
         // The usage windows the demo's jobs reported.
         let five = snap
             .header

@@ -7,6 +7,7 @@
 //! of a real run, and the status bar says so.
 
 mod director;
+mod release;
 mod script;
 pub mod snapshot;
 
@@ -25,8 +26,8 @@ use swarmux_application::{
 use swarmux_domain::mission::{Acceptance, Budget, Constraints, Contract};
 use swarmux_domain::{Session, SessionId};
 use swarmux_infrastructure::demo::{
-    DemoChecker, DemoClock, DemoFeed, DemoGateSource, DemoMissions, DemoMonitor, DemoVcs,
-    DemoWorkspace, ScriptedInbox, ScriptedRunner,
+    DemoChecker, DemoClock, DemoFeed, DemoGateSource, DemoMissions, DemoMonitor, DemoPlanner,
+    DemoPlans, DemoVcs, DemoWorkspace, ScriptedInbox, ScriptedRunner,
 };
 use swarmux_infrastructure::{EvidenceFiles, Paths, SqliteLedger, SqliteStore};
 use swarmux_tui::{App, Launch};
@@ -139,10 +140,17 @@ pub fn build(options: &Options) -> anyhow::Result<App> {
     }
 
     // The mission whose gate blocks a premature "done" and then passes.
-    let mut missions = MissionService::new(Rc::new(DemoMissions::default()), clock.clone())?
+    // The second mission is a plan built as a task graph, kept as an
+    // earlier run left it (see `release`); the Deck reads it like any other.
+    let release_root = created[3].cwd.display().to_string();
+    let mission_store =
+        DemoMissions::default().with(release::mission(created[3].id, &release_root));
+    let plan_store = DemoPlans::default().with(release::SLUG, release::plan());
+    let mut missions = MissionService::new(Rc::new(mission_store), clock.clone())?
         .with_gates(Rc::new(keeper.clone()))
         .with_ledger(ledger.clone())
-        .with_evidence(evidence.clone());
+        .with_evidence(evidence.clone())
+        .with_planner(Rc::new(DemoPlanner), Rc::new(plan_store))?;
     let api = &created[0];
     let slug = missions.create(
         Contract {
@@ -246,6 +254,8 @@ pub fn build(options: &Options) -> anyhow::Result<App> {
     Ok(app.with_key_config(&keys))
 }
 
+#[cfg(test)]
+mod deck_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
