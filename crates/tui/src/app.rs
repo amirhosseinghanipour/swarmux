@@ -150,6 +150,10 @@ pub struct App {
     pub followup_screen: crate::followups::FollowScreen,
     /// The Work screen: its selection, tab and scroll.
     pub work_screen: crate::work::WorkScreen,
+    /// The Deck screen: its selection, focus and scroll.
+    pub deck_screen: crate::deck::DeckScreen,
+    /// What `[deck]` of the config asks of the Deck, checked.
+    pub(crate) deck_layout: swarmux_domain::console::DeckLayout,
     /// Jobs, the Guard, hooks, the gate, the watchdog, missions and the
     /// board: the services that keep the work going.
     pub(crate) engine: Engine,
@@ -343,6 +347,8 @@ impl App {
             knowledge_screen: Default::default(),
             followup_screen: Default::default(),
             work_screen: Default::default(),
+            deck_screen: Default::default(),
+            deck_layout: Default::default(),
             engine: Engine::new(jobs, guard),
             console: ConsoleService::new(),
             metrics: None,

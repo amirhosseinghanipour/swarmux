@@ -6,6 +6,7 @@ pub mod board;
 pub mod confirm;
 pub mod constellation;
 pub mod dashboard;
+pub mod deck;
 pub mod editor;
 pub mod focus;
 pub mod followups;

@@ -18,7 +18,7 @@ fn cells(text: &str) -> usize {
 }
 
 /// Arrows and Enter as symbols; everything else as it is written.
-fn symbol(label: &str) -> &str {
+pub(crate) fn symbol(label: &str) -> &str {
     match label {
         "up" => "↑",
         "down" => "↓",

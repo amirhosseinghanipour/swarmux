@@ -6,6 +6,8 @@
 mod app;
 mod board;
 mod dashboard;
+mod deck;
+mod deck_actions;
 pub mod fetch;
 mod focus;
 mod followups;

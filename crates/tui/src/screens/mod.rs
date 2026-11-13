@@ -15,6 +15,7 @@ use crate::theme::Theme;
 
 pub(crate) mod board;
 pub(crate) mod dashboard;
+pub(crate) mod deck;
 pub(crate) mod followups;
 pub(crate) mod knowledge;
 pub(crate) mod ledger;
@@ -52,6 +53,8 @@ impl Screen {
     pub const Followups: Screen = Screen::new("followups");
     /// Decide and land: the ranked queue and the work product beside it.
     pub const Work: Screen = Screen::new("work");
+    /// The task graph with what the work needs around it.
+    pub const Deck: Screen = Screen::new("deck");
 }
 
 impl Screen {
@@ -89,6 +92,7 @@ impl Default for Screen {
 /// Every screen, in the order the tabs list them. The registry.
 const REGISTRY: &[&dyn ScreenDef] = &[
     &mission::Def,
+    &deck::Def,
     &work::Def,
     &missions::Def,
     &prompts::Def,
@@ -213,22 +217,13 @@ pub struct Planned {
 
 /// The planned screens. Each line is a promise that the key works and
 /// that the user is told what it did.
-pub const PLANNED: &[Planned] = &[
-    Planned {
-        action: actions::GO_DECK,
-        keys: &["g d"],
-        help: "go to the deck",
-        name: "deck",
-        stand_in: Some(Screen::Mission),
-    },
-    Planned {
-        action: actions::GO_RECORD,
-        keys: &["g r"],
-        help: "go to the record",
-        name: "record",
-        stand_in: Some(Screen::Ledger),
-    },
-];
+pub const PLANNED: &[Planned] = &[Planned {
+    action: actions::GO_RECORD,
+    keys: &["g r"],
+    help: "go to the record",
+    name: "record",
+    stand_in: Some(Screen::Ledger),
+}];
 
 /// What one screen is and does.
 pub trait ScreenDef: Sync {
