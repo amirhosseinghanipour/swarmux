@@ -112,8 +112,9 @@ nothing, which is the starting point for editing: change a line and run
 The footer of each screen, the tab numbers, the shelve prompt and the hints in
 messages ("press 6 then n") are written from the keys in use, so a rebound key
 shows as what it is now, and an action with no key is left out. A footer that
-is wider than the room drops hints from the end (the way out, `q quit`, stays)
-and never prints half of one. `?` opens a list of every key that works on the
+is wider than the room drops hints from the end and never prints half of one;
+every footer ends with `? help` and `q quit`, which are the last to go (the
+help hint is left out only if you unbind `help.toggle`). `?` opens a list of every key that works on the
 current screen and the global ones, with each action's id (what to write in
 `[keys]`) and the table it goes in; `?` or `Esc` closes it, the list keys
 scroll it. Fixed keys are marked `(fixed)`.

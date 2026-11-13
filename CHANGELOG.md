@@ -21,8 +21,9 @@ follows [Semantic Versioning](https://semver.org/).
 - `?` opens the keys that work on the current screen and the global ones,
   from the keymap in use; `Esc` or `?` closes it. Footer hints, tab numbers,
   the shelve prompt and the "press 6 then n" style messages are written from
-  the keymap too, so a rebound key shows as what it is. A footer that is too
-  wide drops hints from the end instead of being cut mid-hint.
+  the keymap too, so a rebound key shows as what it is. Every footer now ends
+  with `? help` before `q quit`; a footer that is too wide drops the other
+  hints from the end instead of being cut mid-hint, and those two go last.
 - Navigation: `Esc` goes back to the screen you came from, and `g` then a
   letter goes to a screen (`gm`, `gp`, `gk`; `gd`, `gw` and `gr` are kept for
   screens that are not built yet and go to the nearest one, saying so). The
