@@ -30,7 +30,11 @@ pub mod widgets;
 #[cfg(test)]
 mod rice_tests;
 #[cfg(test)]
+mod screen_tests;
+#[cfg(test)]
 mod showcase_tests;
+#[cfg(test)]
+pub(crate) mod snapshot;
 
 use ratatui::{
     Frame,
