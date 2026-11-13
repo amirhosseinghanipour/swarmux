@@ -204,7 +204,7 @@ impl App {
         let outcome = match spec_of(key) {
             Some(spec) => self
                 .resolver
-                .feed(&self.keymap, &[SHELVE], spec, self.now()),
+                .feed(&self.keymap, &[SHELVE], spec, self.ui_ms),
             None => return Ok(()),
         };
         let Outcome::Actions(found) = outcome else {

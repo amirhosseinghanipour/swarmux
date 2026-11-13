@@ -96,6 +96,12 @@ pub struct App {
     catalog: Catalog,
     /// A half-typed chord, and what a key press means.
     pub(crate) resolver: Resolver,
+    /// Milliseconds the terminal session has been on screen: real time,
+    /// unlike the clock the work runs by (which the demo moves by hand).
+    /// What a half-typed chord waits in.
+    pub(crate) ui_ms: Millis,
+    /// When `ui_ms` was last advanced.
+    ui_tick: Option<std::time::Instant>,
     /// Frames drawn so far; drives the spinners.
     pub frame: u64,
     pub quit: bool,
@@ -286,6 +292,8 @@ impl App {
             keymap,
             catalog,
             resolver: Resolver::new(),
+            ui_ms: 0,
+            ui_tick: None,
             frame: 0,
             quit: false,
             mode: Mode::Normal,
@@ -852,6 +860,10 @@ impl App {
 
     /// Applies pending job updates, starts queued jobs and handles guard requests.
     pub fn update(&mut self) {
+        let tick = std::time::Instant::now();
+        if let Some(last) = self.ui_tick.replace(tick) {
+            self.ui_ms += Millis::try_from(tick.duration_since(last).as_millis()).unwrap_or(0);
+        }
         if let Some(mut driver) = self.driver.take() {
             driver(self);
             self.driver = Some(driver);
@@ -871,7 +883,7 @@ impl App {
             evidence: self.pump_evidence(),
         };
         self.pump_palette();
-        self.resolver.expire(self.now());
+        self.resolver.expire(self.ui_ms);
         self.refresh_mission();
         self.tick_inbox();
         self.pump_notifications();
@@ -1131,7 +1143,7 @@ impl App {
         let outcome = match crate::keys::spec_of(key) {
             Some(spec) => {
                 let stack = self.contexts();
-                self.resolver.feed(&self.keymap, &stack, spec, self.now())
+                self.resolver.feed(&self.keymap, &stack, spec, self.ui_ms)
             }
             None => Outcome::Unbound,
         };
