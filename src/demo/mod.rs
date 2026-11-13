@@ -246,3 +246,5 @@ pub fn build(options: &Options) -> anyhow::Result<App> {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod work_tests;

@@ -375,3 +375,25 @@ fn the_screen_is_built_from_semantic_roles_and_plain_glyphs() {
         assert_eq!(private_use, None, "file {i} has a private-use glyph");
     }
 }
+
+#[test]
+fn until_the_user_chooses_the_top_of_the_queue_is_what_work_opens_on() {
+    let mut snap = evening();
+    let mut w = WorkScreen::default();
+    w.settle(&snap);
+    let first = ids(&snap)[0].to_string();
+    assert_eq!(w.selected.as_deref(), Some(first.as_str()));
+    // A more urgent decision arrives (the queue is re-ranked): an
+    // untouched Work follows the top, as it should.
+    snap.groups[0].outcomes.reverse();
+    w.settle(&snap);
+    let new_top = ids(&snap)[0].to_string();
+    assert_ne!(new_top, first);
+    assert_eq!(w.selected.as_deref(), Some(new_top.as_str()));
+    // Once the user moves, their choice is kept.
+    w.step(&snap, 1);
+    let chosen = w.selected.clone().unwrap();
+    snap.groups[0].outcomes.reverse();
+    w.settle(&snap);
+    assert_eq!(w.selected, Some(chosen));
+}

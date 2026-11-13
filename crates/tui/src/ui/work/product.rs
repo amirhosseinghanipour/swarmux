@@ -339,6 +339,20 @@ pub(super) fn check_summary(app: &App, o: &OutcomeView, w: usize, full: bool) ->
     let t = &app.look.theme;
     let c = &o.checks;
     let mut out: Lines = Vec::new();
+    if c.source == ChecksSource::None && c.runs.is_empty() {
+        // No gate has judged this work: do not list stages that did not run.
+        out.push(Line::from(vec![
+            span(
+                "CHECKS ",
+                Style::new().fg(t.label).add_modifier(Modifier::BOLD),
+            ),
+            span(
+                "none yet: nothing has judged this work",
+                Style::new().fg(t.muted),
+            ),
+        ]));
+        return out;
+    }
     let source = match c.source {
         ChecksSource::None => "not run yet",
         ChecksSource::Gate => "as the gate ran them",

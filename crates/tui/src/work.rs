@@ -66,6 +66,9 @@ pub struct WorkScreen {
     /// Where the selection was in the flat list, for when the outcome
     /// leaves it.
     at: usize,
+    /// The user picked an outcome. Until they do, the top of the queue is
+    /// selected, whatever arrives: the most urgent thing is what Work opens on.
+    chosen: bool,
     pub tab: Tab,
     /// Rows the right pane is scrolled down.
     pub scroll: usize,
@@ -85,6 +88,9 @@ impl WorkScreen {
     /// chosen or the chosen one is gone.
     pub fn current<'a>(&self, snap: &'a ConsoleSnapshot) -> Option<&'a OutcomeView> {
         let all = flat(snap);
+        if !self.chosen {
+            return all.first().copied();
+        }
         self.selected
             .as_deref()
             .and_then(|id| all.iter().find(|o| o.id == id).copied())
@@ -98,8 +104,13 @@ impl WorkScreen {
         let found = self
             .selected
             .as_deref()
-            .and_then(|id| all.iter().position(|o| o.id == id));
-        let index = found.unwrap_or_else(|| self.at.min(all.len().saturating_sub(1)));
+            .and_then(|id| all.iter().position(|o| o.id == id))
+            .filter(|_| self.chosen);
+        let index = match found {
+            Some(i) => i,
+            None if !self.chosen => 0,
+            None => self.at.min(all.len().saturating_sub(1)),
+        };
         let id = all.get(index).map(|o| o.id.clone());
         if id != self.selected {
             self.changed();
@@ -115,6 +126,7 @@ impl WorkScreen {
             return;
         }
         self.settle(snap);
+        self.chosen = true;
         let to = self
             .at
             .saturating_add_signed(delta)
@@ -130,6 +142,7 @@ impl WorkScreen {
     pub fn select(&mut self, snap: &ConsoleSnapshot, id: &str) -> bool {
         match flat(snap).iter().position(|o| o.id == id) {
             Some(i) => {
+                self.chosen = true;
                 self.selected = Some(id.to_string());
                 self.at = i;
                 self.changed();
