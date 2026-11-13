@@ -22,6 +22,9 @@ use crate::theme::Theme;
 use crate::ui::look::IconSet;
 use crate::ui::work::util::{Lines, fit, heading, span, usd};
 
+/// Below this many cells a graph that must scroll is drawn as a list.
+const NARROW: u16 = 100;
+
 /// How a card's state looks: a shape, a word and a colour. The shape says
 /// it without colour.
 pub(super) struct StateLook {
@@ -210,8 +213,16 @@ pub(super) fn render(frame_: &mut Frame, area: Rect, app: &App, snap: &ConsoleSn
         width: area.width.saturating_sub(2),
         height: inner_h - reserved,
     };
+    // The columns, when they fit across and either fit down too or the pane
+    // is wide enough that scrolling them is no loss; else a list, which
+    // shows every card in the room there is.
     let metrics = layout::fit(plan.layered.columns.len().max(1), view.width)
-        .filter(|_| view.height >= layout::CARD_H);
+        .filter(|_| view.height >= layout::CARD_H)
+        .filter(|m| {
+            view.width >= NARROW
+                || layout::geometry(&plan.input, &plan.layered, *m, view.width, None).height
+                    <= view.height
+        });
     let note = match (&metrics, plan.is_empty()) {
         (_, true) => String::new(),
         (Some(_), _) => "producer → consumer · every line is a recorded relationship".into(),

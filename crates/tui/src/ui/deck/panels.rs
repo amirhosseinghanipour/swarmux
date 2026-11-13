@@ -501,6 +501,16 @@ fn grouped(n: usize) -> String {
     out
 }
 
+/// The rule that decided a hold; a call held by risk alone matched no rule,
+/// and the risk is the reason.
+fn rule_words(h: &swarmux_application::console::HoldView) -> String {
+    match (&h.rule, h.destructive) {
+        (Some(rule), _) => rule.clone(),
+        (None, true) => "destructive risk".into(),
+        (None, false) => "no rule matched".into(),
+    }
+}
+
 fn guard(frame_: &mut Frame, area: Rect, app: &App, snap: &ConsoleSnapshot) {
     let t = &app.look.theme;
     let recent: Vec<_> = app.engine.guard.recent().collect();
@@ -537,11 +547,12 @@ fn guard(frame_: &mut Frame, area: Rect, app: &App, snap: &ConsoleSnapshot) {
         .holds
         .iter()
         .take(room)
-        .map(|h| h.rule.as_deref().map_or(7, |r| r.chars().count()))
+        .map(|h| rule_words(h).chars().count())
         .max()
-        .unwrap_or(0)
-        .min(w / 4);
+        .unwrap_or(0);
     let note_w = 18usize.min(w / 4);
+    // The call keeps at least 32 cells; the rule gives way, not the call.
+    let rule_w = rule_w.min(w.saturating_sub(22 + note_w + 32));
     for h in snap.holds.iter().take(room) {
         let held = h.state == HoldState::Held;
         let (word, color) = if held {
@@ -555,12 +566,7 @@ fn guard(frame_: &mut Frame, area: Rect, app: &App, snap: &ConsoleSnapshot) {
         let call = format!("{} {}", h.tool, h.target);
         let fixed = 5 + 1 + 6 + 1 + 4 + 1 + 2 + rule_w + 2 + note_w;
         let call_w = w.saturating_sub(fixed);
-        // A call held by risk alone matched no rule: the risk is the reason.
-        let rule_text = match (&h.rule, h.destructive) {
-            (Some(rule), _) => rule.as_str(),
-            (None, true) => "destructive risk",
-            (None, false) => "no rule matched",
-        };
+        let rule_text = rule_words(h);
         lines.push(Line::from(vec![
             span(format!("{} ", local_clock(h.at, offset)), label_style(t)),
             span(
@@ -573,7 +579,7 @@ fn guard(frame_: &mut Frame, area: Rect, app: &App, snap: &ConsoleSnapshot) {
                 Style::new().fg(t.text),
             ),
             span(
-                format!("{:>rule_w$}  ", fit(rule_text, rule_w)),
+                format!("{:>rule_w$}  ", fit(&rule_text, rule_w)),
                 Style::new().fg(if held { t.warn } else { t.error }),
             ),
             span(

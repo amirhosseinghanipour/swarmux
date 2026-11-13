@@ -272,11 +272,32 @@ fn the_deck_at_120x36_folds_the_graph_to_a_list_and_some_panels_away() {
 }
 
 #[test]
-fn two_columns_still_fit_as_a_graph_at_120x36() {
+fn a_graph_that_fits_stays_a_graph_at_120x36_and_one_that_would_scroll_is_a_list() {
     let app = app();
-    let out = text(&draw(&app, &snapshot(), 120, 33));
+    // Only the release's three tasks: two columns, three rows of cards.
+    let mut small = snapshot();
+    small
+        .deck
+        .nodes
+        .retain(|n| n.id.starts_with("task:split-app"));
+    small
+        .deck
+        .edges
+        .retain(|e| e.from.starts_with("task:split-app"));
+    let out = text(&draw(&app, &small, 120, 33));
     assert!(out.contains("producer → consumer"), "{out}");
     assert!(out.contains('▶'), "{out}");
+    // The whole evening does not fit down the narrow pane: a list shows
+    // every card instead of a graph with cards out of view.
+    let out = text(&draw(&app, &snapshot(), 120, 33));
+    assert!(out.contains("as a list at this size"), "{out}");
+    for card in ["#2", "#3", "#4", "#5", "#6", "t1", "t2", "t3"] {
+        assert!(
+            out.contains(card),
+            "{card} in the list
+{out}"
+        );
+    }
 }
 
 #[test]

@@ -96,7 +96,9 @@ fn the_compact_deck_at_120x36_keeps_the_graph_and_folds_the_rest() {
     let out = app.render_text(120, 36);
     for needle in [
         "TASK GRAPH",
-        "t3 HELD",
+        "as a list at this size",
+        "→ t3 (dep, met)",
+        "← t1 (dep, met) · ← t2 (dep, met)",
         "NEEDS YOU",
         "LIMITS · BUDGET",
         "GUARD EXCEPTIONS",
