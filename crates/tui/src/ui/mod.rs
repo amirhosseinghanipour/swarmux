@@ -42,7 +42,8 @@ use ratatui::{
 use swarmux_application::QueueStats;
 use swarmux_domain::JobStatus;
 
-use crate::app::{App, InputPurpose, Mode, Screen};
+use crate::app::{App, InputPurpose, Mode};
+use crate::screens;
 use crate::theme::Theme;
 
 pub fn draw(frame: &mut Frame, app: &App) {
@@ -75,9 +76,8 @@ fn draw_screens(frame: &mut Frame, app: &App, t: &Theme) {
     ])
     .areas(frame.area());
 
-    let title = if app.screen == Screen::Dashboard && app.dashboard.classic {
-        dashboard::header::title(app, &dashboard::View::of(app), t)
-    } else {
+    let def = app.screen.def();
+    let title = def.header(app, t).unwrap_or_else(|| {
         Line::from(vec![
             Span::styled(
                 "SWARMUX",
@@ -86,23 +86,11 @@ fn draw_screens(frame: &mut Frame, app: &App, t: &Theme) {
             Span::styled("  ·  verified autonomy", Style::new().fg(t.lead)),
         ])
         .centered()
-    };
+    });
     frame.render_widget(title, header);
     draw_tabs(frame, tabs, app, t);
 
-    match app.screen {
-        Screen::Mission => mission::render(frame, body, app),
-        Screen::Missions => missions::render(frame, body, app),
-        Screen::Dashboard if app.dashboard.classic => dashboard::render(frame, body, app),
-        Screen::Dashboard => focus::render(frame, body, app),
-        Screen::Prompts => prompts::render(frame, body, app),
-        Screen::Queue => queue::render(frame, body, app),
-        Screen::Ledger => ledger::render(frame, body, app),
-        Screen::Sessions => sessions::render(frame, body, app),
-        Screen::Board => board::render(frame, body, app),
-        Screen::Knowledge => knowledge::render(frame, body, app),
-        Screen::Followups => followups::render(frame, body, app),
-    }
+    def.draw(frame, body, app);
     if app.engine.guard.jev().is_some_and(|j| j.wants_consent()) {
         let h = guard::CONSENT_HEIGHT.min(body.height);
         let overlay = Rect {
@@ -270,9 +258,9 @@ fn stats_line(t: &Theme, s: QueueStats, approvals: usize, routing: usize) -> Lin
 /// The screens as chips, the active one filled; theme and layout on the right.
 fn draw_tabs(frame: &mut Frame, area: Rect, app: &App, t: &Theme) {
     let mut spans = Vec::new();
-    for s in Screen::ALL.iter() {
-        let label = format!(" {} {} ", s.key(), s.title());
-        spans.push(if *s == app.screen {
+    for s in screens::all() {
+        let label = format!(" {} {} ", crate::keys::nav_label(&app.keymap, s), s.title());
+        spans.push(if s == app.screen {
             Span::styled(
                 label,
                 Style::new()
@@ -287,7 +275,7 @@ fn draw_tabs(frame: &mut Frame, area: Rect, app: &App, t: &Theme) {
     }
     let used = Line::from(spans.clone()).width();
     frame.render_widget(Line::from(spans), area);
-    if app.screen == Screen::Dashboard && app.dashboard.classic {
+    if app.screen.def().shows_look(app) {
         let look = &app.look;
         let right = Line::from(vec![
             Span::styled(
@@ -402,10 +390,24 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App, t: &Theme) {
                 ),
                 Span::styled(format!(" {toast}"), Style::new().fg(t.border_focus)),
             ]),
-            _ if app.screen == Screen::Dashboard && app.dashboard.classic => {
-                dashboard::status::line(app, &dashboard::View::of(app), t)
+            _ if !app.resolver.pending().is_empty() => {
+                let typed: Vec<String> = app
+                    .resolver
+                    .pending()
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect();
+                Line::from(vec![
+                    Span::styled(format!(" {} ", typed.join(" ")), Style::new().fg(t.lead)),
+                    Span::styled(
+                        "… waiting for the next key · esc cancels",
+                        Style::new().fg(t.muted),
+                    ),
+                ])
             }
-            _ => Line::from(Span::styled(hint_line(app), Style::new().fg(t.muted))),
+            _ => app.screen.def().status(app, t).unwrap_or_else(|| {
+                Line::from(Span::styled(hint_line(app), Style::new().fg(t.muted)))
+            }),
         },
     };
     frame.render_widget(line, area);
@@ -423,43 +425,7 @@ fn hint_line(app: &App) -> String {
 }
 
 pub(crate) fn hints(app: &App) -> &'static str {
-    if app.prompts.form.is_some() {
-        return " tab next field · ctrl+s save · esc cancel";
-    }
-    if app.screen == Screen::Missions && app.missions_screen.composer.is_some() {
-        return " tab next field · ctrl+s save & lint · ctrl+f protect oracles · ctrl+r save & run · esc close";
-    }
-    match app.screen {
-        Screen::Mission => {
-            " ↑↓ select · ⏎ open · y/n/a answer · A batch · s shelve · F focus · tab wall · p prompt · q quit"
-        }
-        Screen::Missions => {
-            " n new · e edit · l lint · f protect · p plan first · r run · y/n/c plan · ⏎ focus · q quit"
-        }
-        Screen::Dashboard if !app.dashboard.classic => {
-            " ↑↓ scroll · d diff · t open session · p prompt · v review · D classic · q quit"
-        }
-        Screen::Dashboard => {
-            " p prompt · P route · v review · ↑↓ session · t theme · L layout · tab focus · q quit"
-        }
-        Screen::Queue => " c cancel · r retry · +/- priority · enter view · ↑↓ select · q quit",
-        Screen::Ledger => {
-            " / search · o filter · v verify · l labels · r re-run · f fork · enter view · ↑↓ select · q quit"
-        }
-        Screen::Prompts => {
-            " n new · e edit · x delete · d dispatch · D route · ↑↓ select · 0-9 screens · q quit"
-        }
-        Screen::Sessions => {
-            " n new session · w on a workspace · l lean on/off · ↑↓ select · 0-9 screens · q quit"
-        }
-        Screen::Board => " ↑↓ select · r answer a question · x close it · 0-9 screens · q quit",
-        Screen::Knowledge => {
-            " ↑↓ select · a add (kind: text) · e edit · p promote · c confirm · x retire · 0-9 screens · q quit"
-        }
-        Screen::Followups => {
-            " ↑↓ select · a approve · d decline · l later · o open job · m draft mission · 0-9 screens · q quit"
-        }
-    }
+    app.screen.def().hints(app)
 }
 
 pub(crate) fn render_to_string(app: &App, w: u16, h: u16) -> String {
@@ -495,7 +461,7 @@ mod tests {
     #[test]
     fn renders_header_and_active_tab() {
         let mut t = test_app();
-        t.app.screen = Screen::Queue;
+        t.app.screen = crate::app::Screen::Queue;
         let out = render_to_string(&t.app, 80, 10);
         assert!(out.contains("SWARMUX"));
         assert!(out.contains("4 queue"));

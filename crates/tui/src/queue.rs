@@ -1,10 +1,21 @@
 //! State of the queue screen: which job is selected.
 
-use crossterm::event::KeyCode;
 use swarmux_application::QueueEntry;
 use swarmux_domain::JobId;
 
-/// What a key on the queue screen asks for.
+/// What the user asks of the selected job (or the selection).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Command {
+    Prev,
+    Next,
+    Cancel,
+    Retry,
+    PriorityUp,
+    PriorityDown,
+    View,
+}
+
+/// What a command on the queue screen comes to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum QueueAction {
     None,
@@ -28,21 +39,20 @@ impl QueueScreen {
             .unwrap_or(0)
     }
 
-    pub fn handle(&mut self, key: KeyCode, rows: &[QueueEntry]) -> QueueAction {
+    pub fn handle(&mut self, command: Command, rows: &[QueueEntry]) -> QueueAction {
         let Some(current) = rows.get(self.index(rows)) else {
             return QueueAction::None;
         };
         let i = self.index(rows);
         let id = current.job_id;
-        match key {
-            KeyCode::Up => self.selected = Some(rows[i.saturating_sub(1)].job_id),
-            KeyCode::Down => self.selected = Some(rows[(i + 1).min(rows.len() - 1)].job_id),
-            KeyCode::Char('c') => return QueueAction::Cancel(id),
-            KeyCode::Char('r') => return QueueAction::Retry(id),
-            KeyCode::Char('+' | '=') => return QueueAction::Priority(id, 1),
-            KeyCode::Char('-') => return QueueAction::Priority(id, -1),
-            KeyCode::Enter => return QueueAction::View(id),
-            _ => {}
+        match command {
+            Command::Prev => self.selected = Some(rows[i.saturating_sub(1)].job_id),
+            Command::Next => self.selected = Some(rows[(i + 1).min(rows.len() - 1)].job_id),
+            Command::Cancel => return QueueAction::Cancel(id),
+            Command::Retry => return QueueAction::Retry(id),
+            Command::PriorityUp => return QueueAction::Priority(id, 1),
+            Command::PriorityDown => return QueueAction::Priority(id, -1),
+            Command::View => return QueueAction::View(id),
         }
         QueueAction::None
     }
@@ -72,13 +82,13 @@ mod tests {
     fn selection_follows_the_job() {
         let mut q = QueueScreen::default();
         let r = rows(&[1, 2, 3]);
-        q.handle(KeyCode::Down, &r);
-        q.handle(KeyCode::Down, &r);
-        q.handle(KeyCode::Down, &r);
+        q.handle(Command::Next, &r);
+        q.handle(Command::Next, &r);
+        q.handle(Command::Next, &r);
         assert_eq!(q.selected, Some(JobId(3)));
         assert_eq!(q.index(&rows(&[3, 1])), 0);
         assert_eq!(q.index(&rows(&[1, 2])), 0, "gone job falls back to the top");
-        q.handle(KeyCode::Up, &rows(&[1, 3]));
+        q.handle(Command::Prev, &rows(&[1, 3]));
         assert_eq!(q.selected, Some(JobId(1)));
     }
 
@@ -86,24 +96,18 @@ mod tests {
     fn keys_map_to_actions_on_the_selected_job() {
         let mut q = QueueScreen::default();
         let r = rows(&[4, 5]);
-        q.handle(KeyCode::Down, &r);
+        q.handle(Command::Next, &r);
+        assert_eq!(q.handle(Command::Cancel, &r), QueueAction::Cancel(JobId(5)));
         assert_eq!(
-            q.handle(KeyCode::Char('c'), &r),
-            QueueAction::Cancel(JobId(5))
-        );
-        assert_eq!(
-            q.handle(KeyCode::Char('+'), &r),
+            q.handle(Command::PriorityUp, &r),
             QueueAction::Priority(JobId(5), 1)
         );
         assert_eq!(
-            q.handle(KeyCode::Char('-'), &r),
+            q.handle(Command::PriorityDown, &r),
             QueueAction::Priority(JobId(5), -1)
         );
-        assert_eq!(
-            q.handle(KeyCode::Char('r'), &r),
-            QueueAction::Retry(JobId(5))
-        );
-        assert_eq!(q.handle(KeyCode::Enter, &r), QueueAction::View(JobId(5)));
-        assert_eq!(q.handle(KeyCode::Char('c'), &[]), QueueAction::None);
+        assert_eq!(q.handle(Command::Retry, &r), QueueAction::Retry(JobId(5)));
+        assert_eq!(q.handle(Command::View, &r), QueueAction::View(JobId(5)));
+        assert_eq!(q.handle(Command::Cancel, &[]), QueueAction::None);
     }
 }

@@ -4,12 +4,16 @@
 
 use std::rc::Rc;
 
-use crossterm::event::KeyCode;
 use swarmux_application::{AppError, AppResult, ContractRow, ContractService, KnowledgeService};
 use swarmux_domain::AttentionItem;
+use swarmux_domain::keys::{Action, actions};
 use swarmux_domain::knowledge::{Draft, Home, Item, ItemId, Kind, Registry, Status};
 
-use crate::app::{App, InputPurpose, Mode, Screen};
+use crate::app::{App, InputPurpose, Mode};
+use crate::screens::Handled;
+use crate::screens::knowledge::{
+    ADD, CONFIRM, EDIT, NEXT_WORKSPACE, PROMOTE, REREAD_CONTRACTS, RETIRE, TOGGLE_CONTRACTS,
+};
 use crate::ui::input::Input;
 
 /// The Knowledge screen's selection.
@@ -202,80 +206,81 @@ impl App {
         }
     }
 
-    /// The Knowledge screen's keys: `↑↓` select, `a` add, `e` edit the
-    /// text, `p` promote, `c` confirm, `x` retire. Whether the key was taken.
-    pub(crate) fn knowledge_key(&mut self, code: KeyCode) -> bool {
-        if self.screen != Screen::Knowledge {
-            return false;
-        }
-        if code == KeyCode::Char('t') && self.engine.contracts.is_some() {
+    /// The Knowledge screen's actions: select, add, edit the text, promote,
+    /// confirm, retire, and on the contracts tab read them again or move to
+    /// the next workspace.
+    pub(crate) fn knowledge_action(&mut self, action: Action) -> Handled {
+        if action == TOGGLE_CONTRACTS {
+            if self.engine.contracts.is_none() {
+                return Handled::No;
+            }
             self.knowledge_screen.contracts_tab = !self.knowledge_screen.contracts_tab;
             if self.knowledge_screen.contracts_tab {
                 self.refresh_contracts(false);
             }
-            return true;
+            return Handled::Yes;
         }
         if self.knowledge_screen.contracts_tab {
             let count = self.knowledge_screen.contract_rows.len();
-            match code {
-                KeyCode::Up | KeyCode::Char('k') => {
+            match action {
+                actions::LIST_PREV => {
                     self.knowledge_screen.contract_selected =
                         self.knowledge_screen.contract_selected.saturating_sub(1);
                 }
-                KeyCode::Down | KeyCode::Char('j') => {
+                actions::LIST_NEXT => {
                     self.knowledge_screen.contract_selected =
                         (self.knowledge_screen.contract_selected + 1).min(count.saturating_sub(1));
                 }
-                KeyCode::Char('r') => {
+                REREAD_CONTRACTS => {
                     self.refresh_contracts(true);
                     self.notice = Some("contracts read again (only changed files)".into());
                 }
-                KeyCode::Char('w') => {
+                NEXT_WORKSPACE => {
                     self.knowledge_screen.contract_workspace += 1;
                     self.knowledge_screen.contract_selected = 0;
                     self.refresh_contracts(false);
                 }
-                _ => return false,
+                _ => return Handled::No,
             }
-            return true;
+            return Handled::Yes;
         }
         let count = self.knowledge_list().len();
-        match code {
-            KeyCode::Up | KeyCode::Char('k') => {
+        match action {
+            actions::LIST_PREV => {
                 self.knowledge_screen.selected = self.knowledge_screen.selected.saturating_sub(1);
             }
-            KeyCode::Down | KeyCode::Char('j') => {
+            actions::LIST_NEXT => {
                 self.knowledge_screen.selected =
                     (self.knowledge_screen.selected + 1).min(count.saturating_sub(1));
             }
-            KeyCode::Char('a') if self.knowledge_on() => {
+            ADD if self.knowledge_on() => {
                 self.mode = Mode::Input(InputPurpose::KnowledgeAdd, Input::default());
             }
-            KeyCode::Char('e') => {
+            EDIT => {
                 if let Some(i) = self.selected_knowledge() {
                     self.knowledge_screen.editing = Some(i.id.clone());
                     self.mode = Mode::Input(InputPurpose::KnowledgeEdit, Input::with_text(&i.text));
                 }
             }
-            KeyCode::Char('p') => {
+            PROMOTE => {
                 let r = self.with_selected(|k, id| k.promote(id).map(|i| promoted(&i)));
                 self.show_notice(r);
             }
-            KeyCode::Char('c') => {
+            CONFIRM => {
                 let r = self.with_selected(|k, id| {
                     k.confirm(id)
                         .map(|i| format!("{} confirmed: agents see it again", i.id))
                 });
                 self.show_notice(r);
             }
-            KeyCode::Char('x') => {
+            RETIRE => {
                 let r =
                     self.with_selected(|k, id| k.retire(id).map(|i| format!("{} retired", i.id)));
                 self.show_notice(r);
             }
-            _ => return false,
+            _ => return Handled::No,
         }
-        true
+        Handled::Yes
     }
 
     fn with_selected(

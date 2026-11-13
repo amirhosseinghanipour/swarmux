@@ -1,4 +1,4 @@
-//! The inbox's keys beyond `y`/`n`/`a`: answering a batch, shelving, focus
+//! The inbox beyond answering a held call: answering a batch, shelving, focus
 //! mode, offered rules and the typed confirmation of irreversible calls.
 
 use crossterm::event::{KeyCode, KeyEvent};
@@ -9,11 +9,24 @@ use swarmux_domain::alarm::{
 use swarmux_domain::{AttentionItem, AttentionKind, Millis, Priority};
 
 use crate::app::{App, Mode, Screen};
+use crate::keys::{SHELVE, SHELVE_15_MIN, SHELVE_60_MIN, SHELVE_UNTIL_JOB_ENDS, spec_of};
 use crate::mission::Pane;
 use crate::ui::input::{Input, InputAction};
+use swarmux_domain::keys::{Outcome, actions};
 
 /// Keys count as working the inbox for this long after the last one.
 const ENGAGED_WITHIN_MS: Millis = 10_000;
+
+/// How the user answered what is asking for a decision.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Decision {
+    Yes,
+    No,
+    /// Allow the held call for good.
+    Always,
+    /// Drop a proposed plan.
+    Cancel,
+}
 
 /// An irreversible call waiting to be confirmed by naming its target.
 #[derive(Clone, Debug, PartialEq)]
@@ -46,7 +59,7 @@ impl App {
         reversibility(&r.tool_name, &r.subject, &r.cwd) == Reversibility::R4
     }
 
-    /// `y` on an irreversible call: the target has to be named first.
+    /// Approving an irreversible call: the target has to be named first.
     pub(crate) fn begin_confirm(&mut self, call: &PendingApproval) {
         let r = &call.request;
         let challenge = Challenge::new(r.request_id, &r.tool_name, &r.subject, self.now());
@@ -131,7 +144,7 @@ impl App {
         Ok(())
     }
 
-    /// `A`: approves every ask of the selected one's signature.
+    /// Approves every ask of the selected one's signature.
     pub(crate) fn answer_batch(&mut self) -> AppResult<()> {
         let now = self.now();
         let Some(item) = self.selected_ask() else {
@@ -173,7 +186,7 @@ impl App {
         first_error.map_or(Ok(()), Err)
     }
 
-    /// `s`: asks how long to shelve the selected item.
+    /// Asks how long to shelve the selected item.
     pub(crate) fn begin_shelve(&mut self) {
         let Some(item) = self.mission.selected_item() else {
             return;
@@ -185,13 +198,23 @@ impl App {
         self.mode = Mode::Shelve;
     }
 
-    /// The choice after `s`: `1` 15 min, `2` 60 min, `3` until its job ends.
+    /// The choice after shelving: 15 minutes, 60 minutes, until the job
+    /// ends. Anything else is ignored; `Esc` goes back.
     pub(crate) fn shelve_key(&mut self, key: KeyEvent) -> AppResult<()> {
-        let how = match key.code {
-            KeyCode::Char('1') => ShelveFor::Minutes(15),
-            KeyCode::Char('2') => ShelveFor::Minutes(60),
-            KeyCode::Char('3') => ShelveFor::JobEnds,
-            KeyCode::Esc => {
+        let outcome = match spec_of(key) {
+            Some(spec) => self
+                .resolver
+                .feed(&self.keymap, &[SHELVE], spec, self.now()),
+            None => return Ok(()),
+        };
+        let Outcome::Actions(found) = outcome else {
+            return Ok(());
+        };
+        let how = match found.first().copied() {
+            Some(SHELVE_15_MIN) => ShelveFor::Minutes(15),
+            Some(SHELVE_60_MIN) => ShelveFor::Minutes(60),
+            Some(SHELVE_UNTIL_JOB_ENDS) => ShelveFor::JobEnds,
+            Some(actions::BACK) => {
                 self.mode = Mode::Normal;
                 return Ok(());
             }
@@ -216,7 +239,7 @@ impl App {
         Ok(())
     }
 
-    /// `u`: brings every shelved item back.
+    /// Brings every shelved item back.
     pub(crate) fn unshelve(&mut self) {
         let now = self.now();
         let n = self.mission.alarms_mut().unshelve_all(now);
@@ -227,7 +250,7 @@ impl App {
         self.refresh_mission();
     }
 
-    /// `F`: focus mode on or off.
+    /// Focus mode on or off.
     pub(crate) fn toggle_focus_mode(&mut self) {
         let now = self.now();
         let on = !self.mission.alarms().focus();
@@ -240,7 +263,7 @@ impl App {
         self.refresh_mission();
     }
 
-    /// `r` takes the offered rule, `R` turns it down.
+    /// Takes the offered rule, or turns it down.
     pub(crate) fn settle_rule(&mut self, take: bool) -> AppResult<()> {
         let now = self.now();
         let Some(item) = self.selected_ask() else {

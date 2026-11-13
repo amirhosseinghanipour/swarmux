@@ -1,19 +1,20 @@
-//! Plan-first missions on screen: the keys that answer a proposed plan,
-//! from the Missions screen and from the inbox.
+//! Plan-first missions on screen: answering a proposed plan, from the
+//! Missions screen and from the inbox.
 //!
-//! `y` approves (and the build starts with the plan in its prompt), `n`
-//! asks for a note and sends the plan back for a new one, `c` cancels it.
+//! Approving starts the build with the plan in its prompt; changing asks
+//! for a note and sends the plan back for a new one; cancelling drops it.
 
 use swarmux_application::AppResult;
 use swarmux_domain::AttentionKind;
 use swarmux_domain::plan::{PlanRecord, PlanStatus};
 
 use crate::app::{App, InputPurpose, Mode, Screen};
+use crate::inbox::Decision;
 use crate::mission::Pane;
 use crate::ui::input::Input;
 
 impl App {
-    /// The mission whose proposed plan `y`/`n`/`c` answer: the selected
+    /// The mission whose proposed plan the decision keys answer: the selected
     /// card on the Missions screen, or the selected plan item of the inbox.
     pub(crate) fn plan_target(&self) -> Option<String> {
         let missions = self.engine.missions.as_ref()?;
@@ -59,20 +60,21 @@ impl App {
             .is_some_and(|m| m.planning(slug))
     }
 
-    /// One key each: `y` approve, `n` change (asks for a note), `c` cancel.
-    pub(crate) fn plan_key(&mut self, key: char, slug: &str) -> AppResult<()> {
+    /// Yes approves, no changes the plan (and asks for a note), cancel
+    /// cancels it.
+    pub(crate) fn answer_plan(&mut self, answer: Decision, slug: &str) -> AppResult<()> {
         let Some(service) = &mut self.engine.missions else {
             return Ok(());
         };
-        match key {
-            'y' => {
+        match answer {
+            Decision::Yes => {
                 let job = service.approve_plan(slug, &mut self.engine.jobs)?;
                 self.followed_mission(slug, job)?;
                 self.notice = Some(format!(
                     "plan approved: {slug} is out as job #{job} with the plan in its prompt"
                 ));
             }
-            'n' => {
+            Decision::No => {
                 self.missions_screen.note_for = Some(slug.to_string());
                 self.mode = Mode::Input(InputPurpose::PlanNote, Input::default());
             }
@@ -131,7 +133,7 @@ impl App {
             return false;
         };
         self.missions_screen.selected = at;
-        self.screen = Screen::Missions;
+        self.navigate(Screen::Missions);
         true
     }
 }

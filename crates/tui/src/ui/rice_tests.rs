@@ -77,7 +77,7 @@ fn overlays_screens_and_splash_keep_the_background() {
     let job = t.app.current_job().unwrap().job_id;
     t.inbox.push(Some(job), "Bash", "make deploy");
     t.app.update();
-    for screen in crate::app::Screen::ALL {
+    for screen in crate::screens::all() {
         t.app.screen = screen;
         let buf = render_buffer(&t.app, 120, 30);
         let off = off_background(&buf, &t.app.look.theme);

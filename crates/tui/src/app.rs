@@ -18,6 +18,7 @@ use swarmux_application::{
 };
 use swarmux_domain::alarm::{Breakpoint, LoadMeter};
 use swarmux_domain::evidence::{brief, heat_strip};
+use swarmux_domain::keys::{Action, Catalog, Context, GLOBAL, Keymap, Outcome, Resolver, actions};
 use swarmux_domain::mission::Contract;
 use swarmux_domain::{
     AttentionKind, JobId, JobProgress, Millis, Priority, PromptId, Session, SessionId,
@@ -25,13 +26,20 @@ use swarmux_domain::{
 
 use crate::dashboard::DashboardState;
 use crate::focus::{Checkpoints, FocusState};
-use crate::inbox::Confirm;
-use crate::ledger::{HEAT_DAYS, LedgerAction, LedgerScreen};
+use crate::inbox::{Confirm, Decision};
+use crate::keys::{
+    BOARD_ANSWER, DECIDE, DECIDE_ALWAYS, DECIDE_CANCEL_PLAN, DECIDE_NO, DECIDE_YES,
+    INBOX_FOCUS_MODE, LOOK_NEXT_LAYOUT, LOOK_NEXT_THEME, PROMPT_ROUTE, PROMPT_SEND,
+    SHOWCASE_CONSTELLATION, SHOWCASE_SPECTRUM,
+};
+use crate::ledger::{HEAT_DAYS, LedgerScreen};
 use crate::mission::{Cadence, MissionState, Pane, Tile, wall_tiles};
 use crate::missions::{Composer, ComposerAction, MissionsScreen};
-use crate::prompts::{FormAction, PendingDispatch, PromptForm, PromptsScreen};
-use crate::queue::{QueueAction, QueueScreen};
+use crate::nav::BackStack;
+use crate::prompts::{PendingDispatch, PromptsScreen};
+use crate::queue::QueueScreen;
 use crate::routing::RoutePayload;
+use crate::screens::{self, Changes, Handled, Planned};
 use crate::showcase::{AgentInput, Alert, Mode as ShowMode, Refresh, Showcase};
 use crate::telemetry::Telemetry;
 use crate::theme::{ColorDepth, Theme};
@@ -42,79 +50,7 @@ use crate::ui::look::{IconHints, LOW_POWER_FPS, Look};
 use crate::ui::motion::AutoMotion;
 use crate::ui::splash::SplashInfo;
 
-/// The top-level screens, in tab order: `1` to `6`, then Focus on `0`
-/// (and `⏎` from any card or row).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Screen {
-    /// Mission control: the home screen.
-    #[default]
-    Mission,
-    /// Outcomes in flight: mission cards and the composer.
-    Missions,
-    Prompts,
-    Queue,
-    /// What happened, what it cost and whether it can be proven.
-    Ledger,
-    Sessions,
-    /// The followed job in detail (the dashboard's panels).
-    Dashboard,
-    /// What the agents of each mission wrote to each other.
-    Board,
-    /// Rules, facts and decisions kept for the agents.
-    Knowledge,
-    /// What agents left behind, as decision cards.
-    Followups,
-}
-
-impl Screen {
-    pub const ALL: [Screen; 10] = [
-        Screen::Mission,
-        Screen::Missions,
-        Screen::Prompts,
-        Screen::Queue,
-        Screen::Ledger,
-        Screen::Sessions,
-        Screen::Dashboard,
-        Screen::Board,
-        Screen::Knowledge,
-        Screen::Followups,
-    ];
-
-    pub fn title(self) -> &'static str {
-        match self {
-            Screen::Mission => "mission",
-            Screen::Missions => "missions",
-            Screen::Dashboard => "focus",
-            Screen::Prompts => "prompts",
-            Screen::Queue => "queue",
-            Screen::Ledger => "ledger",
-            Screen::Sessions => "sessions",
-            Screen::Board => "board",
-            Screen::Knowledge => "knowledge",
-            Screen::Followups => "follow-ups",
-        }
-    }
-
-    /// The number key that shows it.
-    pub fn key(self) -> char {
-        match self {
-            Screen::Mission => '1',
-            Screen::Missions => '2',
-            Screen::Prompts => '3',
-            Screen::Queue => '4',
-            Screen::Ledger => '5',
-            Screen::Sessions => '6',
-            Screen::Dashboard => '0',
-            Screen::Board => '7',
-            Screen::Knowledge => '8',
-            Screen::Followups => '9',
-        }
-    }
-
-    pub fn by_key(c: char) -> Option<Screen> {
-        Screen::ALL.into_iter().find(|s| s.key() == c)
-    }
-}
+pub use crate::screens::Screen;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InputPurpose {
@@ -150,6 +86,14 @@ pub enum Mode {
 
 pub struct App {
     pub screen: Screen,
+    /// The screens the user came from; `Esc` goes back through them.
+    nav: BackStack<Screen>,
+    /// What the keys do: defaults, and the user's changes.
+    pub(crate) keymap: Keymap,
+    /// Every action the keymap can bind.
+    catalog: Catalog,
+    /// A half-typed chord, and what a key press means.
+    pub(crate) resolver: Resolver,
     /// Frames drawn so far; drives the spinners.
     pub frame: u64,
     pub quit: bool,
@@ -246,6 +190,28 @@ pub struct App {
     driver: Option<Driver>,
 }
 
+/// The keys that answer whatever asks the user for a decision.
+fn is_decision(action: Action) -> bool {
+    matches!(
+        action,
+        DECIDE_YES | DECIDE_NO | DECIDE_ALWAYS | DECIDE_CANCEL_PLAN
+    )
+}
+
+/// What still works while the constellation or the spectrum shows: answering
+/// a decision, leaving, going to a screen, the theme, and the showcase's own
+/// keys.
+fn passes_showcase(action: Action) -> bool {
+    is_decision(action)
+        || action == actions::QUIT
+        || action == actions::BACK
+        || action == LOOK_NEXT_THEME
+        || action == SHOWCASE_CONSTELLATION
+        || action == SHOWCASE_SPECTRUM
+        || screens::nav_target(action).is_some()
+        || screens::PLANNED.iter().any(|p| p.action == action)
+}
+
 /// A script the app plays: runs at the start of every update.
 type Driver = Box<dyn FnMut(&mut App)>;
 
@@ -310,8 +276,14 @@ impl App {
         routing: RoutingService,
         cwd: PathBuf,
     ) -> App {
+        let (keymap, catalog) =
+            crate::keys::defaults().expect("the default keymap has no conflicts");
         let mut app = App {
             screen: Screen::default(),
+            nav: BackStack::default(),
+            keymap,
+            catalog,
+            resolver: Resolver::new(),
             frame: 0,
             quit: false,
             mode: Mode::Normal,
@@ -415,6 +387,23 @@ impl App {
             checked: 0,
         });
         self
+    }
+
+    /// Uses `keymap` in place of the default keys.
+    pub fn with_keymap(mut self, keymap: Keymap) -> App {
+        self.keymap = keymap;
+        self.resolver.clear();
+        self
+    }
+
+    /// Every action the keymap can bind.
+    pub fn catalog(&self) -> &Catalog {
+        &self.catalog
+    }
+
+    /// The keys in use.
+    pub fn keymap(&self) -> &Keymap {
+        &self.keymap
     }
 
     /// Re-reads the palette file when it has changed (looked at about once a
@@ -875,15 +864,16 @@ impl App {
             // Jobs touch their sessions, which re-sorts the list.
             self.refresh_sessions(None);
         }
-        let evidence_changed = self.pump_evidence();
-        if (report.jobs_changed || evidence_changed) && self.screen == Screen::Ledger {
-            self.refresh_ledger();
-        }
+        let changes = Changes {
+            jobs: report.jobs_changed,
+            evidence: self.pump_evidence(),
+        };
         self.pump_palette();
         self.refresh_mission();
         self.tick_inbox();
         self.pump_notifications();
         self.pump_followups();
+        self.screen.def().tick(self, changes);
         if let Some(e) = self.pump_missions().into_iter().last() {
             self.error = Some(e.to_string());
         }
@@ -940,7 +930,7 @@ impl App {
     }
 
     /// Rebuilds the showcase scene from the wall while a showcase screen is up.
-    fn refresh_showcase(&mut self) {
+    pub(crate) fn refresh_showcase(&mut self) {
         if !self.showcase.active() {
             self.showcase_at = None;
             return;
@@ -990,44 +980,6 @@ impl App {
             dt_ms,
             spend_today,
         });
-    }
-
-    /// `z` and `S` open the Constellation and the Spectrum; `esc` leaves.
-    /// Returns whether the key was taken.
-    fn showcase_key(&mut self, code: KeyCode) -> bool {
-        let enterable = matches!(
-            self.screen,
-            Screen::Mission | Screen::Dashboard | Screen::Sessions
-        );
-        let mode = self.showcase.mode;
-        let open = |app: &mut App, to: ShowMode| {
-            app.showcase.mode = Some(to);
-            app.showcase_at = None;
-            app.refresh_showcase();
-            true
-        };
-        match (code, mode) {
-            (KeyCode::Char('z'), None) if enterable => open(self, ShowMode::Constellation),
-            (KeyCode::Char('S'), None) if enterable => open(self, ShowMode::Spectrum),
-            (KeyCode::Char('z'), Some(ShowMode::Spectrum)) => open(self, ShowMode::Constellation),
-            (KeyCode::Char('S'), Some(ShowMode::Constellation)) => open(self, ShowMode::Spectrum),
-            (KeyCode::Esc | KeyCode::Char('z' | 'S'), Some(_)) => {
-                self.showcase.mode = None;
-                true
-            }
-            (KeyCode::Char('t'), Some(_)) => {
-                let name = self.look.next_theme().name;
-                self.show_toast(format!("theme · {name}"));
-                true
-            }
-            (KeyCode::Char('q'), Some(_)) => false,
-            (KeyCode::Char(c), Some(_)) if Screen::by_key(c).is_some() => {
-                self.showcase.mode = None;
-                false
-            }
-            (_, Some(_)) => true,
-            _ => false,
-        }
     }
 
     pub fn selected_session(&self) -> Option<&Session> {
@@ -1160,240 +1112,239 @@ impl App {
             }
             return;
         }
-        if self.screen == Screen::Missions
-            && let Some(composer) = &mut self.missions_screen.composer
-        {
-            self.error = None;
-            self.notice = None;
-            let action = composer.handle(key);
-            let result = self.composer_action(action);
-            self.show(result);
-            return;
-        }
-        if let Some(form) = &mut self.prompts.form {
-            self.error = None;
-            match form.handle(key) {
-                FormAction::None => {}
-                FormAction::Cancel => self.prompts.form = None,
-                FormAction::Save => {
-                    let result = self.save_form();
-                    self.show(result);
-                }
-            }
+        if self.screen.def().edit_key(self, key) {
             return;
         }
 
         self.error = None;
         self.notice = None;
-        if let KeyCode::Char(c @ ('y' | 'n' | 'c')) = key.code
-            && let Some(slug) = self.plan_target()
-        {
-            let result = self.plan_key(c, &slug);
-            self.show(result);
-            return;
-        }
-        if let KeyCode::Char(c @ ('y' | 'n')) = key.code
-            && self.engine.guard.jev().is_some_and(|j| j.wants_consent())
-        {
-            let result = self.answer_consent(c == 'y');
-            self.show(result);
-            return;
-        }
-        if let KeyCode::Char(c @ ('y' | 'n' | 'a')) = key.code
-            && self.engine.guard.pending_count() > 0
-        {
-            let result = self.answer_approval(c);
-            self.show(result);
-            return;
-        }
-        if self.showcase_key(key.code) {
-            return;
-        }
-        if self.board_key(key.code) {
-            return;
-        }
-        if self.followups_key(key.code) {
-            return;
-        }
-        if self.knowledge_key(key.code) {
-            return;
-        }
-        let confirming_delete = std::mem::take(&mut self.prompts.confirm_delete);
-        match key.code {
-            KeyCode::Char('q') => self.quit = true,
-            KeyCode::Char(c) if Screen::by_key(c).is_some() => {
-                let left_focus = self.on_focus();
-                self.screen = Screen::by_key(c).unwrap_or_default();
-                if left_focus && !self.on_focus() {
-                    self.note_breakpoint(Breakpoint::FocusClosed);
-                }
-                if self.screen == Screen::Ledger {
-                    self.refresh_ledger();
+        self.dispatch_key(key);
+    }
+
+    /// Normal mode: the keymap says what the key means, and the first
+    /// action that applies runs.
+    fn dispatch_key(&mut self, key: KeyEvent) {
+        let outcome = match crate::keys::spec_of(key) {
+            Some(spec) => {
+                let stack = self.contexts();
+                self.resolver.feed(&self.keymap, &stack, spec, self.now())
+            }
+            None => Outcome::Unbound,
+        };
+        let mut delete_checked = false;
+        match outcome {
+            Outcome::Actions(found) => {
+                for action in found {
+                    // The decision overlays answer before anything else
+                    // sees the key, so they leave a pending delete alone.
+                    if !is_decision(action) && !delete_checked {
+                        self.check_delete_armed();
+                        delete_checked = true;
+                    }
+                    if self.perform(action) == Handled::Yes {
+                        return;
+                    }
                 }
             }
-            KeyCode::Char('t') if self.on_focus() => {
-                let result = self.open_terminal();
-                self.show(result);
+            Outcome::Cancelled(keys) => {
+                // Esc just drops the chord; any other key says why.
+                if keys
+                    .last()
+                    .is_some_and(|k| !swarmux_domain::keys::is_reserved(*k))
+                {
+                    let typed: Vec<String> = keys.iter().map(ToString::to_string).collect();
+                    self.notice = Some(format!("{} is not bound", typed.join(" ")));
+                }
             }
-            KeyCode::Char('t') => {
+            Outcome::Pending | Outcome::Unbound => {}
+        }
+        if !delete_checked {
+            self.check_delete_armed();
+        }
+    }
+
+    /// A key that is not an answer: a pending delete is confirmed only by
+    /// the very next key, if that is `x` again.
+    fn check_delete_armed(&mut self) {
+        self.prompts.delete_armed = std::mem::take(&mut self.prompts.confirm_delete);
+    }
+
+    /// The contexts whose keys apply now, innermost first: the decision
+    /// overlays, the screen's own, the global ones. While the constellation
+    /// or the spectrum shows only the overlays and the global keys do.
+    pub(crate) fn contexts(&self) -> Vec<Context> {
+        let mut stack = vec![DECIDE];
+        if self.showcase.mode.is_none() {
+            stack.extend(self.screen.def().contexts(self));
+        }
+        stack.push(GLOBAL);
+        stack
+    }
+
+    /// Runs `action`: the screen first, then what every screen shares.
+    fn perform(&mut self, action: Action) -> Handled {
+        if self.showcase.mode.is_some() && !passes_showcase(action) {
+            // The constellation and the spectrum take every other key.
+            return Handled::Yes;
+        }
+        if self.screen.def().handle(self, action) == Handled::Yes {
+            return Handled::Yes;
+        }
+        self.handle_shared(action)
+    }
+
+    fn handle_shared(&mut self, action: Action) -> Handled {
+        match action {
+            actions::QUIT => self.quit = true,
+            actions::BACK => self.go_back(),
+            DECIDE_YES | DECIDE_NO | DECIDE_ALWAYS | DECIDE_CANCEL_PLAN => {
+                return self.decide(action);
+            }
+            LOOK_NEXT_THEME => {
                 let name = self.look.next_theme().name;
                 self.show_toast(format!("theme · {name}"));
             }
-            KeyCode::Char('L') => {
+            LOOK_NEXT_LAYOUT => {
                 let name = self.look.next_layout().name.clone();
                 self.show_toast(format!("layout · {name}"));
             }
-            KeyCode::Tab | KeyCode::BackTab if self.screen == Screen::Mission => {
-                self.mission.pane = match self.mission.pane {
-                    Pane::Inbox => Pane::Wall,
-                    Pane::Wall => Pane::Inbox,
-                };
-            }
-            KeyCode::Up | KeyCode::Left | KeyCode::Char('k' | 'h')
-                if self.screen == Screen::Mission && self.mission.pane == Pane::Wall =>
-            {
-                self.move_wall(-1);
-            }
-            KeyCode::Down | KeyCode::Right | KeyCode::Char('j' | 'l')
-                if self.screen == Screen::Mission && self.mission.pane == Pane::Wall =>
-            {
-                self.move_wall(1);
-            }
-            KeyCode::Up | KeyCode::Char('k') if self.screen == Screen::Mission => {
-                self.mission.move_selection(-1);
-                let now = self.now();
-                self.mission.attend_selected(now);
-            }
-            KeyCode::Down | KeyCode::Char('j') if self.screen == Screen::Mission => {
-                self.mission.move_selection(1);
-                let now = self.now();
-                self.mission.attend_selected(now);
-            }
-            KeyCode::Char('x') if self.screen == Screen::Mission => {
-                let now = self.now();
-                self.mission.attend_selected(now);
-                if !self.mission.acknowledge_selected() {
-                    self.notice = Some("held tool calls stay until you answer them".into());
-                }
-            }
-            KeyCode::Char('A') if self.screen == Screen::Mission => {
-                let result = self.answer_batch();
-                self.show(result);
-            }
-            KeyCode::Char('s') if self.screen == Screen::Mission => self.begin_shelve(),
-            KeyCode::Char('u') if self.screen == Screen::Mission => self.unshelve(),
-            KeyCode::Char(c @ ('r' | 'R'))
-                if self.screen == Screen::Mission
-                    && self
-                        .mission
-                        .selected_item()
-                        .is_some_and(|i| i.suggest.is_some()) =>
-            {
-                let result = self.settle_rule(c == 'r');
-                self.show(result);
-            }
-            KeyCode::Char('F') => self.toggle_focus_mode(),
-            KeyCode::Enter if self.screen == Screen::Mission => {
-                let now = self.now();
-                self.mission.attend_selected(now);
-                let result = self.open_selected();
-                self.show(result);
-            }
-            KeyCode::Up | KeyCode::Char('k') if self.on_focus() => self.focus_state.scroll_by(1),
-            KeyCode::Down | KeyCode::Char('j') if self.on_focus() => {
-                self.focus_state.scroll_by(-1);
-            }
-            KeyCode::Char('J') if self.on_focus() => self.focus_state.scroll_answer(3),
-            KeyCode::Char('K') if self.on_focus() => self.focus_state.scroll_answer(-3),
-            KeyCode::PageUp if self.on_focus() => self.focus_state.scroll_by(10),
-            KeyCode::PageDown if self.on_focus() => self.focus_state.scroll_by(-10),
-            KeyCode::Home if self.on_focus() => self.focus_state.scroll_by(isize::MAX),
-            KeyCode::End | KeyCode::Char('G') if self.on_focus() => self.focus_state.scroll = 0,
-            KeyCode::Char('d') if self.on_focus() => {
-                let result = self.toggle_diff();
-                self.show(result);
-            }
-            KeyCode::Char(c @ ('[' | ']')) if self.on_focus() => self.scrub_checkpoint(c == ']'),
-            KeyCode::Char('D') if self.screen == Screen::Dashboard => {
-                self.dashboard.classic = !self.dashboard.classic;
-                self.focus = None;
-            }
-            KeyCode::Tab | KeyCode::BackTab
-                if self.screen == Screen::Dashboard && self.dashboard.classic =>
-            {
-                self.cycle_focus(key.code == KeyCode::Tab);
-            }
-            KeyCode::Esc if self.focus.is_some() => self.focus = None,
-            code if self.screen == Screen::Missions => {
-                let result = self.missions_key(code);
-                self.show(result);
-            }
-            code if self.screen == Screen::Queue => {
-                let result = self.queue_key(code);
-                self.show(result);
-            }
-            code if self.screen == Screen::Ledger => {
-                let result = self.ledger_key(code);
-                self.show(result);
-            }
-            KeyCode::Up if self.screen == Screen::Prompts => self.prompts.up(),
-            KeyCode::Down if self.screen == Screen::Prompts => self.prompts.down(),
-            KeyCode::Up => self.select_index(self.selected.saturating_sub(1)),
-            KeyCode::Down if self.selected + 1 < self.sessions.len() => {
-                self.select_index(self.selected + 1);
-            }
-            KeyCode::Char('n') if self.screen == Screen::Sessions => {
-                self.mode = Mode::Input(InputPurpose::NewSession, Input::default());
-            }
-            KeyCode::Char('w') if self.screen == Screen::Sessions => {
-                if self.workspaces.is_empty() {
-                    self.error =
-                        Some("no workspaces: add one with `swarmux workspace add <folder>`".into());
+            INBOX_FOCUS_MODE => self.toggle_focus_mode(),
+            SHOWCASE_CONSTELLATION | SHOWCASE_SPECTRUM => return self.showcase_action(action),
+            PROMPT_SEND | PROMPT_ROUTE => self.start_prompt(action == PROMPT_ROUTE),
+            BOARD_ANSWER => return self.board_answer(),
+            other => {
+                if let Some(to) = screens::nav_target(other) {
+                    self.showcase.mode = None;
+                    self.navigate(to);
+                } else if let Some(planned) = screens::PLANNED.iter().find(|p| p.action == other) {
+                    self.showcase.mode = None;
+                    self.go_planned(planned);
                 } else {
-                    let first = self.workspaces[0].name.clone();
-                    self.mode =
-                        Mode::Input(InputPurpose::WorkspaceSession, Input::with_text(&first));
+                    return Handled::No;
                 }
             }
-            KeyCode::Char('l') if self.screen == Screen::Sessions => {
-                let result = self.toggle_lean();
-                self.show(result);
+        }
+        Handled::Yes
+    }
+
+    /// The answers to whatever is asking: a proposed plan first, then the
+    /// JEV consent, then the oldest held tool call. Does nothing, and lets
+    /// the key through, when nothing is asking.
+    fn decide(&mut self, action: Action) -> Handled {
+        let answer = match action {
+            DECIDE_YES => Decision::Yes,
+            DECIDE_NO => Decision::No,
+            DECIDE_ALWAYS => Decision::Always,
+            _ => Decision::Cancel,
+        };
+        if answer != Decision::Always
+            && let Some(slug) = self.plan_target()
+        {
+            let result = self.answer_plan(answer, &slug);
+            self.show(result);
+            return Handled::Yes;
+        }
+        if matches!(answer, Decision::Yes | Decision::No)
+            && self.engine.guard.jev().is_some_and(|j| j.wants_consent())
+        {
+            let result = self.answer_consent(answer == Decision::Yes);
+            self.show(result);
+            return Handled::Yes;
+        }
+        if answer != Decision::Cancel && self.engine.guard.pending_count() > 0 {
+            let result = self.answer_approval(answer);
+            self.show(result);
+            return Handled::Yes;
+        }
+        Handled::No
+    }
+
+    /// Opens the constellation or the spectrum from a screen that allows
+    /// it, switches between them, or closes the one that shows.
+    fn showcase_action(&mut self, action: Action) -> Handled {
+        let target = if action == SHOWCASE_CONSTELLATION {
+            ShowMode::Constellation
+        } else {
+            ShowMode::Spectrum
+        };
+        match self.showcase.mode {
+            None if !self.screen.def().allows_showcase() => return Handled::No,
+            Some(current) if current == target => self.showcase.mode = None,
+            _ => {
+                self.showcase.mode = Some(target);
+                self.showcase_at = None;
+                self.refresh_showcase();
             }
-            KeyCode::Char(c) if self.screen == Screen::Prompts => {
-                let result = self.prompts_key(c, confirming_delete);
-                self.show(result);
+        }
+        Handled::Yes
+    }
+
+    /// Esc: leaves the constellation or the spectrum, else drops the
+    /// highlighted panel, else returns to the screen the user came from.
+    fn go_back(&mut self) {
+        if self.showcase.mode.take().is_some() || self.focus.take().is_some() {
+            return;
+        }
+        if let Some(previous) = self.nav.back() {
+            self.switch_to(previous);
+        }
+    }
+
+    /// Shows `to`, remembering the screen being left for `Esc`.
+    pub(crate) fn navigate(&mut self, to: Screen) {
+        self.nav.visit(self.screen, to);
+        self.switch_to(to);
+    }
+
+    fn switch_to(&mut self, to: Screen) {
+        let left_focus = self.on_focus();
+        self.screen = to;
+        if left_focus && !self.on_focus() {
+            self.note_breakpoint(Breakpoint::FocusClosed);
+        }
+        to.def().enter(self);
+    }
+
+    /// A screen that is planned but not built: go to the nearest one that
+    /// exists, and say so.
+    fn go_planned(&mut self, planned: &Planned) {
+        match planned.stand_in {
+            Some(to) => {
+                self.navigate(to);
+                self.notice = Some(format!(
+                    "{} is not built yet: showing {}",
+                    planned.name,
+                    to.title()
+                ));
             }
-            KeyCode::Char('v') if self.screen == Screen::Dashboard => {
-                let on = !self.engine.jobs.review_next();
-                self.notice = Some(if self.engine.jobs.set_review_next(on) {
-                    format!(
-                        "review on: the next jobs are audited by {} when they finish",
-                        self.engine.jobs.review_model()
-                    )
-                } else if on {
-                    "review is not available: no git workspace configured".into()
-                } else {
-                    "review off for the next jobs".into()
-                });
-            }
-            KeyCode::Char(c @ ('p' | 'P'))
-                if matches!(self.screen, Screen::Dashboard | Screen::Mission) =>
-            {
-                if self.screen == Screen::Mission {
-                    self.select_inbox_session();
-                }
-                if self.sessions.is_empty() {
-                    self.error = Some("create a session first: press 6 then n".into());
-                } else {
-                    let purpose = if c == 'P' {
-                        InputPurpose::RoutedPrompt
-                    } else {
-                        InputPurpose::Prompt
-                    };
-                    self.mode = Mode::Input(purpose, Input::default());
-                }
-            }
-            _ => {}
+            None => self.notice = Some(format!("{} is not built yet", planned.name)),
+        }
+    }
+
+    /// Asks for a prompt to send: to the selected session, or to the one
+    /// swarmux picks.
+    fn start_prompt(&mut self, routed: bool) {
+        if self.screen == Screen::Mission {
+            self.select_inbox_session();
+        }
+        if self.sessions.is_empty() {
+            self.error = Some("create a session first: press 6 then n".into());
+        } else {
+            let purpose = if routed {
+                InputPurpose::RoutedPrompt
+            } else {
+                InputPurpose::Prompt
+            };
+            self.mode = Mode::Input(purpose, Input::default());
+        }
+    }
+
+    /// Selects the previous or next session.
+    pub(crate) fn move_session(&mut self, delta: isize) {
+        if delta < 0 {
+            self.select_index(self.selected.saturating_sub(1));
+        } else if self.selected + 1 < self.sessions.len() {
+            self.select_index(self.selected + 1);
         }
     }
 
@@ -1418,65 +1369,11 @@ impl App {
     }
 
     /// The mission of the selected card.
-    fn selected_mission(&self) -> Option<&swarmux_domain::mission::Mission> {
+    pub(crate) fn selected_mission(&self) -> Option<&swarmux_domain::mission::Mission> {
         self.missions().get(self.missions_screen.selected)
     }
 
-    fn missions_key(&mut self, code: KeyCode) -> AppResult<()> {
-        let count = self.missions().len();
-        let slug = self.selected_mission().map(|m| m.slug.clone());
-        match code {
-            KeyCode::Up | KeyCode::Char('k') => self.missions_screen.move_by(-1, count),
-            KeyCode::Down | KeyCode::Char('j') => self.missions_screen.move_by(1, count),
-            KeyCode::Char('n') => {
-                if self.engine.missions.is_none() {
-                    self.notice = Some("missions are not set up in this run".into());
-                } else if self.sessions.is_empty() {
-                    self.error = Some("create a session first: press 6 then n".into());
-                } else {
-                    self.missions_screen.composer = Some(Composer::blank());
-                }
-            }
-            KeyCode::Char('e') => {
-                if let Some(m) = self.selected_mission() {
-                    if m.state.in_flight() {
-                        self.notice =
-                            Some(format!("{} is {}: it can't change now", m.slug, m.state));
-                    } else {
-                        self.missions_screen.composer = Some(Composer::edit(m));
-                    }
-                }
-            }
-            KeyCode::Char('l') => {
-                if let (Some(service), Some(slug)) = (&mut self.engine.missions, slug) {
-                    service.lint(&slug)?;
-                }
-            }
-            KeyCode::Char('f') => {
-                if let Some(slug) = slug {
-                    self.fix_mission(&slug)?;
-                }
-            }
-            KeyCode::Char('r') => {
-                if let Some(slug) = slug {
-                    self.launch_mission(&slug)?;
-                }
-            }
-            KeyCode::Char('p') => {
-                if let Some(slug) = slug {
-                    self.toggle_plan_first(&slug)?;
-                }
-            }
-            KeyCode::Enter => match self.selected_mission().and_then(|m| m.job) {
-                Some(job) => self.view(job)?,
-                None => self.notice = Some("that mission has not run yet: r runs it".into()),
-            },
-            _ => {}
-        }
-        Ok(())
-    }
-
-    fn composer_action(&mut self, action: ComposerAction) -> AppResult<()> {
+    pub(crate) fn composer_action(&mut self, action: ComposerAction) -> AppResult<()> {
         match action {
             ComposerAction::None => Ok(()),
             ComposerAction::Cancel => {
@@ -1561,7 +1458,7 @@ impl App {
         Ok(slug)
     }
 
-    fn fix_mission(&mut self, slug: &str) -> AppResult<()> {
+    pub(crate) fn fix_mission(&mut self, slug: &str) -> AppResult<()> {
         let Some(service) = &mut self.engine.missions else {
             return Ok(());
         };
@@ -1576,7 +1473,7 @@ impl App {
 
     /// Compiles the mission into a job and follows it; a mission that
     /// plans first is planned before anything is built.
-    fn launch_mission(&mut self, slug: &str) -> AppResult<()> {
+    pub(crate) fn launch_mission(&mut self, slug: &str) -> AppResult<()> {
         let Some(service) = &mut self.engine.missions else {
             return Ok(());
         };
@@ -1603,7 +1500,7 @@ impl App {
     }
 
     /// Makes the session of the selected inbox item the one prompts go to.
-    fn select_inbox_session(&mut self) {
+    pub(crate) fn select_inbox_session(&mut self) {
         if self.mission.pane == Pane::Wall {
             if let Some(tile) = self.wall().into_iter().nth(self.mission.wall_at)
                 && let Some(at) = self.sessions.iter().position(|s| s.id == tile.session)
@@ -1622,7 +1519,7 @@ impl App {
 
     /// Opens the job of the selected inbox item in Focus and marks what it
     /// left in the inbox as read.
-    fn open_selected(&mut self) -> AppResult<()> {
+    pub(crate) fn open_selected(&mut self) -> AppResult<()> {
         if self.open_plan_item() {
             return Ok(());
         }
@@ -1644,7 +1541,7 @@ impl App {
     }
 
     /// Focus is showing (not the classic panel grid).
-    fn on_focus(&self) -> bool {
+    pub(crate) fn on_focus(&self) -> bool {
         self.screen == Screen::Dashboard && !self.dashboard.classic
     }
 
@@ -1682,7 +1579,7 @@ impl App {
         crate::workspaces::find(&self.workspaces, session.workspace)
     }
 
-    fn move_wall(&mut self, delta: isize) {
+    pub(crate) fn move_wall(&mut self, delta: isize) {
         let last = self.sessions.len().saturating_sub(1);
         self.mission.wall_at = self.mission.wall_at.saturating_add_signed(delta).min(last);
         self.select_inbox_session();
@@ -1704,7 +1601,7 @@ impl App {
     }
 
     /// `t`: the session, resumed in a new terminal tab.
-    fn open_terminal(&mut self) -> AppResult<()> {
+    pub(crate) fn open_terminal(&mut self) -> AppResult<()> {
         let Some(terminal) = self.terminal.clone() else {
             self.notice = Some("no terminal launcher is set up".into());
             return Ok(());
@@ -1719,7 +1616,7 @@ impl App {
     }
 
     /// `d`: the uncommitted changes in place of the answer, and back.
-    fn toggle_diff(&mut self) -> AppResult<()> {
+    pub(crate) fn toggle_diff(&mut self) -> AppResult<()> {
         if self.focus_state.diff.take().is_some() {
             self.note_breakpoint(Breakpoint::DiffReviewed);
             return Ok(());
@@ -1739,7 +1636,7 @@ impl App {
     }
 
     /// `[` and `]`: step through the job's checkpoints.
-    fn scrub_checkpoint(&mut self, forward: bool) {
+    pub(crate) fn scrub_checkpoint(&mut self, forward: bool) {
         let Some(job) = self.current_job().map(|j| j.job_id) else {
             return;
         };
@@ -1759,7 +1656,7 @@ impl App {
 
     /// Moves the focus highlight to the next (or previous) boxed panel of
     /// the layout, then off.
-    fn cycle_focus(&mut self, forward: bool) {
+    pub(crate) fn cycle_focus(&mut self, forward: bool) {
         let panels = self.look.layout_spec().panel_ids();
         let boxed: Vec<PanelId> = panels.into_iter().filter(|p| p.panel().boxed()).collect();
         if boxed.is_empty() {
@@ -1786,8 +1683,8 @@ impl App {
         }
     }
 
-    /// `y` approves, `n` denies, `a` always allows the oldest held tool call.
-    fn answer_approval(&mut self, key: char) -> AppResult<()> {
+    /// Approves, denies or always allows the oldest held tool call.
+    fn answer_approval(&mut self, answer: Decision) -> AppResult<()> {
         let Some(target) = self.approval_target() else {
             return Ok(());
         };
@@ -1799,9 +1696,9 @@ impl App {
         if App::is_irreversible(&target) {
             // Irreversible calls are confirmed by naming their target, and
             // are never allowed for good.
-            match key {
-                'y' => self.begin_confirm(&target),
-                'a' => {
+            match answer {
+                Decision::Yes => self.begin_confirm(&target),
+                Decision::Always => {
                     self.notice =
                         Some("irreversible calls are never always-allowed: y to confirm".into());
                 }
@@ -1815,10 +1712,12 @@ impl App {
         if let Some(job) = target.request.job_id {
             self.focus_state.note_human(job, now);
         }
-        self.mission.alarms_mut().answered_request(id, key != 'n');
-        match key {
-            'y' => self.engine.guard.approve(id),
-            'n' => self.engine.guard.deny(id),
+        self.mission
+            .alarms_mut()
+            .answered_request(id, answer != Decision::No);
+        match answer {
+            Decision::Yes => self.engine.guard.approve(id),
+            Decision::No => self.engine.guard.deny(id),
             _ => {
                 let done = self.engine.guard.always_allow(id)?;
                 self.notice = Some(match done.not_saved {
@@ -1831,58 +1730,6 @@ impl App {
                 Ok(())
             }
         }
-    }
-
-    fn queue_key(&mut self, code: KeyCode) -> AppResult<()> {
-        let rows = self.engine.jobs.queue();
-        match self.queue.handle(code, &rows) {
-            QueueAction::None => {}
-            QueueAction::Cancel(id) => self.engine.jobs.cancel(id)?,
-            QueueAction::Retry(id) => {
-                let new = self.engine.jobs.retry(id)?;
-                self.queue.selected = Some(new);
-            }
-            QueueAction::Priority(id, delta) => {
-                self.engine.jobs.change_priority(id, delta)?;
-            }
-            QueueAction::View(id) => self.view(id)?,
-        }
-        Ok(())
-    }
-
-    fn ledger_key(&mut self, code: KeyCode) -> AppResult<()> {
-        match self.ledger.handle(code) {
-            LedgerAction::None => {}
-            LedgerAction::Moved => self.load_detail(),
-            LedgerAction::Filtered => self.refresh_ledger(),
-            LedgerAction::Search => {
-                let input = Input::with_text(&self.ledger.query);
-                self.mode = Mode::Input(InputPurpose::Search, input);
-            }
-            LedgerAction::Rerun(id) => {
-                self.engine.jobs.retry(id)?;
-                self.refresh_ledger();
-            }
-            LedgerAction::Fork(id) => {
-                self.engine.jobs.fork(id)?;
-                self.refresh_ledger();
-            }
-            LedgerAction::View(id) => self.view(id)?,
-            LedgerAction::Verify(slug) => {
-                if let Some(evidence) = &self.evidence {
-                    evidence.start_verify(&slug)?;
-                    self.show_toast(format!("verifying {slug}"));
-                }
-            }
-            LedgerAction::Labels => match &self.evidence {
-                Some(evidence) => {
-                    let asked = evidence.request_labels()?;
-                    self.show_toast(format!("asked GitHub about {asked} branch(es)"));
-                }
-                None => self.notice = Some("evidence is not set up in this run".into()),
-            },
-        }
-        Ok(())
     }
 
     /// Collects finished verifications and label answers; whether any
@@ -1927,13 +1774,13 @@ impl App {
             self.dashboard.replay_prompt = Some(prompt);
             self.dashboard.replay_answer = answer;
         }
-        self.screen = Screen::Dashboard;
+        self.navigate(Screen::Dashboard);
         Ok(())
     }
 
     /// Rebuilds the run cards: every job joined with its mission and
     /// bundle, then the search and filter applied.
-    fn refresh_ledger(&mut self) {
+    pub(crate) fn refresh_ledger(&mut self) {
         let rows = match self.history_service.list("") {
             Ok(rows) => rows,
             Err(e) => {
@@ -1966,7 +1813,7 @@ impl App {
         self.load_detail();
     }
 
-    fn load_detail(&mut self) {
+    pub(crate) fn load_detail(&mut self) {
         self.ledger.detail = None;
         self.ledger.bundle = None;
         let Some(id) = self.ledger.selected_row().map(|r| r.job_id) else {
@@ -1985,32 +1832,7 @@ impl App {
         }
     }
 
-    fn prompts_key(&mut self, c: char, confirming_delete: bool) -> AppResult<()> {
-        match c {
-            'n' => self.prompts.form = Some(PromptForm::blank()),
-            'e' => {
-                if let Some(p) = self.prompts.selected_prompt() {
-                    self.prompts.form = Some(PromptForm::edit(p));
-                }
-            }
-            'x' => {
-                if let Some(id) = self.prompts.selected_prompt().map(|p| p.id) {
-                    if confirming_delete {
-                        self.prompt_service.delete(id)?;
-                        self.refresh_prompts(None);
-                    } else {
-                        self.prompts.confirm_delete = true;
-                    }
-                }
-            }
-            'd' => return self.start_template_dispatch(false),
-            'D' => return self.start_template_dispatch(true),
-            _ => {}
-        }
-        Ok(())
-    }
-
-    fn save_form(&mut self) -> AppResult<()> {
+    pub(crate) fn save_form(&mut self) -> AppResult<()> {
         let Some(form) = &self.prompts.form else {
             return Ok(());
         };
@@ -2029,7 +1851,7 @@ impl App {
 
     /// Asks for the selected template's variables, then dispatches it (or
     /// routes it, with `route`).
-    fn start_template_dispatch(&mut self, route: bool) -> AppResult<()> {
+    pub(crate) fn start_template_dispatch(&mut self, route: bool) -> AppResult<()> {
         let Some(prompt) = self.prompts.selected_prompt() else {
             self.error = Some("no prompt selected: press n to write one".into());
             return Ok(());
@@ -2066,7 +1888,7 @@ impl App {
             return Ok(());
         }
         if pending.route {
-            self.screen = Screen::Dashboard;
+            self.navigate(Screen::Dashboard);
             return self.route_template(pending);
         }
         let rendered =
@@ -2084,7 +1906,7 @@ impl App {
             .find(|s| s.id == pending.session_id)
             .cloned();
         self.refresh_sessions(session.as_ref());
-        self.screen = Screen::Dashboard;
+        self.navigate(Screen::Dashboard);
         Ok(())
     }
 
@@ -2096,7 +1918,7 @@ impl App {
     }
 
     /// Lean on or off for the selected session's next jobs.
-    fn toggle_lean(&mut self) -> AppResult<()> {
+    pub(crate) fn toggle_lean(&mut self) -> AppResult<()> {
         let Some(session) = self.selected_session().cloned() else {
             return Ok(());
         };
@@ -2170,7 +1992,7 @@ impl App {
         self.select_index(i.min(self.sessions.len().saturating_sub(1)));
     }
 
-    fn select_index(&mut self, i: usize) {
+    pub(crate) fn select_index(&mut self, i: usize) {
         self.selected = i;
         self.selected_id = self.sessions.get(i).map(|s| s.id);
     }

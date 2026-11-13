@@ -4,12 +4,14 @@
 
 use std::rc::Rc;
 
-use crossterm::event::KeyCode;
 use swarmux_application::{FollowUpService, Intent, Reply};
 use swarmux_domain::followup::{FollowUp, OwnerBrief, StandingOrder};
+use swarmux_domain::keys::{Action, actions};
 
 use crate::app::{App, Screen};
 use crate::missions::Composer;
+use crate::screens::Handled;
+use crate::screens::followups::{APPROVE, DECLINE, DRAFT_MISSION, LATER, OPEN_JOB};
 use crate::ui::input::Input;
 
 /// Frames between reads of the database while the screen is open.
@@ -78,9 +80,14 @@ impl App {
         for brief in &pumped.briefs {
             self.announce_brief(brief);
         }
-        let stale = self.screen == Screen::Followups
-            && self.frame.saturating_sub(self.followup_screen.loaded_at) >= REFRESH_FRAMES;
-        if pumped.changed || stale {
+        if pumped.changed {
+            self.refresh_followups();
+        }
+    }
+
+    /// While the screen shows, re-reads the database now and then.
+    pub(crate) fn refresh_followups_if_stale(&mut self) {
+        if self.frame.saturating_sub(self.followup_screen.loaded_at) >= REFRESH_FRAMES {
             self.refresh_followups();
         }
     }
@@ -149,26 +156,22 @@ impl App {
             .and_then(|i| s.intents.get(i))
     }
 
-    /// The Follow-ups keys: `↑↓` select, `a` approve, `d` decline, `l`
-    /// later, `o` open the job it came from, `m` draft a mission from it.
-    /// Whether the key was taken.
-    pub(crate) fn followups_key(&mut self, code: KeyCode) -> bool {
-        if self.screen != Screen::Followups {
-            return false;
-        }
+    /// The Follow-ups actions: select, approve, decline, later, open the
+    /// job it came from, draft a mission from it.
+    pub(crate) fn followups_action(&mut self, action: Action) -> Handled {
         let rows = self.followup_screen.rows();
-        match code {
-            KeyCode::Up | KeyCode::Char('k') => {
+        match action {
+            actions::LIST_PREV => {
                 self.followup_screen.selected = self.followup_screen.selected.saturating_sub(1);
             }
-            KeyCode::Down | KeyCode::Char('j') => {
+            actions::LIST_NEXT => {
                 self.followup_screen.selected =
                     (self.followup_screen.selected + 1).min(rows.saturating_sub(1));
             }
-            KeyCode::Char('a') => self.answer_card(Reply::Approve),
-            KeyCode::Char('d') => self.answer_card(Reply::Decline),
-            KeyCode::Char('l') => self.answer_card(Reply::Defer),
-            KeyCode::Char('o') => {
+            APPROVE => self.answer_card(Reply::Approve),
+            DECLINE => self.answer_card(Reply::Decline),
+            LATER => self.answer_card(Reply::Defer),
+            OPEN_JOB => {
                 let job = self
                     .selected_card()
                     .and_then(FollowUp::first_job)
@@ -190,10 +193,10 @@ impl App {
                     None => self.notice = Some("no job to open for this one".into()),
                 }
             }
-            KeyCode::Char('m') => self.draft_mission(),
-            _ => return false,
+            DRAFT_MISSION => self.draft_mission(),
+            _ => return Handled::No,
         }
-        true
+        Handled::Yes
     }
 
     fn answer_card(&mut self, reply: Reply) {

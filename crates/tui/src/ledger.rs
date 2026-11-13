@@ -2,7 +2,6 @@
 //! numbers over all runs, the digest of what happened while the user was
 //! away, and the selected run's detail and bundle.
 
-use crossterm::event::KeyCode;
 use swarmux_application::{JobDetail, JobSummary, Stored};
 use swarmux_domain::JobId;
 use swarmux_domain::evidence::{Brief, LabelKind, LedgerStats, RunCard, RunOutcome};
@@ -55,7 +54,22 @@ impl Filter {
     }
 }
 
-/// What a key on the Ledger screen asks for.
+/// What the user asks of the Ledger screen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Command {
+    Search,
+    /// The next filter.
+    Filter,
+    Labels,
+    Prev,
+    Next,
+    Rerun,
+    Fork,
+    View,
+    Verify,
+}
+
+/// What a command on the Ledger screen comes to.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LedgerAction {
     None,
@@ -116,33 +130,33 @@ impl LedgerScreen {
         self.selected = self.selected.min(self.rows.len().saturating_sub(1));
     }
 
-    pub fn handle(&mut self, key: KeyCode) -> LedgerAction {
-        match key {
-            KeyCode::Char('/') => return LedgerAction::Search,
-            KeyCode::Char('o') => {
+    pub fn handle(&mut self, command: Command) -> LedgerAction {
+        match command {
+            Command::Search => return LedgerAction::Search,
+            Command::Filter => {
                 self.filter = self.filter.next();
                 self.selected = 0;
                 return LedgerAction::Filtered;
             }
-            KeyCode::Char('l') => return LedgerAction::Labels,
+            Command::Labels => return LedgerAction::Labels,
             _ => {}
         }
         let Some(id) = self.selected_row().map(|r| r.job_id) else {
             return LedgerAction::None;
         };
-        match key {
-            KeyCode::Up if self.selected > 0 => {
+        match command {
+            Command::Prev if self.selected > 0 => {
                 self.selected -= 1;
                 LedgerAction::Moved
             }
-            KeyCode::Down if self.selected + 1 < self.rows.len() => {
+            Command::Next if self.selected + 1 < self.rows.len() => {
                 self.selected += 1;
                 LedgerAction::Moved
             }
-            KeyCode::Char('r') => LedgerAction::Rerun(id),
-            KeyCode::Char('f') => LedgerAction::Fork(id),
-            KeyCode::Enter => LedgerAction::View(id),
-            KeyCode::Char('v') => match self.selected_card().and_then(|c| c.mission.clone()) {
+            Command::Rerun => LedgerAction::Rerun(id),
+            Command::Fork => LedgerAction::Fork(id),
+            Command::View => LedgerAction::View(id),
+            Command::Verify => match self.selected_card().and_then(|c| c.mission.clone()) {
                 Some(slug) if self.bundle.is_some() => LedgerAction::Verify(slug),
                 _ => LedgerAction::None,
             },
@@ -201,18 +215,18 @@ mod tests {
     #[test]
     fn moving_and_actions() {
         let mut h = LedgerScreen::default();
-        assert_eq!(h.handle(KeyCode::Char('r')), LedgerAction::None);
-        assert_eq!(h.handle(KeyCode::Char('/')), LedgerAction::Search);
-        assert_eq!(h.handle(KeyCode::Char('l')), LedgerAction::Labels);
+        assert_eq!(h.handle(Command::Rerun), LedgerAction::None);
+        assert_eq!(h.handle(Command::Search), LedgerAction::Search);
+        assert_eq!(h.handle(Command::Labels), LedgerAction::Labels);
         set(&mut h, &[3, 2]);
-        assert_eq!(h.handle(KeyCode::Up), LedgerAction::None);
-        assert_eq!(h.handle(KeyCode::Down), LedgerAction::Moved);
-        assert_eq!(h.handle(KeyCode::Down), LedgerAction::None);
-        assert_eq!(h.handle(KeyCode::Char('r')), LedgerAction::Rerun(JobId(2)));
-        assert_eq!(h.handle(KeyCode::Char('f')), LedgerAction::Fork(JobId(2)));
-        assert_eq!(h.handle(KeyCode::Enter), LedgerAction::View(JobId(2)));
+        assert_eq!(h.handle(Command::Prev), LedgerAction::None);
+        assert_eq!(h.handle(Command::Next), LedgerAction::Moved);
+        assert_eq!(h.handle(Command::Next), LedgerAction::None);
+        assert_eq!(h.handle(Command::Rerun), LedgerAction::Rerun(JobId(2)));
+        assert_eq!(h.handle(Command::Fork), LedgerAction::Fork(JobId(2)));
+        assert_eq!(h.handle(Command::View), LedgerAction::View(JobId(2)));
         assert_eq!(
-            h.handle(KeyCode::Char('v')),
+            h.handle(Command::Verify),
             LedgerAction::None,
             "no bundle, nothing to verify"
         );
@@ -232,11 +246,11 @@ mod tests {
     #[test]
     fn the_filter_cycles_and_admits() {
         let mut h = LedgerScreen::default();
-        assert_eq!(h.handle(KeyCode::Char('o')), LedgerAction::Filtered);
+        assert_eq!(h.handle(Command::Filter), LedgerAction::Filtered);
         assert_eq!(h.filter, Filter::Delivered);
         let mut seen = vec![h.filter];
         for _ in 0..3 {
-            h.handle(KeyCode::Char('o'));
+            h.handle(Command::Filter);
             seen.push(h.filter);
         }
         assert_eq!(

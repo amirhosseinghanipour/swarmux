@@ -16,6 +16,8 @@ pub struct PromptsScreen {
     pub form: Option<PromptForm>,
     /// `x` was pressed once; a second `x` deletes.
     pub confirm_delete: bool,
+    /// The last key press found the delete armed (so it may delete).
+    pub delete_armed: bool,
     pub pending: Option<PendingDispatch>,
 }
 

@@ -332,7 +332,6 @@ fn shorten(s: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::Screen;
     use crate::app::tests_support::test_app;
     use crate::ui::render_to_string;
     use crossterm::event::KeyCode;
@@ -361,7 +360,7 @@ mod tests {
         let job = t.app.current_job().unwrap().job_id;
         t.inbox.push(Some(job), "Bash", "make deploy");
         t.app.update();
-        for screen in Screen::ALL {
+        for screen in crate::screens::all() {
             t.app.screen = screen;
             let out = render_to_string(&t.app, 120, 30);
             assert!(out.contains("approval needed"), "{screen:?}\n{out}");

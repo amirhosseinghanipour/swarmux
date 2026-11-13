@@ -7,13 +7,13 @@
 
 use std::rc::Rc;
 
-use crossterm::event::KeyCode;
 use swarmux_application::{AppResult, BoardInbox, BoardService};
 use swarmux_domain::AttentionKind;
 use swarmux_domain::board::{BoardEntry, BoardKind};
 
 use crate::app::{App, InputPurpose, Mode, Screen};
 use crate::mission::Pane;
+use crate::screens::Handled;
 use crate::ui::input::Input;
 
 /// Entries the screen lists.
@@ -145,40 +145,28 @@ impl App {
         }
     }
 
-    /// The Board's keys: `↑↓` select, `r` (or `⏎` on a question in the
-    /// inbox) answer, `x` dismiss a question. Whether the key was taken.
-    pub(crate) fn board_key(&mut self, code: KeyCode) -> bool {
-        if self.screen == Screen::Board {
-            let count = self.board_entries().len();
-            match code {
-                KeyCode::Up | KeyCode::Char('k') => {
-                    self.board_screen.selected = self.board_screen.selected.saturating_sub(1);
-                    return true;
-                }
-                KeyCode::Down | KeyCode::Char('j') => {
-                    self.board_screen.selected =
-                        (self.board_screen.selected + 1).min(count.saturating_sub(1));
-                    return true;
-                }
-                _ => {}
-            }
+    /// Answer the selected question: on the Board screen, or in the inbox
+    /// of Mission control. Does nothing when no question is selected.
+    pub(crate) fn board_answer(&mut self) -> Handled {
+        let Some(id) = self.board_target() else {
+            return Handled::No;
+        };
+        self.board_screen.answering = Some(id);
+        self.mode = Mode::Input(InputPurpose::BoardAnswer, Input::default());
+        Handled::Yes
+    }
+
+    /// Close the selected question without an answer (the Board screen).
+    pub(crate) fn board_dismiss(&mut self) -> Handled {
+        if self.screen != Screen::Board {
+            return Handled::No;
         }
         let Some(id) = self.board_target() else {
-            return false;
+            return Handled::No;
         };
-        match code {
-            KeyCode::Char('r') | KeyCode::Enter => {
-                self.board_screen.answering = Some(id);
-                self.mode = Mode::Input(InputPurpose::BoardAnswer, Input::default());
-                true
-            }
-            KeyCode::Char('x') if self.screen == Screen::Board => {
-                let result = self.dismiss_question(id);
-                self.show(result);
-                true
-            }
-            _ => false,
-        }
+        let result = self.dismiss_question(id);
+        self.show(result);
+        Handled::Yes
     }
 
     fn dismiss_question(&mut self, id: i64) -> AppResult<()> {
