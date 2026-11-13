@@ -73,9 +73,17 @@ fn piece(app: &App, hint: &Hint) -> Option<String> {
 }
 
 /// `0-9 screens` when the screens are on digits, else nothing (`? help`
-/// lists them).
+/// lists them). A screen whose default keys are a chord only (Work, `g w`)
+/// is not one of the digits.
 fn screens_piece(app: &App) -> Option<String> {
+    let on_a_digit = |s: &screens::Screen| {
+        s.def()
+            .nav_keys()
+            .iter()
+            .any(|k| k.chars().all(|c| c.is_ascii_digit()))
+    };
     let digits: Option<Vec<char>> = screens::all()
+        .filter(on_a_digit)
         .map(|s| {
             let label = crate::keys::nav_label(app.keymap(), s);
             let mut chars = label.chars();

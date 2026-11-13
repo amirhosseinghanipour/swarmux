@@ -6,9 +6,9 @@
 mod answer;
 mod cards;
 pub mod layout;
-mod parts;
+pub(crate) mod parts;
 mod side;
-mod stream;
+pub(crate) mod stream;
 
 use ratatui::{
     Frame,

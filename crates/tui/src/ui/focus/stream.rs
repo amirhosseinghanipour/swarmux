@@ -12,8 +12,8 @@ use ratatui::{
 
 use super::parts::diff_style;
 use crate::app::App;
-use crate::focus::Focus;
 use crate::focus::stream::{Row, RowKind};
+use crate::focus::{AgentLine, Focus};
 use crate::theme::Theme;
 use crate::ui::dashboard::{dim, fit};
 use crate::ui::look::{Icon, IconSet};
@@ -101,6 +101,17 @@ fn tree(app: &App, last: bool) -> &'static str {
 }
 
 fn row_line(app: &App, f: &Focus, row: &Row, width: usize) -> Line<'static> {
+    row_line_of(app, (&f.who.model, &f.agents), row, width)
+}
+
+/// One row of a stream, for the lead's `model` and its `agents` (the
+/// hue of whoever did it). Focus and Work draw the same rows.
+pub(crate) fn row_line_of(
+    app: &App,
+    (model, agents): (&str, &[AgentLine]),
+    row: &Row,
+    width: usize,
+) -> Line<'static> {
     let t = &app.look.theme;
     let time = Span::styled(format!("{:>TIME_W$} ", row.time), Style::new().fg(t.dim));
     let indent = if row.depth > 0 {
@@ -117,7 +128,7 @@ fn row_line(app: &App, f: &Focus, row: &Row, width: usize) -> Line<'static> {
     let mut spans = vec![time, indent];
     match &row.kind {
         RowKind::Call { tool, subject } => {
-            let hue = actor_hue(t, f, row);
+            let hue = actor_hue(t, model, agents, row);
             let who = if row.depth > 0 {
                 format!("{} ", row.actor)
             } else {
@@ -189,11 +200,11 @@ fn row_line(app: &App, f: &Focus, row: &Row, width: usize) -> Line<'static> {
 }
 
 /// The colour of whoever did it: the lead's model, or the subagent's.
-fn actor_hue(t: &Theme, f: &Focus, row: &Row) -> ratatui::style::Color {
+fn actor_hue(t: &Theme, model: &str, agents: &[AgentLine], row: &Row) -> ratatui::style::Color {
     if row.depth == 0 {
-        return t.model(Some(&f.who.model));
+        return t.model(Some(model));
     }
-    f.agents
+    agents
         .iter()
         .find(|a| a.kind == row.actor)
         .map_or(t.muted, |a| t.model(a.model.as_deref()))

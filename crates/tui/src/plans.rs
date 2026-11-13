@@ -24,6 +24,7 @@ impl App {
                 .get(self.missions_screen.selected)?
                 .slug
                 .clone(),
+            Screen::Work => crate::work::plan_slug(&self.work_selected()?)?.to_string(),
             Screen::Mission if self.mission.pane == Pane::Inbox => {
                 let item = self
                     .mission

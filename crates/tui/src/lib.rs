@@ -32,6 +32,8 @@ pub mod theme_export;
 #[cfg(test)]
 mod theme_lint;
 mod ui;
+mod work;
+mod work_actions;
 mod workspaces;
 
 pub use app::{App, Launch};

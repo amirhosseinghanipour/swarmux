@@ -11,7 +11,7 @@ use std::collections::HashMap;
 
 use swarmux_domain::{JobId, Millis};
 
-pub use model::{Checkpoints, Focus, LaneKind, ReviewColumn};
+pub use model::{AgentLine, Checkpoints, Focus, LaneKind, ReviewColumn};
 pub use sat::Confidence;
 
 /// Human events kept per job.

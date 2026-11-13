@@ -145,11 +145,13 @@ pub struct App {
     pub knowledge_screen: crate::knowledge::KnowledgeScreen,
     /// The Follow-ups screen: cards, approved intents and the brief preview.
     pub followup_screen: crate::followups::FollowScreen,
+    /// The Work screen: its selection, tab and scroll.
+    pub work_screen: crate::work::WorkScreen,
     /// Jobs, the Guard, hooks, the gate, the watchdog, missions and the
     /// board: the services that keep the work going.
     pub(crate) engine: Engine,
     /// The console read model: what the Work and Deck screens read.
-    console: ConsoleService,
+    pub(crate) console: ConsoleService,
     /// Bundles, their verification and outcome labels.
     evidence: Option<Rc<EvidenceService>>,
     /// When the user was last here: what happened since is the digest.
@@ -329,6 +331,7 @@ impl App {
             board_screen: Default::default(),
             knowledge_screen: Default::default(),
             followup_screen: Default::default(),
+            work_screen: Default::default(),
             engine: Engine::new(jobs, guard),
             console: ConsoleService::new(),
             evidence: None,
@@ -577,6 +580,7 @@ impl App {
         if let Some(evidence) = &self.evidence {
             missions.set_evidence(evidence.clone());
         }
+        self.console = ConsoleService::new().with_landing(missions.landing_policy());
         self.engine.missions = Some(missions);
         self
     }
@@ -720,6 +724,15 @@ impl App {
     /// control, else the oldest.
     pub fn approval_target(&self) -> Option<PendingApproval> {
         let approvals = self.engine.guard.approvals();
+        if self.screen == Screen::Work {
+            // Work answers the call of the outcome it shows, never another.
+            let request = self
+                .work_selected()
+                .and_then(|o| crate::work::held_request(&o))?;
+            return approvals
+                .into_iter()
+                .find(|a| a.request.request_id == request);
+        }
         if self.screen == Screen::Mission
             && let Some(item) = self.mission.selected_item()
             && item.kind == AttentionKind::Approval
@@ -730,6 +743,12 @@ impl App {
             return Some(found.clone());
         }
         approvals.into_iter().next()
+    }
+
+    /// The snapshot built last (by [`App::update`]), for drawing, which
+    /// cannot build one. `None` before the first update.
+    pub(crate) fn console_current(&self) -> Option<&ConsoleSnapshot> {
+        self.console.current()
     }
 
     /// The console read model as it stands: ranked outcome groups, the
@@ -997,6 +1016,9 @@ impl App {
             self.error = Some(e.to_string());
         }
         self.refresh_checkpoints();
+        // After the missions moved: the Work screen and the tab counts read
+        // the snapshot, which is rebuilt only when what it reads changed.
+        self.work_refresh();
         self.sense_motion();
         self.refresh_showcase();
         let on_focus = (self.screen == Screen::Dashboard && !self.dashboard.classic)
@@ -1835,6 +1857,9 @@ impl App {
     /// Approves, denies or always allows the oldest held tool call.
     fn answer_approval(&mut self, answer: Decision) -> AppResult<()> {
         let Some(target) = self.approval_target() else {
+            if self.screen == Screen::Work {
+                self.notice = Some("no call is held on this outcome".into());
+            }
             return Ok(());
         };
         let id = target.request.request_id;

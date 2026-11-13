@@ -196,6 +196,26 @@ const NEW_KEYS: &[(&str, &str, &str)] = &[
     ("global", "g r", "nav.go_record"),
 ];
 
+/// The Work screen's own keys.
+const WORK_KEYS: &[(&str, &str, &str)] = &[
+    ("work", "up", "list.prev"),
+    ("work", "k", "list.prev"),
+    ("work", "down", "list.next"),
+    ("work", "j", "list.next"),
+    ("work", "1", "work.tab_product"),
+    ("work", "2", "work.tab_stream"),
+    ("work", "3", "work.tab_diff"),
+    ("work", "4", "work.tab_checks"),
+    ("work", "pageup", "work.scroll_up"),
+    ("work", "pagedown", "work.scroll_down"),
+    ("work", "l", "work.land"),
+    ("work", "x", "work.kill"),
+    ("work", "r", "work.retry"),
+    ("work", "R", "work.resume"),
+    ("work", "e", "work.evidence"),
+    ("work", "enter", "list.open"),
+];
+
 /// Keys that came with customizable hotkeys: the key list.
 const HELP_KEYS: &[(&str, &str, &str)] = &[
     ("global", "?", "help.toggle"),
@@ -246,6 +266,7 @@ fn the_defaults_are_todays_keys_and_the_new_chords_and_nothing_else() {
     let mut want = table(TODAYS_KEYS);
     want.extend(table(NEW_KEYS));
     want.extend(table(HELP_KEYS));
+    want.extend(table(WORK_KEYS));
     want.sort();
     assert_eq!(bound(&keymap), want);
 }
@@ -255,6 +276,7 @@ fn the_screens_keep_their_numbers_and_titles() {
     // (screen, tab title, the key that shows it)
     let today = [
         (Screen::Mission, "mission", "1"),
+        (Screen::Work, "work", "g w"),
         (Screen::Missions, "missions", "2"),
         (Screen::Prompts, "prompts", "3"),
         (Screen::Queue, "queue", "4"),
@@ -274,6 +296,10 @@ fn the_screens_keep_their_numbers_and_titles() {
     for (screen, title, key) in today {
         assert_eq!(screen.title(), title);
         assert_eq!(nav_label(&keymap, screen), key, "{title}");
+        if key.contains(' ') {
+            // Work has no digit: the g chord goes there.
+            continue;
+        }
         let spec = KeySpec::parse(key).unwrap();
         assert_eq!(
             keymap.resolve(&[GLOBAL], &[spec]),

@@ -152,20 +152,8 @@ fn the_plan_example_gw_becomes_w() {
     ));
     t.app.screen = Screen::Ledger;
     chars(&mut t, "w");
-    assert_eq!(
-        t.app.screen,
-        Screen::Queue,
-        "w goes to work, which is the queue for now"
-    );
-    assert!(
-        t.app
-            .notice
-            .as_deref()
-            .unwrap()
-            .contains("work is not built yet"),
-        "{:?}",
-        t.app.notice
-    );
+    assert_eq!(t.app.screen, Screen::Work, "w goes to work");
+    assert_eq!(t.app.notice, None, "work is built: no stand-in notice");
     t.app.screen = Screen::Sessions;
     chars(&mut t, "gr");
     assert_eq!(

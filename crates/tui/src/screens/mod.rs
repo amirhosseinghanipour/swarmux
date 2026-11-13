@@ -23,6 +23,7 @@ pub(crate) mod missions;
 pub(crate) mod prompts;
 pub(crate) mod queue;
 pub(crate) mod sessions;
+pub(crate) mod work;
 
 /// Names a screen. Cheap to copy and compare; what it can do is in its
 /// [`ScreenDef`].
@@ -49,6 +50,8 @@ impl Screen {
     pub const Knowledge: Screen = Screen::new("knowledge");
     /// What agents left behind, as decision cards.
     pub const Followups: Screen = Screen::new("followups");
+    /// Decide and land: the ranked queue and the work product beside it.
+    pub const Work: Screen = Screen::new("work");
 }
 
 impl Screen {
@@ -86,6 +89,7 @@ impl Default for Screen {
 /// Every screen, in the order the tabs list them. The registry.
 const REGISTRY: &[&dyn ScreenDef] = &[
     &mission::Def,
+    &work::Def,
     &missions::Def,
     &prompts::Def,
     &queue::Def,
@@ -218,13 +222,6 @@ pub const PLANNED: &[Planned] = &[
         stand_in: Some(Screen::Mission),
     },
     Planned {
-        action: actions::GO_WORK,
-        keys: &["g w"],
-        help: "go to work",
-        name: "work",
-        stand_in: Some(Screen::Queue),
-    },
-    Planned {
         action: actions::GO_RECORD,
         keys: &["g r"],
         help: "go to the record",
@@ -298,6 +295,12 @@ pub trait ScreenDef: Sync {
 
     /// A status line of its own in place of the hints.
     fn status(&self, _app: &App, _t: &Theme) -> Option<Line<'static>> {
+        None
+    }
+
+    /// A count the tab shows beside the title, when there is something to
+    /// count (decisions waiting).
+    fn badge(&self, _app: &App) -> Option<usize> {
         None
     }
 

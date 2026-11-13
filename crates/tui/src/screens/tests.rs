@@ -20,16 +20,16 @@ fn every_screen_is_registered_once_with_its_own_id_title_and_nav_action() {
     let mut ids: Vec<_> = all().map(Screen::id).collect();
     let mut titles: Vec<_> = all().map(Screen::title).collect();
     let mut navs: Vec<_> = all().map(|s| s.def().nav_action()).collect();
-    assert_eq!(ids.len(), 10);
+    assert_eq!(ids.len(), 11);
     ids.sort_unstable();
     ids.dedup();
     titles.sort_unstable();
     titles.dedup();
     navs.sort();
     navs.dedup();
-    assert_eq!(ids.len(), 10, "ids differ");
-    assert_eq!(titles.len(), 10, "titles differ");
-    assert_eq!(navs.len(), 10, "nav actions differ");
+    assert_eq!(ids.len(), 11, "ids differ");
+    assert_eq!(titles.len(), 11, "titles differ");
+    assert_eq!(navs.len(), 11, "nav actions differ");
     for screen in all() {
         assert_eq!(screen.def().id(), screen);
         assert_eq!(nav_target(screen.def().nav_action()), Some(screen));
@@ -68,7 +68,6 @@ fn the_planned_screens_stand_in_explicitly() {
     // (keys, name, where it goes, whether the user is told)
     let promised = [
         ("g d", "deck", Some(Screen::Mission)),
-        ("g w", "work", Some(Screen::Queue)),
         ("g r", "record", Some(Screen::Ledger)),
     ];
     assert_eq!(PLANNED.len(), promised.len());
@@ -98,6 +97,7 @@ fn goes(chord: &str) -> (Screen, Option<String>) {
 #[test]
 fn g_then_a_letter_goes_to_the_screen_or_its_nearest() {
     // Screens that exist: no notice, it simply goes there.
+    assert_eq!(goes("g w"), (Screen::Work, None));
     assert_eq!(goes("g m"), (Screen::Missions, None));
     assert_eq!(goes("g p"), (Screen::Prompts, None));
     assert_eq!(goes("g k"), (Screen::Knowledge, None));
@@ -107,13 +107,6 @@ fn g_then_a_letter_goes_to_the_screen_or_its_nearest() {
         (
             Screen::Mission,
             Some("deck is not built yet: showing mission".into())
-        )
-    );
-    assert_eq!(
-        goes("g w"),
-        (
-            Screen::Queue,
-            Some("work is not built yet: showing queue".into())
         )
     );
     assert_eq!(
@@ -178,7 +171,7 @@ fn the_chord_timer_does_not_follow_the_clock_the_work_runs_by() {
     t.app.update();
     assert_eq!(t.app.resolver.pending().len(), 1);
     chars(&mut t, "w");
-    assert_eq!(t.app.screen, Screen::Queue);
+    assert_eq!(t.app.screen, Screen::Work);
 }
 
 #[test]
@@ -324,11 +317,8 @@ fn gw_can_be_rebound_to_w() {
     let mut t = test_app();
     t.app = t.app.with_keymap(keymap);
     chars(&mut t, "w");
-    assert_eq!(t.app.screen, Screen::Queue);
-    assert_eq!(
-        t.app.notice.as_deref(),
-        Some("work is not built yet: showing queue")
-    );
+    assert_eq!(t.app.screen, Screen::Work);
+    assert_eq!(t.app.notice, None, "work is built: no stand-in notice");
 }
 
 #[test]

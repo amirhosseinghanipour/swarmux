@@ -27,6 +27,7 @@ pub mod spectrum;
 pub mod splash;
 pub mod telemetry;
 pub mod widgets;
+pub mod work;
 
 #[cfg(test)]
 mod rice_tests;
@@ -268,7 +269,15 @@ fn stats_line(t: &Theme, s: QueueStats, approvals: usize, routing: usize) -> Lin
 fn draw_tabs(frame: &mut Frame, area: Rect, app: &App, t: &Theme) {
     let mut spans = Vec::new();
     for s in screens::all() {
-        let label = format!(" {} {} ", crate::keys::nav_label(&app.keymap, s), s.title());
+        let count = s
+            .def()
+            .badge(app)
+            .map_or(String::new(), |n| format!(" {n}"));
+        let label = format!(
+            " {} {}{count} ",
+            crate::keys::nav_label(&app.keymap, s),
+            s.title()
+        );
         spans.push(if s == app.screen {
             Span::styled(
                 label,
