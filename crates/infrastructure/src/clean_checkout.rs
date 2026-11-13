@@ -98,13 +98,25 @@ impl GitCleanCheckout {
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
         let index = folder.join(format!("index-{}-{n}", std::process::id()));
         // Starting from the real index keeps git from hashing every file
-        // again; it is copied, never written.
+        // again; it is copied, never written. The copy keeps the original's
+        // modification time: git trusts a file whose size and time match its
+        // index entry unless the entry is as new as the index file ("racily
+        // clean"), and a copy stamped with the time of copying would make
+        // every such entry look old, so a same-size edit made in the same
+        // clock tick as the last commit went missing from the snapshot.
         if let Some(real) = ok(
             &self.bin,
             top,
             &["rev-parse", "--path-format=absolute", "--git-path", "index"],
-        ) {
-            let _ = fs::copy(real, &index);
+        ) && fs::copy(&real, &index).is_ok()
+        {
+            let stamp = fs::metadata(&real).and_then(|m| m.modified());
+            if let Ok(at) = stamp {
+                let _ = fs::OpenOptions::new()
+                    .write(true)
+                    .open(&index)
+                    .and_then(|f| f.set_modified(at));
+            }
         }
         let result = (|| {
             must(&self.bin, top, &["add", "-A", "--", "."], Some(&index))?;

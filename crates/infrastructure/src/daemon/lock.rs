@@ -151,48 +151,5 @@ fn is_contended(e: &io::Error) -> bool {
     e.raw_os_error() == Some(libc::EWOULDBLOCK)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_second_holder_is_refused_and_told_who_holds_it() {
-        let dir = tempfile::tempdir().unwrap();
-        let first = ServiceLock::acquire(dir.path(), "0.1.0", 1_000).unwrap();
-        match ServiceLock::acquire(dir.path(), "0.1.0", 2_000) {
-            Err(LockError::Held(h)) => {
-                assert_eq!(h.pid, Some(std::process::id()));
-                assert_eq!(h.version.as_deref(), Some("0.1.0"));
-                assert_eq!(h.started_at, Some(1_000));
-            }
-            Err(e) => panic!("{e}"),
-            Ok(_) => panic!("two holders"),
-        }
-        assert!(is_held(dir.path()));
-        drop(first);
-        assert!(!is_held(dir.path()));
-        assert_eq!(holder(dir.path()), Holder::default(), "the pid file goes");
-        assert!(ServiceLock::acquire(dir.path(), "0.1.0", 3_000).is_ok());
-    }
-
-    #[test]
-    fn a_crashed_runs_pid_file_is_replaced() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join(PID_FILE), "4294967\n0.0.9\n5\n").unwrap();
-        std::fs::write(dir.path().join(LOCK_FILE), "").unwrap();
-        let lock = ServiceLock::acquire(dir.path(), "0.1.0", 9).unwrap();
-        let h = holder(dir.path());
-        assert_eq!(h.pid, Some(std::process::id()));
-        assert_eq!(h.version.as_deref(), Some("0.1.0"));
-        drop(lock);
-    }
-
-    #[test]
-    fn a_damaged_pid_file_reads_as_unknown() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join(PID_FILE), "not a pid\n").unwrap();
-        let h = holder(dir.path());
-        assert_eq!(h.pid, None);
-        assert_eq!(h.version, None);
-    }
-}
+// The tests of this module are in `tests/daemon_lock.rs`: they must run in a
+// process where no other thread starts child processes (see there).
