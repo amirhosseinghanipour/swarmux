@@ -200,6 +200,13 @@ impl AttentionService {
         rank(items)
     }
 
+    /// Everything open at the last collection, shown or held back (by
+    /// focus mode, a flood or batching) alike: shelved and acknowledged
+    /// items are not. What the console ranks outcomes by.
+    pub fn open(&self) -> &[AttentionItem] {
+        &self.open
+    }
+
     /// Hides an item until the run ends. Held tool calls can't be hidden:
     /// they stay until answered.
     pub fn acknowledge(&mut self, item: &AttentionItem) -> bool {

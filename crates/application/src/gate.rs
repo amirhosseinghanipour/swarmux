@@ -818,6 +818,75 @@ pub struct GateState {
     pub at: Millis,
 }
 
+/// One check of a job's latest verdict, with what [`GateState`] leaves out:
+/// how long it took and the line that says why it failed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GateRun {
+    pub name: String,
+    /// The command line, as run.
+    pub command: String,
+    /// `None` when it was killed or never started.
+    pub exit: Option<i32>,
+    pub timed_out: bool,
+    /// Why it could not start.
+    pub spawn_error: Option<String>,
+    pub duration_ms: u64,
+    /// It failed, then passed when run again.
+    pub flaky: bool,
+    pub passed: bool,
+    /// The first line of the output that says what failed, verbatim; only
+    /// for a check that did not pass.
+    pub first_failure: Option<String>,
+}
+
+/// What a job's latest verdict found, in full: the detail behind the
+/// counts of [`GateState`]. Kept beside it, per job, from the same record.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct GateDetail {
+    pub runs: Vec<GateRun>,
+    /// Protected files that changed: `changed src/a.rs`.
+    pub pins: Vec<String>,
+    /// Changes that make the tests easier to pass: the evidence lines.
+    pub tampering: Vec<String>,
+    /// Claims of the agent's that nothing backs.
+    pub gaps: Vec<String>,
+    /// The base-suite check, when it ran: whether it was clean, and its
+    /// finding in a line.
+    pub base_suite: Option<(bool, String)>,
+}
+
+impl GateDetail {
+    fn of(findings: &GateFindings) -> GateDetail {
+        GateDetail {
+            runs: findings
+                .runs
+                .iter()
+                .map(|c| GateRun {
+                    name: c.name.clone(),
+                    command: c.command.clone(),
+                    exit: c.exit,
+                    timed_out: c.timed_out,
+                    spawn_error: c.spawn_error.clone(),
+                    duration_ms: c.duration_ms,
+                    flaky: c.flaky,
+                    passed: c.passed(),
+                    first_failure: (!c.passed())
+                        .then(|| c.failure_excerpt().into_iter().next())
+                        .flatten(),
+                })
+                .collect(),
+            pins: findings
+                .pins
+                .iter()
+                .map(|p| format!("{} {}", p.verb(), p.path()))
+                .collect(),
+            tampering: findings.tampering.clone(),
+            gaps: findings.gaps.clone(),
+            base_suite: findings.base_suite.as_ref().map(|b| (b.clean(), b.text())),
+        }
+    }
+}
+
 /// Records what the keeper decided and keeps the latest per job.
 pub struct GateService {
     records: Receiver<GateRecord>,
@@ -825,6 +894,7 @@ pub struct GateService {
     jobs: Rc<dyn JobRepository>,
     clock: Rc<dyn Clock>,
     states: HashMap<JobId, GateState>,
+    details: HashMap<JobId, GateDetail>,
     changes: VecDeque<Change>,
     checkpoints: Option<Rc<CheckpointService>>,
 }
@@ -842,6 +912,7 @@ impl GateService {
             jobs,
             clock,
             states: HashMap::new(),
+            details: HashMap::new(),
             changes: VecDeque::new(),
             checkpoints: None,
         }
@@ -872,6 +943,7 @@ impl GateService {
                 GateOutcome::Block => r.blocks + 1,
                 _ => r.blocks,
             };
+            self.details.insert(job, GateDetail::of(&r.findings));
             self.states.insert(
                 job,
                 GateState {
@@ -949,6 +1021,11 @@ impl GateService {
     /// Every job's latest verdict.
     pub fn states(&self) -> &HashMap<JobId, GateState> {
         &self.states
+    }
+
+    /// What `job`'s latest verdict found, in full.
+    pub fn detail(&self, job: JobId) -> Option<&GateDetail> {
+        self.details.get(&job)
     }
 
     /// Inbox items for the jobs whose gate gave up.
