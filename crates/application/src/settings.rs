@@ -74,6 +74,10 @@ pub struct Settings {
     /// What was wrong in lines the loader replaced with defaults, one
     /// message each. Shown on start and by `swarmux doctor`.
     pub warnings: Vec<String>,
+    /// The `[deck]` section as written: the Deck checks it when it draws
+    /// (`swarmux_domain::console::resolve_deck`), so a mistake in it never
+    /// stops the file from loading.
+    pub deck: swarmux_domain::console::DeckConfig,
 }
 
 /// The `[board]` section.
@@ -505,6 +509,7 @@ impl Default for Settings {
             followups: crate::FollowSettings::default(),
             keys: swarmux_domain::keys::KeyConfig::default(),
             warnings: Vec::new(),
+            deck: swarmux_domain::console::DeckConfig::default(),
         }
     }
 }

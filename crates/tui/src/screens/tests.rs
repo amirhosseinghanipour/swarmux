@@ -20,16 +20,16 @@ fn every_screen_is_registered_once_with_its_own_id_title_and_nav_action() {
     let mut ids: Vec<_> = all().map(Screen::id).collect();
     let mut titles: Vec<_> = all().map(Screen::title).collect();
     let mut navs: Vec<_> = all().map(|s| s.def().nav_action()).collect();
-    assert_eq!(ids.len(), 11);
+    assert_eq!(ids.len(), 12);
     ids.sort_unstable();
     ids.dedup();
     titles.sort_unstable();
     titles.dedup();
     navs.sort();
     navs.dedup();
-    assert_eq!(ids.len(), 11, "ids differ");
-    assert_eq!(titles.len(), 11, "titles differ");
-    assert_eq!(navs.len(), 11, "nav actions differ");
+    assert_eq!(ids.len(), 12, "ids differ");
+    assert_eq!(titles.len(), 12, "titles differ");
+    assert_eq!(navs.len(), 12, "nav actions differ");
     for screen in all() {
         assert_eq!(screen.def().id(), screen);
         assert_eq!(nav_target(screen.def().nav_action()), Some(screen));
@@ -66,10 +66,7 @@ fn every_screen_declares_bindings_for_the_contexts_it_uses() {
 #[test]
 fn the_planned_screens_stand_in_explicitly() {
     // (keys, name, where it goes, whether the user is told)
-    let promised = [
-        ("g d", "deck", Some(Screen::Mission)),
-        ("g r", "record", Some(Screen::Ledger)),
-    ];
+    let promised = [("g r", "record", Some(Screen::Ledger))];
     assert_eq!(PLANNED.len(), promised.len());
     for (keys, name, stand_in) in promised {
         let p = PLANNED
@@ -101,14 +98,8 @@ fn g_then_a_letter_goes_to_the_screen_or_its_nearest() {
     assert_eq!(goes("g m"), (Screen::Missions, None));
     assert_eq!(goes("g p"), (Screen::Prompts, None));
     assert_eq!(goes("g k"), (Screen::Knowledge, None));
+    assert_eq!(goes("g d"), (Screen::Deck, None));
     // Screens that are planned: it goes to the nearest and says so.
-    assert_eq!(
-        goes("g d"),
-        (
-            Screen::Mission,
-            Some("deck is not built yet: showing mission".into())
-        )
-    );
     assert_eq!(
         goes("g r"),
         (
@@ -244,7 +235,7 @@ fn esc_leaves_the_constellation_before_it_goes_back() {
 #[test]
 fn the_tab_bar_shows_the_keys_in_use() {
     let t = test_app();
-    let out = crate::ui::render_to_string(&t.app, 140, 6);
+    let out = crate::ui::render_to_string(&t.app, 160, 6);
     for (key, title) in [
         ("1", "mission"),
         ("4", "queue"),
@@ -260,7 +251,7 @@ fn the_tab_bar_shows_the_keys_in_use() {
         .unwrap();
     let mut t = test_app();
     t.app = t.app.with_keymap(keymap);
-    let out = crate::ui::render_to_string(&t.app, 140, 6);
+    let out = crate::ui::render_to_string(&t.app, 160, 6);
     assert!(out.contains(" f4 queue "), "{out}");
     assert!(!out.contains(" 4 queue "), "{out}");
     t.keys([KeyCode::Char('4')]);

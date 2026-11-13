@@ -7,7 +7,7 @@
 mod product;
 mod queue;
 mod right;
-mod util;
+pub(crate) mod util;
 
 #[cfg(test)]
 mod tests;

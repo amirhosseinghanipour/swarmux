@@ -11,11 +11,11 @@ use crate::app::App;
 use crate::theme::Theme;
 use crate::ui::look::IconSet;
 
-pub(super) type Lines = Vec<Line<'static>>;
+pub(crate) type Lines = Vec<Line<'static>>;
 
 /// Marks that read the same in every font: geometric shapes, or ASCII.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Mark {
+pub(crate) enum Mark {
     /// Something waits for the user.
     Ask,
     /// Failed or escalated.
@@ -34,7 +34,7 @@ pub(super) enum Mark {
     Idle,
 }
 
-pub(super) fn mark(app: &App, m: Mark) -> &'static str {
+pub(crate) fn mark(app: &App, m: Mark) -> &'static str {
     let ascii = app.look.icons == IconSet::Ascii;
     match (m, ascii) {
         (Mark::Ask, false) => "◆",
@@ -57,7 +57,7 @@ pub(super) fn mark(app: &App, m: Mark) -> &'static str {
 }
 
 /// The rule character, and the ellipsis and arrow that follow the set.
-pub(super) fn rule(app: &App) -> char {
+pub(crate) fn rule(app: &App) -> char {
     if app.look.icons == IconSet::Ascii {
         '-'
     } else {
@@ -65,7 +65,7 @@ pub(super) fn rule(app: &App) -> char {
     }
 }
 
-pub(super) fn arrow(app: &App) -> &'static str {
+pub(crate) fn arrow(app: &App) -> &'static str {
     if app.look.icons == IconSet::Ascii {
         "->"
     } else {
@@ -74,7 +74,7 @@ pub(super) fn arrow(app: &App) -> &'static str {
 }
 
 /// The colour of a priority.
-pub(super) fn priority_color(t: &Theme, p: PriorityKind) -> ratatui::style::Color {
+pub(crate) fn priority_color(t: &Theme, p: PriorityKind) -> ratatui::style::Color {
     match p {
         PriorityKind::P1 => t.error,
         PriorityKind::P2 => t.warn,
@@ -82,7 +82,7 @@ pub(super) fn priority_color(t: &Theme, p: PriorityKind) -> ratatui::style::Colo
     }
 }
 
-pub(super) fn priority_text(p: PriorityKind) -> &'static str {
+pub(crate) fn priority_text(p: PriorityKind) -> &'static str {
     match p {
         PriorityKind::P1 => "P1",
         PriorityKind::P2 => "P2",
@@ -91,7 +91,7 @@ pub(super) fn priority_text(p: PriorityKind) -> &'static str {
 }
 
 /// `cut` to `max` cells, with `…` where it was cut.
-pub(super) fn fit(s: &str, max: usize) -> String {
+pub(crate) fn fit(s: &str, max: usize) -> String {
     let cells = |s: &str| Line::from(s.to_string()).width();
     if cells(s) <= max {
         return s.to_string();
@@ -110,7 +110,7 @@ pub(super) fn fit(s: &str, max: usize) -> String {
 }
 
 /// A heading: `TITLE  note ─────────`, the rule filling the width.
-pub(super) fn heading(
+pub(crate) fn heading(
     app: &App,
     title: &str,
     note: &str,
@@ -137,7 +137,7 @@ pub(super) fn heading(
 }
 
 /// `key  value` with the key in the label colour, padded to `key_w`.
-pub(super) fn pair(t: &Theme, key: &str, key_w: usize, value: Vec<Span<'static>>) -> Line<'static> {
+pub(crate) fn pair(t: &Theme, key: &str, key_w: usize, value: Vec<Span<'static>>) -> Line<'static> {
     let mut spans = vec![Span::styled(
         format!("{key:<key_w$} "),
         Style::new().fg(t.muted),
@@ -148,7 +148,7 @@ pub(super) fn pair(t: &Theme, key: &str, key_w: usize, value: Vec<Span<'static>>
 
 /// Splits `text` into lines of at most `width` cells at spaces; a word
 /// longer than the line is cut.
-pub(super) fn wrap_text(text: &str, width: usize) -> Vec<String> {
+pub(crate) fn wrap_text(text: &str, width: usize) -> Vec<String> {
     let width = width.max(1);
     let mut out: Vec<String> = Vec::new();
     for paragraph in text.lines() {
@@ -180,7 +180,7 @@ pub(super) fn wrap_text(text: &str, width: usize) -> Vec<String> {
 
 /// `text` quoted, wrapped, each line indented by `indent`; at most `max`
 /// lines, the last ending in `…` when more was cut.
-pub(super) fn quote(text: &str, width: usize, indent: usize, max: usize, style: Style) -> Lines {
+pub(crate) fn quote(text: &str, width: usize, indent: usize, max: usize, style: Style) -> Lines {
     let inner = width.saturating_sub(indent + 2).max(8);
     let mut lines = wrap_text(text.trim(), inner);
     let cut = lines.len() > max;
@@ -204,7 +204,7 @@ pub(super) fn quote(text: &str, width: usize, indent: usize, max: usize, style: 
 }
 
 /// Two columns side by side: `left` padded to `left_w`, a gap, `right`.
-pub(super) fn columns(left: Lines, left_w: usize, gap: usize, right: Lines) -> Lines {
+pub(crate) fn columns(left: Lines, left_w: usize, gap: usize, right: Lines) -> Lines {
     let rows = left.len().max(right.len());
     let mut left = left.into_iter();
     let mut right = right.into_iter();
@@ -224,7 +224,7 @@ pub(super) fn columns(left: Lines, left_w: usize, gap: usize, right: Lines) -> L
 }
 
 /// `38s`, `2m02s`, `1h05m`.
-pub(super) fn duration(ms: u64) -> String {
+pub(crate) fn duration(ms: u64) -> String {
     let s = ms / 1000;
     match s {
         0 if ms > 0 => format!("{ms}ms"),
@@ -235,17 +235,17 @@ pub(super) fn duration(ms: u64) -> String {
 }
 
 /// `$9.24`.
-pub(super) fn usd(x: f64) -> String {
+pub(crate) fn usd(x: f64) -> String {
     format!("${x:.2}")
 }
 
 /// Spans of `text` in `style`.
-pub(super) fn span(text: impl Into<String>, style: Style) -> Span<'static> {
+pub(crate) fn span(text: impl Into<String>, style: Style) -> Span<'static> {
     Span::styled(text.into(), style)
 }
 
 /// Where an outcome is in its life, as a word.
-pub(super) fn lifecycle_word(l: swarmux_application::console::Lifecycle) -> &'static str {
+pub(crate) fn lifecycle_word(l: swarmux_application::console::Lifecycle) -> &'static str {
     use swarmux_application::console::Lifecycle as L;
     match l {
         L::Draft => "draft",
@@ -264,13 +264,13 @@ pub(super) fn lifecycle_word(l: swarmux_application::console::Lifecycle) -> &'st
 }
 
 /// `14:21:46`: the time of day of `ms`, UTC, as the ledger writes it.
-pub(super) fn clock(ms: swarmux_domain::Millis) -> String {
+pub(crate) fn clock(ms: swarmux_domain::Millis) -> String {
     let s = ms.rem_euclid(86_400_000) / 1000;
     format!("{:02}:{:02}:{:02}", s / 3600, s % 3600 / 60, s % 60)
 }
 
 /// The vertical rule between the queue and the outcome.
-pub(super) fn rule_column(app: &App) -> Span<'static> {
+pub(crate) fn rule_column(app: &App) -> Span<'static> {
     let c = if app.look.icons == IconSet::Ascii {
         "|"
     } else {
@@ -281,7 +281,7 @@ pub(super) fn rule_column(app: &App) -> Span<'static> {
 
 /// `due 16:00` in the user's clock (`utc_offset` minutes ahead of UTC), with
 /// the date when it is not today, and how late when it has passed.
-pub(super) fn due_text(
+pub(crate) fn due_text(
     due: swarmux_domain::Millis,
     now: swarmux_domain::Millis,
     utc_offset: i32,

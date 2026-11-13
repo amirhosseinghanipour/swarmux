@@ -3,6 +3,7 @@
 mod audit;
 mod contracts;
 mod daemon;
+mod deck;
 mod demo;
 mod dist;
 mod doctor;
@@ -119,6 +120,11 @@ enum Command {
     Keys {
         #[command(subcommand)]
         action: KeysAction,
+    },
+    /// The Deck: check the `[deck]` of your config, or show its layout.
+    Deck {
+        #[command(subcommand)]
+        action: DeckAction,
     },
     /// The tamper-evident ledger of everything swarmux observed or decided.
     Audit {
@@ -395,6 +401,16 @@ enum KeysAction {
 }
 
 #[derive(Subcommand)]
+enum DeckAction {
+    /// Check the `[deck]` of your config. Prints every problem and exits
+    /// with 1 if there is one; the app still starts, with the default for
+    /// what is wrong.
+    Lint,
+    /// The panels of the Deck in the order they are drawn, by zone.
+    Show,
+}
+
+#[derive(Subcommand)]
 enum AuditAction {
     /// Check the whole hash chain and every signed checkpoint of it; exits
     /// with 1 if the chain is broken or the ledger was cut short or
@@ -526,6 +542,12 @@ fn main() -> anyhow::Result<ExitCode> {
                 KeysAction::List => keys::Action::List,
                 KeysAction::Lint => keys::Action::Lint,
                 KeysAction::Export => keys::Action::Export,
+            });
+        }
+        Some(Command::Deck { action }) => {
+            return deck::run(match action {
+                DeckAction::Lint => deck::Action::Lint,
+                DeckAction::Show => deck::Action::Show,
             });
         }
         Some(Command::Theme { action }) => match action {
@@ -1000,5 +1022,7 @@ fn build_app(
         },
     );
     // After the look: how long the warning about the keys shows depends on it.
-    Ok(app.with_key_config(&settings.keys))
+    Ok(app
+        .with_key_config(&settings.keys)
+        .with_deck_config(&settings.deck))
 }

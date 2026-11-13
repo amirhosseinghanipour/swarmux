@@ -217,6 +217,21 @@ const WORK_KEYS: &[(&str, &str, &str)] = &[
     ("work", "enter", "list.open"),
 ];
 
+/// The Deck screen's own keys.
+const DECK_KEYS: &[(&str, &str, &str)] = &[
+    ("deck", "up", "list.prev"),
+    ("deck", "k", "list.prev"),
+    ("deck", "down", "list.next"),
+    ("deck", "j", "list.next"),
+    ("deck", "left", "deck.producer"),
+    ("deck", "h", "deck.producer"),
+    ("deck", "right", "deck.consumer"),
+    ("deck", "l", "deck.consumer"),
+    ("deck", "enter", "list.open"),
+    ("deck", "s", "deck.sessions"),
+    ("deck", "tab", "deck.more"),
+];
+
 /// Keys that came with customizable hotkeys: the key list.
 const HELP_KEYS: &[(&str, &str, &str)] = &[
     ("global", "?", "help.toggle"),
@@ -268,6 +283,7 @@ fn the_defaults_are_todays_keys_and_the_new_chords_and_nothing_else() {
     want.extend(table(NEW_KEYS));
     want.extend(table(HELP_KEYS));
     want.extend(table(WORK_KEYS));
+    want.extend(table(DECK_KEYS));
     want.sort();
     assert_eq!(bound(&keymap), want);
 }
@@ -277,6 +293,7 @@ fn the_screens_keep_their_numbers_and_titles() {
     // (screen, tab title, the key that shows it)
     let today = [
         (Screen::Mission, "mission", "1"),
+        (Screen::Deck, "deck", "g d"),
         (Screen::Work, "work", "g w"),
         (Screen::Missions, "missions", "2"),
         (Screen::Prompts, "prompts", "3"),
@@ -298,7 +315,7 @@ fn the_screens_keep_their_numbers_and_titles() {
         assert_eq!(screen.title(), title);
         assert_eq!(nav_label(&keymap, screen), key, "{title}");
         if key.contains(' ') {
-            // Work has no digit: the g chord goes there.
+            // Work and the Deck have no digit: the g chord goes there.
             continue;
         }
         let spec = KeySpec::parse(key).unwrap();
