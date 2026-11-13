@@ -67,6 +67,10 @@ pub struct Settings {
     /// The `[keys]` section as written: not yet checked against the
     /// actions that exist, which only the interface knows.
     pub keys: swarmux_domain::keys::KeyConfig,
+    /// The `[deck]` section as written: the Deck checks it when it draws
+    /// (`swarmux_domain::console::resolve_deck`), so a mistake in it never
+    /// stops the file from loading.
+    pub deck: swarmux_domain::console::DeckConfig,
 }
 
 /// The `[board]` section.
@@ -393,6 +397,7 @@ impl Default for Settings {
             board: BoardSettings::default(),
             followups: crate::FollowSettings::default(),
             keys: swarmux_domain::keys::KeyConfig::default(),
+            deck: swarmux_domain::console::DeckConfig::default(),
         }
     }
 }

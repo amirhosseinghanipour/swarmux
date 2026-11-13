@@ -66,6 +66,8 @@ struct RawConfig {
     /// Read whole: what is wrong in it is for the keymap to report, not a
     /// reason to refuse the file.
     keys: Option<toml::Value>,
+    /// Read whole too: the Deck's lint reports what is wrong in it.
+    deck: Option<toml::Value>,
 }
 
 #[derive(Deserialize)]
@@ -222,6 +224,9 @@ pub fn parse_settings(text: &str, path: &Path) -> Result<Settings, ConfigError> 
     settings.ui = parse_ui(ui, text, path)?;
     if let Some(keys) = &raw.keys {
         settings.keys = crate::config_keys::parse_keys(keys);
+    }
+    if let Some(deck) = &raw.deck {
+        settings.deck = crate::config_deck::parse_deck(deck);
     }
     Ok(settings)
 }
@@ -1315,6 +1320,28 @@ bg = [\"#000000\", \"#111111\"]"
         let e = load_settings(dir.path()).unwrap_err();
         assert_eq!(e.line, None);
         assert!(e.to_string().contains(&dir.path().display().to_string()));
+    }
+
+    #[test]
+    fn a_mistake_in_the_deck_section_never_refuses_the_file() {
+        let s = parse(
+            "[deck]
+panels = [\"graph\", \"nope\"]
+session_rows = \"x\"
+colour = 1
+",
+        )
+        .expect("the file loads");
+        assert!(s.deck.present);
+        assert_eq!(s.deck.unknown, ["colour"]);
+        assert!(parse("").unwrap().deck == swarmux_domain::console::DeckConfig::default());
+        let good = parse(
+            "[deck]
+panels = [\"limits\", \"graph\"]
+",
+        )
+        .unwrap();
+        assert_eq!(good.deck.panels.as_deref().map(<[String]>::len), Some(2));
     }
 
     fn entries(text: &str) -> Vec<(String, String, Vec<String>)> {
