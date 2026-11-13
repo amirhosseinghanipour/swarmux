@@ -50,9 +50,12 @@ pub use date::{iso_date, iso_minute, iso_utc, parse_iso_millis, parse_rfc3339_mi
 pub use error::DomainError;
 pub use event::{Actor, AgentEvent, SessionState};
 pub use guard::{
-    AlarmKind, BUILTIN_ALLOW, BUILTIN_DENY, Decision, Detector, Gauges, GuardPolicy, Ladder,
-    LadderPolicy, LoopBreaker, LoopTrip, NUDGE_MARK, NextRung, Pattern, Rung, RungOptions, Taken,
-    Unmatched, Verdict, WatchAlarm, WatchLimits, error_signature, host_of, show_call,
+    AGENT_CONFIG_PROTECTED, AGENT_SUBCOMMANDS, AlarmKind, AlwaysRefusal, BUILTIN_ALLOW,
+    BUILTIN_DENY, DAY_MS, DEFAULT_EXPIRY_DAYS, Decision, Detector, Gauges, GuardPolicy, Ladder,
+    LadderPolicy, LoopBreaker, LoopTrip, NUDGE_MARK, NextRung, Pattern, Resolver, Rung,
+    RungOptions, RuleScope, RuleSource, StoredRule, Taken, Unmatched, Verdict, WatchAlarm,
+    WatchLimits, agent_cli_refusal, agent_config_write, always_rule, error_signature, host_of,
+    may_resolve, needs_typed_confirmation, same_folder, show_call, touches_fenced,
 };
 pub use hook::HookEvent;
 pub use job::{Job, JobId, JobResult, JobStatus};

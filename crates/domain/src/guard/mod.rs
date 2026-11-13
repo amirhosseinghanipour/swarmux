@@ -2,15 +2,27 @@
 //! watchdog's detectors and recovery ladder.
 
 pub(crate) mod glob;
+mod human;
 mod ladder;
 mod loop_breaker;
 mod pattern;
+mod protect;
+mod rules;
 pub(crate) mod shell;
 mod watchdog;
 
+pub use human::{Resolver, may_resolve, needs_typed_confirmation};
 pub use ladder::{Ladder, LadderPolicy, NextRung, Rung, RungOptions, Taken};
 pub use loop_breaker::{LoopBreaker, LoopTrip, error_signature};
 pub use pattern::{Pattern, host_of};
+pub use protect::{
+    AGENT_CONFIG_PROTECTED, AGENT_SUBCOMMANDS, agent_cli_refusal, agent_config_write,
+    touches_fenced,
+};
+pub use rules::{
+    AlwaysRefusal, DAY_MS, DEFAULT_EXPIRY_DAYS, RuleScope, RuleSource, StoredRule, always_rule,
+    same_folder,
+};
 pub use watchdog::{AlarmKind, Detector, Gauges, NUDGE_MARK, WatchAlarm, WatchLimits, show_call};
 
 use shell::{has_substitution, split_commands, strip_wrappers};
@@ -155,10 +167,17 @@ impl GuardPolicy {
     /// Decides a call of `tool` on `subject` (the command, path or URL it
     /// acts on), made from the session folder `cwd`.
     pub fn decide(&self, tool: &str, subject: &str, cwd: &str) -> Decision {
+        self.decide_with(tool, subject, cwd, &[])
+    }
+
+    /// Like [`decide`](Self::decide), with `extra` allow rules that apply
+    /// to this call only (rules scoped to a repository, say). Deny rules
+    /// still win over them.
+    pub fn decide_with(&self, tool: &str, subject: &str, cwd: &str, extra: &[Pattern]) -> Decision {
         if let Some(rule) = self.denied_by(tool, subject, cwd) {
             return Decision::new(Verdict::Deny, Some(rule.to_string()));
         }
-        if let Some(rule) = self.allowed_by(tool, subject, cwd) {
+        if let Some(rule) = self.allowed_by(tool, subject, cwd, extra) {
             return Decision::new(Verdict::Allow, Some(rule));
         }
         let verdict = match self.unmatched {
@@ -184,17 +203,20 @@ impl GuardPolicy {
 
     /// A shell line is allowed when every command in it is; the rules used
     /// are joined for the log.
-    fn allowed_by(&self, tool: &str, subject: &str, cwd: &str) -> Option<String> {
-        if let Some(rule) = self
-            .allow
-            .iter()
+    fn allowed_by(
+        &self,
+        tool: &str,
+        subject: &str,
+        cwd: &str,
+        extra: &[Pattern],
+    ) -> Option<String> {
+        let allow = || extra.iter().chain(self.allow.iter());
+        if let Some(rule) = allow()
             .find(|r| !r.is_command_rule() && r.matches(tool, subject, cwd))
         {
             return Some(rule.to_string());
         }
-        let command_rules: Vec<&Pattern> = self
-            .allow
-            .iter()
+        let command_rules: Vec<&Pattern> = allow()
             .filter(|r| r.is_command_rule() && r.covers_tool(tool))
             .collect();
         if command_rules.is_empty() || has_substitution(subject) {

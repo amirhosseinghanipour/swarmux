@@ -82,10 +82,14 @@ pub enum LedgerKind {
     /// The operator told an agent something: a note that sent its work
     /// back, or explained a refusal. Who, when, the text, the job.
     Operator,
+    /// A change to the policy, or a gap in it: a guard rule added, removed
+    /// or expired, or a hook call that fell back because swarmux could not
+    /// be reached.
+    Policy,
 }
 
 impl LedgerKind {
-    pub const ALL: [LedgerKind; 19] = [
+    pub const ALL: [LedgerKind; 20] = [
         LedgerKind::Genesis,
         LedgerKind::JobQueued,
         LedgerKind::JobStarted,
@@ -105,6 +109,7 @@ impl LedgerKind {
         LedgerKind::Followup,
         LedgerKind::Knowledge,
         LedgerKind::Operator,
+        LedgerKind::Policy,
     ];
 
     /// The stable name stored and hashed.
@@ -129,6 +134,7 @@ impl LedgerKind {
             LedgerKind::Followup => "followup",
             LedgerKind::Knowledge => "knowledge",
             LedgerKind::Operator => "operator",
+            LedgerKind::Policy => "policy",
         }
     }
 
@@ -506,6 +512,7 @@ mod tests {
                 "followup",
                 "knowledge",
                 "operator",
+                "policy",
             ]
         );
     }

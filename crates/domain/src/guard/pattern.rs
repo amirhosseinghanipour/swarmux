@@ -135,6 +135,12 @@ impl Pattern {
         &self.tool
     }
 
+    /// True when the rule names only a tool, so it covers every use of it
+    /// (`Bash`, `mcp__github__*`).
+    pub fn is_bare(&self) -> bool {
+        self.spec == Spec::Any
+    }
+
     /// True for a rule on a shell tool with a specifier (matched per command).
     pub fn is_command_rule(&self) -> bool {
         COMMAND_TOOLS.contains(&self.tool.as_str()) && self.spec != Spec::Any
