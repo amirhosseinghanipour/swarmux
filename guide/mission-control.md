@@ -36,6 +36,21 @@ pull requests, MCP servers, system load and a 12-week activity calendar. From
 | `F` | focus mode on or off |
 | `r` / `R` | take or turn down an offered rule |
 
+### Moving between screens
+
+| Key | Does |
+| --- | --- |
+| `1`-`9`, `0` | show a screen: `1` mission control, `2` missions, `3` prompts, `4` queue, `5` ledger, `6` sessions, `0` focus, `7` board, `8` knowledge, `9` follow-ups |
+| `g` then `m`, `p` or `k` | the same, by letter: missions, prompts, knowledge |
+| `g` then `d`, `w` or `r` | reserved for screens that are not built yet; until they are, each goes to the nearest screen and says so in the status bar |
+| `Esc` | back to the screen you came from (it first closes what is open: the constellation, a highlighted panel); it never quits |
+| `q` / `Ctrl+C` | quit (a window attached to the background service lets go and the work goes on) |
+
+After `g` the status bar shows the waiting chord; `Esc` or two seconds
+drops it, and any key that is not a destination says it is not bound. While
+you type (a prompt, a session name, the mission composer) every key is text,
+including `g`.
+
 ### The inbox as an alarm panel
 
 The inbox follows alarm-management practice, so that it stays small enough

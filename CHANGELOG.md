@@ -8,6 +8,11 @@ follows [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Navigation: `Esc` goes back to the screen you came from, and `g` then a
+  letter goes to a screen (`gm`, `gp`, `gk`; `gd`, `gw` and `gr` are kept for
+  screens that are not built yet and go to the nearest one, saying so). The
+  keys are now named actions behind a keymap, so they can be changed later;
+  with the default keymap every existing key does what it did.
 - Follow-through: what agents notice, ask or suggest is collected instead of
   dying in their last message. The Board's `schedule_followup` (with its
   `after_minutes` delay now honoured) and `ask_human` become follow-ups, and
@@ -172,6 +177,9 @@ follows [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- A key pressed with Ctrl or Alt (other than Ctrl+C) no longer counts as the
+  plain letter: `Ctrl+q` does not quit and `Alt+x` is not `x`. `Shift` and
+  AltGr characters (`D`, `[` on a German keyboard) work as before.
 - The README is now a short overview; the reference moved to `guide/`.
 - Windows: whole process trees are killed on cancel, Claude starts are
   staggered, config collisions are retried and long paths are supported in
