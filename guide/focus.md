@@ -51,9 +51,9 @@ The panel grid earlier versions opened with. From top to bottom:
   and activity.
 - **Lead**: model, context used of the window, cost and the tokens served
   from cache.
-- **Guard / JEV**: decisions this run and their p95 latency, the routing
-  pick (with JEV's confidence when JEV decided), the tool-gate verdict mix,
-  stops and calls handed to you, and the latest decision.
+- **Guard**: decisions this run and their p95 latency, the routing pick
+  (who picked, and where the prompt went), the tool-gate verdict mix, stops
+  and calls handed to you, and the latest decision.
 - **Subagent cards**: one per subagent, orange for Sonnet/Opus and blue for
   Haiku (from `model:` in `.claude/agents/<type>.md` of the session folder or
   `~/.claude/agents`; `—` when unknown), with its task, activity, isolated

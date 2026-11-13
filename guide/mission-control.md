@@ -62,7 +62,7 @@ to act on.
 - **Risk.** Every held call is scored from how hard it is to undo
   (R0 read, R1 worktree, R2 repository, R3 outside the machine, R4
   irreversible), how far it reaches, how new the pattern is here, how the
-  agent's earlier jobs went and, when JEV is on, what it made of the call.
+  agent's earlier jobs went.
   The score gives a tier: routine, elevated or destructive.
 - **Priorities.** P1 is an irreversible call or a secret on its way out;
   P2 is anything that blocks an agent or has broken; P3 is the rest. The

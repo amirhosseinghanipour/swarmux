@@ -22,7 +22,7 @@ follows [Semantic Versioning](https://semver.org/).
     ledger entry (kind `policy`, events `added`, `removed`, `expired`).
   - `[guard] always_scope` (`"repo"`, `"workspace"`, `"global"`),
     `always_expiry_days` (1 to 3650, or `"never"`), `protected_paths` and
-    `hook_on_failure_block`, and `[jev] max_allow`, all read line by line: a
+    `hook_on_failure_block`, all read line by line: a
     value that isn't valid is replaced by its default and named by the status
     bar, `swarmux doctor` and `swarmux guard lint`.
   - A shell command that runs swarmux from a job is denied unless the
@@ -35,9 +35,7 @@ follows [Semantic Versioning](https://semver.org/).
     (denied for unattended jobs).
   - A subagent's tool calls carry its `agent_id` and `agent_type` into the
     decision record, the ledger and the inbox.
-  - Decisions in the ledger carry the hash of their rule and who resolved them;
-    JEV's carry the provider, the model, the hash of what was sent and whether
-    the summary was cut.
+  - Decisions in the ledger carry the hash of their rule and who resolved them.
   - The hook can add `"onFailure": "block"` to the PreToolUse hook
     (`hook_on_failure_block`, off by default). Which Claude Code versions know
     the key is not detected yet.
@@ -292,9 +290,8 @@ follows [Semantic Versioning](https://semver.org/).
 - `swarmux doctor` now also summarizes the telemetry sources.
 - Telemetry collectors for spend, burn, limits, sessions, tools, git, GitHub
   and system load, read locally with no message text.
-- Guard: one permission policy across sessions with a loop breaker, optional
-  JEV (bring your own key) for fuzzy decisions, one-call session routing and
-  lean mode.
+- Guard: one permission policy across sessions with a loop breaker, one-call
+  session routing and lean mode.
 - Prompt library with `{{variables}}`, queue and dispatch with a concurrency
   cap and RAM guard, and the read-only review step.
 - Community files: contributing guide, code of conduct, security policy, issue
@@ -304,13 +301,9 @@ follows [Semantic Versioning](https://semver.org/).
 
 - Irreversible calls (risk R4) are allowed only by the typed confirmation, and
   the Guard enforces it, not only the key handler. A call that an allow rule
-  (even a bare `Bash`), `unmatched = "pass"` or JEV used to allow is now held
-  for you, and JEV is never asked about it. Update an `allow` rule that you
-  relied on to run `rm -rf` or `git reset --hard` unasked: it is asked now.
-- JEV may allow only calls up to `[jev] max_allow` (default `R1`) and is not
-  asked about calls with nothing to judge (MCP and unknown tools). It may
-  still deny anything it is asked about. A confident allow above the limit
-  goes to you.
+  (even a bare `Bash`) or `unmatched = "pass"` used to allow is now held for
+  you. Update an `allow` rule that you relied on to run `rm -rf` or
+  `git reset --hard` unasked: it is asked now.
 - "Always allow" (`a`) and the offered rule (`r`) now apply to the repository
   the call was made in (`always_scope`) and expire after 30 days
   (`always_expiry_days`), and are written to `guard-rules.toml`, not
@@ -331,6 +324,32 @@ follows [Semantic Versioning](https://semver.org/).
 - Windows: whole process trees are killed on cancel, Claude starts are
   staggered, config collisions are retried and long paths are supported in
   worktrees.
+
+### Removed
+
+- JEV, the optional hosted decision model (bring your own key), with
+  everything around it: the `[jev]` section of `config.toml`,
+  `swarmux jev set-key` and `swarmux jev test`, the consent question, the
+  watchdog's JEV rung and the JEV-first step of "let swarmux route". An LLM
+  judge that reads text an agent can influence is a target for prompt
+  injection, its reasons can talk a wrong approval into place, and it sent
+  decision context to a third party. What changes:
+  - A tool call no rule matches goes to you (`unmatched = "ask"`) or back to
+    Claude Code (`"pass"`), exactly as configured, with no model in between.
+  - "Let swarmux route" asks Haiku directly.
+  - The watchdog ladder is nudge, fresh session, diagnosis, fork, stronger
+    model, replan, inbox; its `"judge"` rung is gone.
+  - Only your typed confirmation can allow an irreversible call, as before;
+    no automated resolver (a timeout, "always allow", a key press) can.
+  - What you must do: nothing breaks. An old `[jev]` section is ignored (so is
+    `"judge"` in `[watchdog] rungs`) with a warning at start-up, in
+    `swarmux doctor` and in `swarmux guard lint`; delete it to clear the
+    warning. A key you stored for it is not deleted: `swarmux doctor` says
+    whether one is still in the OS keychain (service `swarmux`, account
+    `typesafe` or `openrouter`) and how to remove it. The unused
+    `jev_consent` table stays in the database.
+  - History is kept: decisions and ledger entries made with JEV read as before,
+    shown as "jev (removed)", and the ledger's hash chain is untouched.
 
 ### Fixed
 

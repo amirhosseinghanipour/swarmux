@@ -87,7 +87,7 @@ Guard rules only ever forbid: they never allow what your `[guard]` rules
 deny, and a `deny` in your settings still wins over a rule's `ask`. The
 strictest matching rule wins. A rule that can't be evaluated (a broken
 pattern) refuses the calls it watches rather than letting them through.
-Calls a rule holds are never handed to JEV: they wait for you.
+Calls a rule holds wait for you: nothing else decides them.
 
 A new guard, gate or lint rule starts in **shadow**: it logs what it would
 have done (a *would-deny*, *would-ask* or failed check on the ledger) and

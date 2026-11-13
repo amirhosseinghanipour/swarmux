@@ -62,8 +62,8 @@ A call that can't be taken back (a delete, a force push, a history rewrite:
 risk R4) is allowed by one thing only: you typing the name of what it acts on,
 after the prompt has armed for 1.5 seconds. Nothing else resolves it to allow:
 not an allow rule in `config.toml` (even a bare `Bash`), not an "always
-allow", not an accepted rule offer, not `unmatched = "pass"`, not JEV however
-confident, not a timeout (which denies). A call such a rule would have
+allow", not an accepted rule offer, not `unmatched = "pass"`, not a model
+of any kind, not a timeout (which denies). A call such a rule would have
 allowed is held for you instead, and the reason says so.
 
 This is enforced in the Guard (`GuardService`), not in the key handler: the
@@ -72,7 +72,9 @@ so another client of the Guard, now or later, can't get around it.
 
 ## Approvals
 
-With `unmatched = "ask"`, a call no rule matches waits for you. A panel shows
+With `unmatched = "ask"` (the default), a call no rule matches waits for you:
+no model is asked, in swarmux or anywhere else. With `unmatched = "pass"` it
+goes back to Claude Code's own rules. A panel shows
 the tool, what it acts on, the job and session (and the subagent, when the call
 was made by one) and a countdown on every screen: `y` approves, `n` denies,
 `a` always allows.
@@ -187,7 +189,7 @@ allow one, and a deny here still wins over a rule's ask.
 
 Decisions the Guard makes while swarmux is running are logged in the database
 and the ledger with the rule (and its hash), the latency, who resolved a held
-call (a key, a typed confirmation, a rule, JEV, a timeout) and the subagent, when
+call (a key, a typed confirmation, a rule, a timeout) and the subagent, when
 there was one. The Dashboard's green guard panel shows this run's counts and
 latest decisions. `swarmux doctor` prints the policy and checks the hook end to
 end.

@@ -13,7 +13,7 @@ sessions are marked `lean` in the list.
 Press `P` on the Dashboard (instead of `p`) or `D` on the Prompts screen
 (instead of `d`) and swarmux picks the session. The status bar says
 `routing…`, then the chosen session and a one-line reason, and the job's log
-and the guard / JEV panel record it before the prompt is queued.
+and the guard panel record it before the prompt is queued.
 
 Routing makes one cheap `claude -p --model haiku` call with no tools, no
 session file and none of your user-level settings. It reads the first 2000

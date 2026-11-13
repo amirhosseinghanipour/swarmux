@@ -22,29 +22,29 @@ and again. A job that has ended climbs at once.
    it gets back says what the watchdog saw and what to try instead. A silent
    agent can't be reached this way, and a full context isn't helped by it,
    so those skip this rung.
-2. **JEV.** With JEV on and agreed to, it judges: carry on (the watchdog
-   stands down), change approach (the agent is told), or stop (the next rung
-   follows at once). Skipped when JEV is off.
-3. **Fresh session.** A checkpoint and a handoff, then the work goes on in a
+2. **Fresh session.** A checkpoint and a handoff, then the work goes on in a
    new session with a clean context, in the same worktree.
-4. **Diagnosis.** One Haiku call reads the last steps and names what went
+3. **Diagnosis.** One Haiku call reads the last steps and names what went
    wrong; the answer goes to the agent and into the next handoff.
-5. **Fork.** The worktree goes back to the last checkpoint from before the
+4. **Fork.** The worktree goes back to the last checkpoint from before the
    trouble (the files of the failed attempt stay in a commit under
    `refs/swarmux/set-aside`) and a new session starts from there.
-6. **Stronger model.** A new session on the next model in `escalate_to`.
-7. **Replan.** A new session that plans smaller steps first.
-8. **Inbox.** You decide, with what was tried and the diagnosis attached.
+5. **Stronger model.** A new session on the next model in `escalate_to`.
+6. **Replan.** A new session that plans smaller steps first.
+7. **Inbox.** You decide, with what was tried and the diagnosis attached.
 
 New sessions are capped at `max_restarts` per run of work. Every alarm, rung
 and outcome goes to the audit ledger, the job's log and the change log, and
 Focus shows the recovery trail. With the watchdog on, the loop breaker stops
 a job one failure after the nudge rather than at the nudge.
 
+An older config that lists `"judge"` in `rungs` (the rung JEV had, removed
+with it) still loads: that name is skipped, with a warning.
+
 ```toml
 [watchdog]
 enabled = true
-rungs = ["nudge", "judge", "fresh", "diagnose", "fork", "escalate", "replan", "inbox"]
+rungs = ["nudge", "fresh", "diagnose", "fork", "escalate", "replan", "inbox"]
 stall_secs = 120           # silence that counts as a stall
 stall_tool_secs = 600      # how long one command may run
 stall_turns = 15           # calls in a row that only repeat earlier ones (0 = off)

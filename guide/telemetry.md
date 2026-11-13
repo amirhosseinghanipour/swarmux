@@ -5,8 +5,10 @@ thread; a source that fails keeps its last reading and shows why. Nothing is
 estimated: what isn't known shows as `—`.
 
 This is swarmux reading your machine, not reporting on you: it sends no usage
-data anywhere. The only network use is what you ask for or turn on: JEV, `ntfy`
-notifications, `swarmux self-update` and the `gh` calls for GitHub.
+data anywhere. The only network use is what you ask for or turn on: `ntfy`
+notifications, `swarmux self-update` and the `gh` calls for GitHub (plus
+Claude Code's own traffic, which swarmux starts for your jobs; see
+[SECURITY.md](../SECURITY.md#what-leaves-your-machine)).
 
 - **Spend & burn** from Claude Code's transcripts (`~/.claude/projects`, or
   `$CLAUDE_CONFIG_DIR/projects`), like `ccusage`: cost per day, week, model

@@ -68,7 +68,7 @@ swarmux labels             # sync the outcome labels now
 ## Audit ledger
 
 Everything swarmux stores about a job (queued, started, each agent event,
-the review, how it finished) and every guard, loop-breaker, JEV and routing
+the review, how it finished) and every guard, loop-breaker and routing
 decision is also appended to a ledger in `~/.swarmux/swarmux.db`. Each entry
 holds the SHA-256 of the previous entry plus its own content, so editing,
 removing or reordering anything already recorded breaks the chain. Only
@@ -146,5 +146,7 @@ allows, and where it could not decide:
 
 Guard decisions (kind `guard_decision`) also carry the SHA-256 of the rule that
 decided them, who resolved a held call (`human-typed`, `human-key`, `rule`,
-`model`, `timeout`) and, for a subagent's call, its id and type; JEV's carry the
-provider, the model, the hash of what was sent and whether the summary was cut.
+`timeout`) and, for a subagent's call, its id and type. Entries written while
+the optional JEV model existed (source `jev`, resolver `model`, with the
+provider, model and hash of what was sent) stay in the ledger unchanged and
+verify as before; swarmux no longer writes any.

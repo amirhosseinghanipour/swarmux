@@ -136,12 +136,13 @@ From a checkout, use `cargo run` and `cargo run -- doctor`. See
   cache, on the Ledger card and in Focus; `swarmux stats cache`
 - **Audit ledger**: a tamper-evident, hash-chained record of every job,
   agent event, review and guard decision
-- **JEV (optional, bring your own key)**: the hosted Jev model for fuzzy
-  decisions such as unmatched tool calls and which session should take a prompt
 - **Watchdog**: notices loops, stalls, full contexts and runaway spending,
   and tries a ladder of recoveries (nudge, fresh session, diagnosis, fork
   from a checkpoint, stronger model, replan) before it asks you
 - **Let swarmux route**: one cheap Haiku call picks the session for a prompt
+- **No model decides your tool calls**: a call no rule matches waits for you
+  (or goes back to Claude Code, if you set `unmatched = "pass"`); swarmux has
+  no hosted decision model in the loop
 - **Lean mode** per session: skip your user-level Claude Code settings
 
 Single Rust binary. Windows, macOS, Linux. Works with Claude Code only.
@@ -162,7 +163,6 @@ Single Rust binary. Windows, macOS, Linux. Works with Claude Code only.
 - [Themes and layouts](guide/themes.md)
 - [Guard](guide/guard.md)
 - [Sessions: lean mode and routing](guide/sessions.md)
-- [JEV](guide/jev.md)
 - [Done-gate](guide/done-gate.md)
 - [Independent verifier, hidden checks and review](guide/verifier.md)
 - [Worktrees and checkpoints](guide/worktrees.md)
