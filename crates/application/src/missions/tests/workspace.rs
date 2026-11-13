@@ -279,3 +279,183 @@ fn workspace_missions_build_in_one_set_not_a_graph() {
         "no repos named: all"
     );
 }
+
+// ---------------------------------------------------------------------
+// landing = "manual": the gate passing does not land; the user does
+// ---------------------------------------------------------------------
+
+impl W {
+    /// The same rig, landing by hand.
+    fn manual(self) -> W {
+        W {
+            svc: self.svc.with_plan_settings(PlanSettings {
+                landing: LandingPolicy::Manual,
+                ..PlanSettings::default()
+            }),
+            ..self
+        }
+    }
+
+    /// The user lands `slug`, as the gate stands for `job`.
+    fn land(&mut self, slug: &str, job: JobId) -> AppResult<LandReport> {
+        let facts = self.jobs.facts();
+        let gates = HashMap::from([(job, pass(self.rig.clock.now()))]);
+        self.svc.land_on_request(slug, &facts, &gates)
+    }
+
+    fn merged(&self) -> Vec<PathBuf> {
+        self.merge
+            .merged_in
+            .borrow()
+            .iter()
+            .map(|(dir, _)| dir.clone())
+            .collect()
+    }
+}
+
+#[test]
+fn manual_landing_waits_with_the_work_verified_until_the_user_lands_it() {
+    let mut w = rig().manual();
+    let slug = w.create(contract(&["backend", "app"], &["backend: cargo test"]));
+    let job = w.deliver(&slug);
+    // The gate passed, and nothing landed: the mission waits.
+    let m = w.svc.get(&slug).unwrap();
+    assert_eq!(m.state, MissionState::Verifying, "{:?}", m.note);
+    assert!(m.landing.is_none());
+    assert!(w.merged().is_empty());
+    assert_eq!(w.rig.git.snapshots.get(), 0, "no repository was touched");
+    // Pumping again, however often, does not land it either.
+    let facts = w.jobs.facts();
+    let gates = HashMap::from([(job, pass(w.rig.clock.now()))]);
+    for _ in 0..3 {
+        let report = w.svc.pump(&facts, &gates);
+        assert!(!report.changed);
+    }
+    assert_eq!(w.svc.get(&slug).unwrap().state, MissionState::Verifying);
+    assert!(w.merged().is_empty());
+
+    // The user lands it: every repository, producers first, and the
+    // mission is delivered, with the same ledger trail as automatic.
+    assert_eq!(w.land(&slug, job).unwrap(), LandReport::Delivered);
+    let m = w.svc.get(&slug).unwrap();
+    assert_eq!(m.state, MissionState::Delivered, "{:?}", m.note);
+    let landing = m.landing.clone().unwrap();
+    assert!(landing.complete());
+    assert_eq!(landing.into, "swarmux/guest-checkout/integration");
+    assert_eq!(w.merged(), [w.workdir("backend"), w.workdir("app")]);
+    assert!(w.rig.git.snapshots.get() >= 2);
+    // Delivered work cannot be landed twice.
+    let again = w.land(&slug, job).unwrap_err().to_string();
+    assert!(again.contains("only work the gate passed"), "{again}");
+    assert_eq!(w.merged().len(), 2);
+}
+
+#[test]
+fn manual_landing_that_cannot_land_puts_back_what_it_landed_and_escalates() {
+    let mut w = rig().manual();
+    let slug = w.create(contract(&["backend", "app"], &["backend: cargo test"]));
+    w.merge.conflict_in.borrow_mut().push(w.workdir("app"));
+    let job = w.deliver(&slug);
+    assert_eq!(w.svc.get(&slug).unwrap().state, MissionState::Verifying);
+
+    let LandReport::Undone(why) = w.land(&slug, job).unwrap() else {
+        panic!("the app repository conflicts");
+    };
+    assert!(why.contains("app could not land"), "{why}");
+    let m = w.svc.get(&slug).unwrap().clone();
+    assert_eq!(m.state, MissionState::Escalated);
+    let states: Vec<_> = m.landing.unwrap().repos.iter().map(|r| r.state).collect();
+    assert_eq!(states, [LandState::Undone, LandState::Failed]);
+    // Undo: backend was merged first and is back where it was.
+    assert!(w.merged().is_empty(), "{:?}", w.merged());
+    assert_eq!(w.merge.resets.borrow().len(), 1);
+    assert_eq!(w.merge.resets.borrow()[0].0, w.workdir("backend"));
+    // The user is told, as for an automatic landing.
+    let items = w.svc.plan_items(w.rig.clock.now());
+    assert_eq!(items.len(), 1, "{items:?}");
+    assert_eq!(items[0].kind, AttentionKind::Merge);
+}
+
+#[test]
+fn landing_on_request_is_refused_where_there_is_nothing_to_land() {
+    let mut w = rig().manual();
+    // The gate has not passed: the job has not even run.
+    let slug = w.create(contract(&["backend"], &["backend: cargo test"]));
+    let job = w.svc.launch(&slug, &mut w.jobs).unwrap();
+    let e = w.land(&slug, job).unwrap_err().to_string();
+    assert!(e.contains("only work the gate passed"), "{e}");
+    assert!(w.merged().is_empty());
+
+    // A mission worked in one folder has no integration branch.
+    let session = w.session.id;
+    let one = w
+        .svc
+        .create(contract(&[], &["cargo test"]), "/p", Some(session))
+        .unwrap();
+    let e = w.land(&one, job).unwrap_err().to_string();
+    assert!(e.contains("one folder"), "{e}");
+    let e = w.land("no-such-mission", job).unwrap_err().to_string();
+    assert!(e.contains("no-such-mission"), "{e}");
+}
+
+#[test]
+fn a_failing_gate_is_not_landed_even_on_request() {
+    let mut w = rig().manual();
+    let slug = w.create(contract(&["backend"], &["backend: cargo test"]));
+    let job = w.svc.launch(&slug, &mut w.jobs).unwrap();
+    w.runner.emit(
+        0,
+        RunnerMsg::Event(AgentEvent::Result {
+            is_error: false,
+            subtype: "success".into(),
+            cost_usd: 0.2,
+            duration_ms: 900,
+            num_turns: 1,
+            tokens_in: 1,
+            tokens_out: 1,
+            cache_read: 0,
+            context_window: None,
+            subagents_spawned: 0,
+            text: "done".into(),
+            cache_creation: None,
+        }),
+    );
+    w.runner.emit(
+        0,
+        RunnerMsg::Exited {
+            code: Some(0),
+            stderr_tail: String::new(),
+        },
+    );
+    w.jobs.pump();
+    let facts = w.jobs.facts();
+    let mut blocked = pass(w.rig.clock.now());
+    blocked.outcome = GateOutcome::Block;
+    let gates = HashMap::from([(job, blocked)]);
+    w.svc.pump(&facts, &gates);
+    assert_eq!(w.svc.get(&slug).unwrap().state, MissionState::Verifying);
+    let e = w
+        .svc
+        .land_on_request(&slug, &facts, &gates)
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("gate has not passed"), "{e}");
+    assert!(w.merged().is_empty());
+}
+
+#[test]
+fn auto_is_the_default_and_lands_at_the_gate_as_before() {
+    assert_eq!(PlanSettings::default().landing, LandingPolicy::Auto);
+    let mut w = rig();
+    let slug = w.create(contract(&["backend", "app"], &["backend: cargo test"]));
+    let job = w.deliver(&slug);
+    assert_eq!(
+        w.svc.get(&slug).unwrap().state,
+        MissionState::Delivered,
+        "no user step in auto mode"
+    );
+    assert_eq!(w.merged(), [w.workdir("backend"), w.workdir("app")]);
+    // Asking to land what is already delivered is refused, not repeated.
+    assert!(w.land(&slug, job).is_err());
+    assert_eq!(w.merged().len(), 2);
+}

@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use serde::Deserialize;
-use swarmux_application::PlanSettings;
+use swarmux_application::{LandingPolicy, PlanSettings};
 
 use crate::config::{ConfigError, key_line};
 
@@ -14,6 +14,7 @@ pub(crate) struct RawMissions {
     plan_model: Option<String>,
     drift_threshold: Option<f64>,
     parallel: Option<bool>,
+    landing: Option<String>,
 }
 
 pub(crate) fn parse_missions(
@@ -32,6 +33,16 @@ pub(crate) fn parse_missions(
     }
     if let Some(on) = raw.parallel {
         settings.parallel = on;
+    }
+    if let Some(word) = raw.landing {
+        settings.landing = LandingPolicy::parse(word.trim()).ok_or_else(|| {
+            error(
+                "landing",
+                &format!(
+                    "landing must be \"auto\" (land when the gate passes) or \"manual\" (wait for you to land), not \"{word}\""
+                ),
+            )
+        })?;
     }
     if let Some(model) = raw.plan_model {
         let model = model.trim();

@@ -858,6 +858,44 @@ unknown = 1
     }
 
     #[test]
+    fn landing_is_auto_unless_the_user_asks_for_manual() {
+        use swarmux_application::LandingPolicy;
+        assert_eq!(parse("").unwrap().missions.landing, LandingPolicy::Auto);
+        assert_eq!(
+            parse("[missions]\nplan_first = true\n")
+                .unwrap()
+                .missions
+                .landing,
+            LandingPolicy::Auto,
+            "other settings leave it alone"
+        );
+        for (text, want) in [
+            ("[missions]\nlanding = \"auto\"\n", LandingPolicy::Auto),
+            ("[missions]\nlanding = \"manual\"\n", LandingPolicy::Manual),
+            (
+                "[missions]\nlanding = \" manual \"\n",
+                LandingPolicy::Manual,
+            ),
+        ] {
+            assert_eq!(parse(text).unwrap().missions.landing, want, "{text}");
+        }
+        // A bad word is refused with the line and the two it may be.
+        for bad in [
+            "[missions]\nlanding = \"sometimes\"\n",
+            "[missions]\nlanding = \"\"\n",
+            "[missions]\nlanding = \"Manual\"\n",
+        ] {
+            let e = parse(bad).unwrap_err();
+            assert!(
+                e.message.contains("\"auto\"") && e.message.contains("\"manual\""),
+                "{bad}: {e}"
+            );
+            assert_eq!(e.line, Some(2), "{bad}");
+        }
+        assert!(parse("[missions]\nlanding = true\n").is_err());
+    }
+
+    #[test]
     fn watchdog_section_overrides_and_is_checked() {
         let s = parse(
             "[guard]

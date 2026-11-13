@@ -26,7 +26,7 @@ use crate::{AppError, AppResult};
 const DRIFT_ITEM_MS: Millis = 24 * 60 * 60 * 1000;
 
 /// The `[missions]` section: plan-first by default or not, which model
-/// plans, and how much drift is too much.
+/// plans, how much drift is too much, and whether landing waits for you.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlanSettings {
     /// Missions plan first unless they say otherwise.
@@ -38,6 +38,9 @@ pub struct PlanSettings {
     /// An approved plan whose tasks can run side by side runs as one job
     /// per task, each in its own worktree, merged in dependency order.
     pub parallel: bool,
+    /// Whether the gate passing lands a workspace mission by itself, or
+    /// waits for the user to land it.
+    pub landing: super::land::LandingPolicy,
 }
 
 impl Default for PlanSettings {
@@ -47,6 +50,7 @@ impl Default for PlanSettings {
             model: "sonnet".into(),
             drift_threshold: DEFAULT_DRIFT_THRESHOLD,
             parallel: true,
+            landing: super::land::LandingPolicy::Auto,
         }
     }
 }

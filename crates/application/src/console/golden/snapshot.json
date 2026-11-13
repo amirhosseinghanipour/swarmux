@@ -599,7 +599,7 @@
             {
               "kind": "land_to_integration",
               "enabled": false,
-              "reason": "swarmux lands the work itself when the gate passes; landing on request does not exist yet",
+              "reason": "landing on request is for workspace missions; this mission is not one",
               "job": null,
               "mission": "plan-me",
               "request": null
@@ -887,7 +887,7 @@
             {
               "kind": "land_to_integration",
               "enabled": false,
-              "reason": "swarmux lands the work itself when the gate passes; landing on request does not exist yet",
+              "reason": "landing on request is for workspace missions; this mission is not one",
               "job": null,
               "mission": "split-app",
               "request": null

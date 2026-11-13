@@ -23,6 +23,7 @@ use swarmux_domain::{
 use super::*;
 use crate::gate::{GateDetail, GateRun, GateState};
 use crate::jobs::{JobFact, QueueStats};
+use crate::missions::LandingPolicy;
 use crate::ports::{HookRequest, JobRepository, NewJob, SessionRepository};
 use crate::testing::InMemoryStore;
 use crate::{DecisionRecord, Outcome, PendingApproval, Source, Stored};
@@ -1020,6 +1021,74 @@ fn actions_follow_the_state_and_say_why_when_they_do_not() {
     }
 }
 
+#[test]
+fn landing_is_offered_for_verified_workspace_work_only_when_the_user_lands() {
+    let mut r = Rig::new();
+    let job = r.job(1, "wide", JobStatus::Done);
+    r.fact_mut(job).finished_at = Some(3_000_000);
+    let mut m = mission("wide", MissionState::Verifying, 3_000_000);
+    m.workspace = Some(workspace(1));
+    m.job = Some(job);
+    m.contract.repos = vec!["api".into(), "mobile".into()];
+    r.missions.push(m);
+    r.gates.insert(
+        job,
+        gate_state(GateOutcome::Pass, &[("cargo test", true)], 3_100_000),
+    );
+
+    // By hand: the verified mission waits in READY TO LAND, and landing
+    // is enabled.
+    let manual = ConsoleService::new()
+        .with_landing(LandingPolicy::Manual)
+        .snapshot(&r.sources())
+        .clone();
+    assert_eq!(
+        ids(group(&manual, GroupKind::ReadyToLand)),
+        ["mission:wide"]
+    );
+    let land = action(
+        outcome(&manual, "mission:wide"),
+        ActionKind::LandToIntegration,
+    );
+    assert!(land.enabled, "{:?}", land.reason);
+    assert_eq!(land.mission.as_deref(), Some("wide"));
+    let o = outcome(&manual, "mission:wide");
+    assert_eq!(o.landing.as_ref().unwrap().mode, LandingMode::Preview);
+    assert_eq!(o.landing.as_ref().unwrap().into, "swarmux/wide/integration");
+
+    // Automatic (the default): swarmux lands it itself, so there is
+    // nothing to ask for, and it says so.
+    let auto = r.snapshot();
+    let land = action(
+        outcome(&auto, "mission:wide"),
+        ActionKind::LandToIntegration,
+    );
+    assert!(!land.enabled);
+    assert!(
+        land.reason
+            .as_deref()
+            .unwrap()
+            .contains("lands the work itself")
+    );
+
+    // Work the gate has not passed is not offered, either way.
+    r.gates.clear();
+    let waiting = ConsoleService::new()
+        .with_landing(LandingPolicy::Manual)
+        .snapshot(&r.sources())
+        .clone();
+    let land = action(
+        outcome(&waiting, "mission:wide"),
+        ActionKind::LandToIntegration,
+    );
+    assert!(!land.enabled);
+    assert!(
+        land.reason
+            .as_deref()
+            .unwrap()
+            .contains("gate has not passed")
+    );
+}
 // ---------------------------------------------------------------------
 // Guard holds
 // ---------------------------------------------------------------------

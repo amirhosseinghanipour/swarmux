@@ -23,6 +23,7 @@ use crate::engine::Engine;
 use crate::evidence::{EvidenceService, Stored};
 use crate::gate::{GateDetail, GateState};
 use crate::jobs::{JobFact, QueueStats};
+use crate::missions::LandingPolicy;
 use crate::ports::JobRepository;
 use crate::{DecisionRecord, PendingApproval, TelemetrySnapshot};
 
@@ -241,6 +242,7 @@ fn flows_of(index: &Index) -> Vec<rules::ContractFlow> {
 /// Builds snapshots, and rebuilds one only when its inputs changed.
 pub struct ConsoleService {
     landed: usize,
+    landing: LandingPolicy,
     revision: u64,
     last: Option<(u64, ConsoleSnapshot)>,
     caches: Caches,
@@ -256,6 +258,7 @@ impl ConsoleService {
     pub fn new() -> ConsoleService {
         ConsoleService {
             landed: DEFAULT_LANDED,
+            landing: LandingPolicy::Auto,
             revision: 0,
             last: None,
             caches: Caches::default(),
@@ -268,6 +271,13 @@ impl ConsoleService {
         self
     }
 
+    /// Reads outcomes the way the missions land (`[missions] landing`):
+    /// with `Manual`, landing on request is offered for verified work.
+    pub fn with_landing(mut self, landing: LandingPolicy) -> ConsoleService {
+        self.landing = landing;
+        self
+    }
+
     /// The snapshot of `src`: the one built last when nothing it depends
     /// on changed, else a new one.
     pub fn snapshot(&mut self, src: &Sources<'_>) -> &ConsoleSnapshot {
@@ -275,7 +285,13 @@ impl ConsoleService {
         let fresh = self.last.as_ref().is_some_and(|(s, _)| *s == stamp);
         if !fresh {
             self.revision += 1;
-            let snap = build(src, &mut self.caches, self.revision, self.landed);
+            let snap = build(
+                src,
+                &mut self.caches,
+                self.revision,
+                self.landed,
+                self.landing,
+            );
             self.last = Some((stamp, snap));
         }
         match &self.last {
@@ -369,9 +385,15 @@ fn stamp(src: &Sources<'_>) -> u64 {
 }
 
 /// Builds a snapshot from scratch.
-fn build(src: &Sources<'_>, caches: &mut Caches, revision: u64, landed: usize) -> ConsoleSnapshot {
+fn build(
+    src: &Sources<'_>,
+    caches: &mut Caches,
+    revision: u64,
+    landed: usize,
+    landing: LandingPolicy,
+) -> ConsoleSnapshot {
     let holds = hold::build(src);
-    let built = outcome::build(src, caches, &holds);
+    let built = outcome::build(src, caches, &holds, landing);
 
     let standings: Vec<rules::Standing> = built.iter().map(|b| b.standing.clone()).collect();
     let ranked = rules::rank(&standings);

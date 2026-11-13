@@ -31,6 +31,7 @@ mod graph;
 mod land;
 mod plan;
 pub use graph::{Claim, MAX_RESUMES, MergeOutcome, MergeQueue, ScopeClaims, ScopeDenial};
+pub use land::{LandReport, LandingPolicy};
 pub use plan::{
     Begun, ChangedFiles, PlanReply, PlanRequest, PlanSettings, PlanSink, PlanStore, Planner,
     WorkDirs,
@@ -631,13 +632,15 @@ impl MissionService {
         let verdict = gate.filter(|g| g.at >= since).map(|g| g.outcome);
         match verdict {
             // A workspace mission is delivered once all its repositories
-            // landed; when one can't, none has and the user decides.
+            // landed; when one can't, none has and the user decides. With
+            // `landing = "manual"` it waits, verified, for the user to
+            // land it (`land_on_request`).
             Some(GateOutcome::Pass) if self.missions[i].workspace.is_some() => {
-                match self.land(i, fact.job_id) {
-                    Ok(None) => self.take(i, Signal::Gate(GateOutcome::Pass), now),
-                    Ok(Some(why)) => self.escalate(i, why, now),
-                    Err(e) => self.escalate(i, format!("landing failed: {e}"), now),
+                if self.plans.settings.landing == LandingPolicy::Manual {
+                    return Ok(false);
                 }
+                self.land_and_deliver(i, fact.job_id, now)
+                    .map(|(changed, _)| changed)
             }
             Some(outcome @ (GateOutcome::Pass | GateOutcome::Escalate)) => {
                 self.take(i, Signal::Gate(outcome), now)

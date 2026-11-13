@@ -13,7 +13,7 @@ mod actions;
 mod graph;
 mod rank;
 
-pub use actions::{ActionFacts, ActionKind, Allowed, allowed};
+pub use actions::{ActionFacts, ActionKind, Allowed, LandFacts, allowed};
 pub use graph::{
     ContractFlow, DepState, Edge, EdgeKind, Node, Progress, claim_edges, contract_edges, depths,
     task_edges,

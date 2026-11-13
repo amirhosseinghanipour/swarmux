@@ -92,9 +92,10 @@ pub use knowledge::{
     ToolContext, Usage,
 };
 pub use missions::{
-    Begun, ChangedFiles, Claim, LintReply, LintRequest, LintSink, MergeOutcome, MergeQueue,
-    MissionLinter, MissionReport, MissionService, MissionStore, MissionWatch, PlanReply,
-    PlanRequest, PlanSettings, PlanSink, PlanStore, Planner, ScopeClaims, ScopeDenial, WorkDirs,
+    Begun, ChangedFiles, Claim, LandReport, LandingPolicy, LintReply, LintRequest, LintSink,
+    MergeOutcome, MergeQueue, MissionLinter, MissionReport, MissionService, MissionStore,
+    MissionWatch, PlanReply, PlanRequest, PlanSettings, PlanSink, PlanStore, Planner, ScopeClaims,
+    ScopeDenial, WorkDirs,
 };
 pub use notify::{
     FocusTracker, IDLE_UNFOCUSED_MS, Moment, NoNotifier, Notification, Notifier, NotifyService,

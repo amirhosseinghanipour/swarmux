@@ -23,6 +23,7 @@ use super::view::{
 };
 use crate::gate::{GateDetail, GateRun, GateState};
 use crate::jobs::JobFact;
+use crate::missions::LandingPolicy;
 
 /// Longest quote of what the agent claims, in characters.
 const CLAIM_MAX: usize = 1_500;
@@ -188,7 +189,12 @@ fn mission_of_item(id: &str) -> Option<&str> {
 
 /// Every outcome of the moment: the missions that started, then the plain
 /// jobs that belong to none.
-pub(super) fn build(src: &Sources<'_>, caches: &mut Caches, holds: &[HoldView]) -> Vec<Built> {
+pub(super) fn build(
+    src: &Sources<'_>,
+    caches: &mut Caches,
+    holds: &[HoldView],
+    landing: LandingPolicy,
+) -> Vec<Built> {
     let facts: HashMap<JobId, &JobFact> = src.facts.iter().map(|f| (f.job_id, f)).collect();
     let mut owned: HashSet<JobId> = HashSet::new();
     let mut out = Vec::new();
@@ -196,7 +202,7 @@ pub(super) fn build(src: &Sources<'_>, caches: &mut Caches, holds: &[HoldView]) 
         let graph = (src.plans)(&m.slug).and_then(|r| r.graph.as_ref());
         owned.extend(job_ids(m, graph).0);
         if started(src, m) {
-            out.push(mission(src, caches, holds, &facts, m));
+            out.push(mission(src, caches, holds, &facts, m, landing));
         }
     }
     for f in src
@@ -751,6 +757,7 @@ fn mission(
     holds: &[HoldView],
     facts: &HashMap<JobId, &JobFact>,
     m: &Mission,
+    landing: LandingPolicy,
 ) -> Built {
     let record = (src.plans)(&m.slug);
     let graph = record
@@ -845,6 +852,11 @@ fn mission(
         held_calls: my_holds.len(),
         plan_proposed,
         evidence: sealed.is_some(),
+        landing: rules::LandFacts {
+            workspace: m.workspace.is_some(),
+            verified: stage == rules::Stage::Verified,
+            manual: landing == LandingPolicy::Manual,
+        },
     };
     let first_request = my_holds.first().and_then(|h| h.request);
 
@@ -1078,6 +1090,7 @@ fn plain(src: &Sources<'_>, caches: &mut Caches, holds: &[HoldView], f: &JobFact
         held_calls: my_holds.len(),
         plan_proposed: false,
         evidence: false,
+        landing: rules::LandFacts::default(),
     };
     let title = title_of(f);
     let view = OutcomeView {

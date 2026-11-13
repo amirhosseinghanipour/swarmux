@@ -72,6 +72,24 @@ pub struct ActionFacts {
     pub plan_proposed: bool,
     /// An evidence bundle was sealed.
     pub evidence: bool,
+    /// What decides whether the work can be landed on request.
+    pub landing: LandFacts,
+}
+
+/// What the rules need to know to offer landing on request.
+///
+/// All false (the default) is the answer for an outcome that cannot be
+/// landed on request: the action is then disabled, with the reason.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LandFacts {
+    /// The mission works across a workspace's repositories, so there is
+    /// something to land: one branch per repository.
+    pub workspace: bool,
+    /// The gate passed and the work has not landed.
+    pub verified: bool,
+    /// Landing waits for the user (`landing = "manual"`) instead of
+    /// happening when the gate passes.
+    pub manual: bool,
 }
 
 /// One action and whether it can be taken now.
@@ -110,10 +128,10 @@ fn when(kind: ActionKind, ok: bool, reason: &str) -> Allowed {
 /// when it was interrupted or failed; a plan can be decided on while it
 /// is proposed; a held call is answered while it is held.
 ///
-/// Landing is the exception. Swarmux lands a mission's work itself, the
-/// moment its gate passes, and there is no way to ask it to land on
-/// request yet, so the action is never enabled; the reason says which of
-/// the cases applies.
+/// Landing is on request only for a workspace mission whose gate passed,
+/// when the user chose to land by hand (`landing = "manual"`); otherwise
+/// swarmux lands the work itself the moment the gate passes, and the
+/// reason says which of the cases applies.
 pub fn allowed(f: &ActionFacts) -> Vec<Allowed> {
     let delivered = f.mission == Some(MissionState::Delivered);
     ActionKind::ALL
@@ -142,10 +160,15 @@ pub fn allowed(f: &ActionFacts) -> Vec<Allowed> {
             ActionKind::LandToIntegration => match f.mission {
                 None => no(kind, "a plain job has no integration branch"),
                 Some(MissionState::Delivered) => no(kind, "the work is delivered"),
-                Some(_) => no(
+                Some(_) if !f.landing.workspace => {
+                    no(kind, "landing on request is for workspace missions; this mission is not one")
+                }
+                Some(_) if !f.landing.verified => no(kind, "the gate has not passed this work yet"),
+                Some(_) if !f.landing.manual => no(
                     kind,
-                    "swarmux lands the work itself when the gate passes; landing on request does not exist yet",
+                    "swarmux lands the work itself when the gate passes (landing = \"manual\" in config.toml waits for you)",
                 ),
+                Some(_) => yes(kind),
             },
             ActionKind::OpenEvidence => when(
                 kind,
@@ -248,6 +271,45 @@ mod tests {
         let none = allowed(&ActionFacts::default());
         assert!(!get(&none, ActionKind::AnswerHeldCall).enabled);
         assert!(!get(&none, ActionKind::ApprovePlan).enabled);
+    }
+
+    #[test]
+    fn landing_waits_for_the_user_only_when_manual_and_verified() {
+        let facts = |workspace, verified, manual| ActionFacts {
+            mission: Some(MissionState::Verifying),
+            job: Some(JobStatus::Done),
+            landing: LandFacts {
+                workspace,
+                verified,
+                manual,
+            },
+            ..ActionFacts::default()
+        };
+        let land = |f: &ActionFacts| get(&allowed(f), ActionKind::LandToIntegration).clone();
+        assert!(land(&facts(true, true, true)).enabled);
+        // Each missing condition disables it, with its own reason.
+        let one_folder = land(&facts(false, true, true));
+        assert!(!one_folder.enabled);
+        assert!(one_folder.reason.unwrap().contains("workspace missions"));
+        let not_yet = land(&facts(true, false, true));
+        assert!(!not_yet.enabled);
+        assert!(not_yet.reason.unwrap().contains("gate has not passed"));
+        let auto = land(&facts(true, true, false));
+        assert!(!auto.enabled);
+        assert!(auto.reason.unwrap().contains("lands the work itself"));
+        // Delivered work is never offered again.
+        let delivered = ActionFacts {
+            mission: Some(MissionState::Delivered),
+            landing: LandFacts {
+                workspace: true,
+                verified: true,
+                manual: true,
+            },
+            ..ActionFacts::default()
+        };
+        let d = land(&delivered);
+        assert!(!d.enabled);
+        assert!(d.reason.unwrap().contains("delivered"));
     }
 
     #[test]
