@@ -515,3 +515,25 @@ fn write_review_screens() {
     let buf = draw(&app, &evening, 180, 47);
     std::fs::write(format!("{dir}/escalated_180.ans"), ansi(&buf)).unwrap();
 }
+
+#[test]
+fn a_run_of_held_calls_shows_the_first_few_and_the_agents_words_once() {
+    let mut snap = evening();
+    let held = snap.holds[0].clone();
+    for n in 0..6u64 {
+        let mut h = held.clone();
+        h.id = format!("hold:{}", 100 + n);
+        h.request = Some(100 + n);
+        h.target = format!("cargo check -p docs-{n}");
+        h.at = held.at - i64::try_from(n).unwrap();
+        snap.holds.push(h);
+    }
+    let mut app = app();
+    select(&mut app, &snap, "job:2");
+    let out = text(&draw(&app, &snap, 180, 60));
+    assert!(out.contains("more calls held or refused"), "{out}");
+    // Three calls in full, not all seven.
+    assert_eq!(out.matches("THE CALL GUARD HELD").count(), 3, "{out}");
+    // The words the agent said once, however many calls share them.
+    assert_eq!(out.matches("“Pushing the branch").count(), 1, "{out}");
+}

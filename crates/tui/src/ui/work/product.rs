@@ -23,23 +23,50 @@ use crate::work::{countdown, holds_of, short};
 /// Narrowest right pane that shows two columns.
 const TWO_COLUMNS_FROM: usize = 104;
 
+/// Held or refused calls shown in full for one outcome.
+const MAX_HOLDS: usize = 3;
+
 /// The whole tab, as rows.
 pub(super) fn body(app: &App, snap: &ConsoleSnapshot, o: &OutcomeView, w: usize) -> Lines {
     let now = app.now();
     let mut lines: Lines = Vec::new();
     let holds = holds_of(snap, o);
+    // A run of calls held for one cause (a dozen routine checks) shows the
+    // first few, and what the agent said once: the rest is counted.
+    let shown: Vec<(&HoldView, bool)> = holds
+        .iter()
+        .take(MAX_HOLDS)
+        .enumerate()
+        .map(|(i, h)| {
+            let again = i > 0
+                && holds[i - 1].agent_words.as_ref().map(|a| &a.text)
+                    == h.agent_words.as_ref().map(|a| &a.text);
+            (*h, !again)
+        })
+        .collect();
+    let more_holds = holds.len().saturating_sub(MAX_HOLDS);
+    let more_line = |t: &crate::theme::Theme| {
+        Line::from(span(
+            format!("  +{more_holds} more calls held or refused"),
+            Style::new().fg(t.muted),
+        ))
+    };
     if w >= TWO_COLUMNS_FROM {
         let lw = (w - 3) / 2;
         let rw = w - 3 - lw;
         // Each hold: the call at the left, what the agent said before it
         // and its last steps at the right.
-        for h in &holds {
-            lines.extend(columns(
-                hold(app, h, now, lw),
-                lw,
-                3,
-                hold_words(app, h, rw),
-            ));
+        for (h, with_words) in &shown {
+            let words = if *with_words {
+                hold_words(app, h, rw)
+            } else {
+                Vec::new()
+            };
+            lines.extend(columns(hold(app, h, now, lw), lw, 3, words));
+            lines.push(Line::default());
+        }
+        if more_holds > 0 {
+            lines.push(more_line(&app.look.theme));
             lines.push(Line::default());
         }
         lines.extend(columns(
@@ -49,13 +76,21 @@ pub(super) fn body(app: &App, snap: &ConsoleSnapshot, o: &OutcomeView, w: usize)
             claim_checks(app, o, rw),
         ));
     } else {
-        for h in &holds {
+        for (h, with_words) in &shown {
             lines.extend(hold(app, h, now, w));
-            let words = hold_words(app, h, w);
+            let words = if *with_words {
+                hold_words(app, h, w)
+            } else {
+                Vec::new()
+            };
             if !words.is_empty() {
                 lines.push(Line::default());
                 lines.extend(words);
             }
+            lines.push(Line::default());
+        }
+        if more_holds > 0 {
+            lines.push(more_line(&app.look.theme));
             lines.push(Line::default());
         }
         lines.extend(plan_drift(app, o, w));
