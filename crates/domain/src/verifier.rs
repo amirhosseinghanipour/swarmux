@@ -11,6 +11,8 @@
 
 use std::collections::HashSet;
 
+pub mod manifest;
+pub mod substrate;
 pub mod weakening;
 
 use crate::alarm::{Reversibility, RiskInputs, RiskTier, assess};
@@ -168,6 +170,63 @@ pub fn repo_key(top: &str) -> Option<String> {
     let last = last.trim_start_matches('.');
     let last: String = last.chars().take(NAME_MAX).collect();
     valid_name(&last).ok().map(|_| last)
+}
+
+/// What follows a folder name in a repository's key once the repository
+/// is known by what it is, not where it lives.
+const IDENTITY_MARK: &str = ".id-";
+/// Hex characters of the identity hash kept in a key.
+const IDENTITY_LEN: usize = 12;
+
+/// A remote URL in one spelling: `https://github.com/a/b.git`,
+/// `git@github.com:a/b` and `ssh://git@github.com/a/b/` are one remote.
+pub fn normalize_remote(url: &str) -> String {
+    let mut u = url.trim().to_ascii_lowercase();
+    for scheme in ["https://", "http://", "ssh://", "git://", "git+ssh://"] {
+        if let Some(rest) = u.strip_prefix(scheme) {
+            u = rest.to_string();
+            break;
+        }
+    }
+    if let Some((_, rest)) = u.split_once('@') {
+        u = rest.to_string();
+    }
+    // `host:path` of scp-like URLs is `host/path`.
+    if let Some((host, path)) = u.split_once(':')
+        && !path.starts_with(|c: char| c.is_ascii_digit())
+    {
+        u = format!("{host}/{}", path.trim_start_matches('/'));
+    }
+    let u = u.trim_end_matches('/');
+    u.strip_suffix(".git").unwrap_or(u).to_string()
+}
+
+/// The identity of a repository: a hash of its remote and its root commit,
+/// the first twelve hex characters. Two checkouts of one repository have it
+/// in common wherever they live; two repositories in folders of the same
+/// name do not.
+pub fn repo_identity(remote: &str, root_commit: &str) -> String {
+    let text = format!("{}\0{}", normalize_remote(remote), root_commit.trim());
+    let hash = crate::ledger::hex(&crate::ledger::sha256(text.as_bytes()));
+    hash[..IDENTITY_LEN].to_string()
+}
+
+/// The key a repository's hidden checks are kept under: its folder name and
+/// its identity.
+pub fn identity_key(name: &str, identity: &str) -> String {
+    let suffix = format!("{IDENTITY_MARK}{identity}");
+    let room = NAME_MAX.saturating_sub(suffix.len());
+    let name: String = name.chars().take(room).collect();
+    format!("{name}{suffix}")
+}
+
+/// The folder name a key was made from, for keys made by [`identity_key`];
+/// `None` for a key that is only a folder name.
+pub fn legacy_name(key: &str) -> Option<&str> {
+    let at = key.len().checked_sub(IDENTITY_MARK.len() + IDENTITY_LEN)?;
+    let (name, tail) = key.split_at(at);
+    let id = tail.strip_prefix(IDENTITY_MARK)?;
+    (!name.is_empty() && id.bytes().all(|b| b.is_ascii_hexdigit())).then_some(name)
 }
 
 /// Where a hidden check's file goes, checked: relative, `/`-separated,

@@ -1,6 +1,6 @@
 //! Reading a gate verdict back from the payload the ledger holds.
 
-use super::CheckResult;
+use super::{CheckResult, HowChecked};
 use crate::gate::GateCheck;
 use crate::json::Json;
 use crate::mission::check_of;
@@ -20,6 +20,25 @@ pub(crate) fn hidden_of(j: &Json) -> Option<HiddenTally> {
     })
 }
 
+/// The repository root and, per check, whether it failed and then passed,
+/// from a `gate_verdict` payload; `None` when it has neither.
+pub fn check_flakes(payload_json: &str) -> Option<(String, Vec<(String, bool)>)> {
+    let j = Json::parse(payload_json).ok()?;
+    let root = j.get("root")?.as_str()?.to_string();
+    let runs = j
+        .get("checks")?
+        .as_array()?
+        .iter()
+        .filter_map(|c| {
+            Some((
+                c.get("name")?.as_str()?.to_string(),
+                c.get("flaky").and_then(Json::as_bool).unwrap_or(false),
+            ))
+        })
+        .collect();
+    Some((root, runs))
+}
+
 /// What a gate verdict entry says.
 #[derive(Clone, Debug, PartialEq)]
 pub struct VerdictFacts {
@@ -30,6 +49,9 @@ pub struct VerdictFacts {
     pub runs: Vec<RunFacts>,
     /// How many hidden checks ran and passed, when any did.
     pub hidden: Option<HiddenTally>,
+    /// How the verdict was reached; empty for an entry written before
+    /// verdicts said (it then reads as nothing recorded).
+    pub how: HowChecked,
 }
 
 /// One check run, as the verdict recorded it.
@@ -82,6 +104,7 @@ pub fn parse_verdict(payload_json: &str) -> Option<VerdictFacts> {
         blocks: j.get("blocks").and_then(Json::as_u64).unwrap_or(0) as u32,
         runs,
         hidden: hidden_of(&j),
+        how: HowChecked::from_value(&j),
     })
 }
 

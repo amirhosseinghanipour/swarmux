@@ -9,6 +9,7 @@
 
 mod cards;
 mod diff;
+mod how;
 mod verdict;
 mod verify;
 
@@ -17,7 +18,8 @@ pub use cards::{
     SETTLE_MS, brief, heat_strip, label_of,
 };
 pub use diff::{ChangeKind, DiffFile, files_from_json, files_json, totals as diff_totals};
-pub use verdict::{RunFacts, VerdictFacts, checks_of, parse_verdict, sealed_digest};
+pub use how::{BaseSuiteRef, HowChecked};
+pub use verdict::{RunFacts, VerdictFacts, check_flakes, checks_of, parse_verdict, sealed_digest};
 pub use verify::{Rerun, VerifyItem, VerifyReport, compare_checks};
 
 use crate::anchor::Checkpoint;
@@ -26,8 +28,13 @@ use crate::ledger::{Hash, Payload, hex, sha256};
 use crate::verifier::HiddenTally;
 use crate::{JobId, Millis};
 
-/// The bundle format version.
-pub const BUNDLE_SCHEMA: u32 = 1;
+/// The bundle format version sealed now. Version 2 adds [`HowChecked`]: how
+/// the verdict that passed was reached.
+pub const BUNDLE_SCHEMA: u32 = 2;
+/// The oldest bundle format still read. Bundles of version 1 verify as they
+/// always did: their digest covers the bytes they were sealed with, and
+/// nothing is added to them when they are read.
+pub const BUNDLE_SCHEMA_OLDEST: u32 = 1;
 /// Longest failure excerpt kept per check, in bytes.
 const FAILURE_MAX: usize = 2000;
 
@@ -187,6 +194,10 @@ pub struct Bundle {
     /// How many hidden checks the passing verdict ran and passed. Never
     /// which ones: their names, commands and output stay out of bundles.
     pub hidden: Option<HiddenTally>,
+    /// How the verdict that passed was reached: where the checks ran, what
+    /// was planned and what did not run, the base suite, what was found.
+    /// From schema 2; `None` for a bundle of schema 1, which never said.
+    pub verification: Option<HowChecked>,
     pub gates: Vec<GateRef>,
     pub review: Option<ReviewRef>,
     pub checkpoints: Vec<CheckpointRef>,
@@ -320,6 +331,12 @@ impl Bundle {
             ),
             None => body,
         };
+        // Written only from schema 2, so bundles of schema 1 keep their
+        // digest whatever is read into them.
+        let body = match (&self.verification, self.schema >= 2) {
+            (Some(v), true) => body.json("verification", &v.to_json()),
+            _ => body,
+        };
         let body = body
             .objects("gates", gates)
             .json("review", &review)
@@ -377,7 +394,7 @@ impl Bundle {
     pub fn from_json(text: &str) -> Result<Bundle, String> {
         let j = Json::parse(text)?;
         let schema = num(&j, "schema")? as u32;
-        if schema != BUNDLE_SCHEMA {
+        if !(BUNDLE_SCHEMA_OLDEST..=BUNDLE_SCHEMA).contains(&schema) {
             return Err(format!("bundle schema {schema} is not supported"));
         }
         let c = j.get("contract").ok_or("no contract")?;
@@ -451,6 +468,10 @@ impl Bundle {
                 })
                 .collect::<Result<_, String>>()?,
             hidden: verdict::hidden_of(&j),
+            verification: match (j.get("verification"), schema >= 2) {
+                (Some(v @ Json::Obj(_)), true) => Some(HowChecked::from_value(v)),
+                _ => None,
+            },
             gates: items(&j, "gates")
                 .iter()
                 .map(|g| {

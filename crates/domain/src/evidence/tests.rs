@@ -52,6 +52,7 @@ fn bundle() -> Bundle {
         },
         checks: vec![check("test", true)],
         hidden: None,
+        verification: None,
         gates: vec![
             GateRef {
                 seq: 12,
@@ -167,8 +168,11 @@ fn editing_a_bundle_breaks_its_signature() {
 #[test]
 fn bad_bundles_say_what_is_wrong() {
     assert!(Bundle::from_json("{").is_err());
-    let text = bundle().to_json().replace("\"schema\":1", "\"schema\":9");
+    let sealed = format!("\"schema\":{BUNDLE_SCHEMA}");
+    let text = bundle().to_json().replace(&sealed, "\"schema\":9");
     assert!(Bundle::from_json(&text).unwrap_err().contains("schema 9"));
+    let text = bundle().to_json().replace(&sealed, "\"schema\":0");
+    assert!(Bundle::from_json(&text).unwrap_err().contains("schema 0"));
 }
 
 #[test]
@@ -366,4 +370,131 @@ fn a_verdict_carries_its_hidden_tally() {
         parse_verdict(r#"{"outcome":"pass","checks":[],"hidden":{"ran":2,"passed":1}}"#).unwrap();
     assert_eq!(v.hidden, Some(HiddenTally { ran: 2, passed: 1 }));
     assert_eq!(parse_verdict(r#"{"outcome":"pass"}"#).unwrap().hidden, None);
+}
+
+// --- schema 2: how the verdict was reached ----------------------------------
+
+fn how() -> HowChecked {
+    HowChecked {
+        ran_in: "worktree".into(),
+        planned: vec!["test".into(), "slow suite".into()],
+        left_out: vec![(
+            "slow suite".into(),
+            "level deep is above the gate's full".into(),
+        )],
+        hidden_not_run: Some((2, "no clean copy was made (git broke)".into())),
+        base_suite: Some(super::how::BaseSuiteRef {
+            passed: true,
+            restored: vec!["tests/a.rs".into()],
+            verdict: "base suite: 1 original test file put back, checks still pass".into(),
+        }),
+        tampering: vec!["tests/a.rs: tests removed".into()],
+        substrate: vec![
+            "conftest.py: harness file created (pytest runs it before every test)".into(),
+        ],
+        dependencies: vec!["Cargo.lock: leftpad".into()],
+        revert_probe: Some((
+            true,
+            "1 file reverted; test fails without the change".into(),
+        )),
+        incomplete: vec!["hidden checks: not run (no clean copy was made (git broke))".into()],
+        policy_sha256: "ab".repeat(32),
+    }
+}
+
+#[test]
+fn a_bundle_of_schema_2_records_how_the_verdict_was_reached_and_round_trips() {
+    let mut b = bundle();
+    assert_eq!(b.schema, 2);
+    b.verification = Some(how());
+    b.signature = Some(Signature {
+        alg: "sha256".into(),
+        value: b.digest_hex(),
+    });
+    let text = b.to_json();
+    assert!(
+        text.contains("\"verification\":{\"ran_in\":\"worktree\""),
+        "{text}"
+    );
+    assert!(text.contains("\"hidden_not_run\":{\"planned\":2"), "{text}");
+    let back = Bundle::from_json(&text).unwrap();
+    assert_eq!(back, b, "{text}");
+    assert_eq!(back.signature_ok(), Ok(true));
+    // What was recorded is part of what the digest covers.
+    let mut other = b.clone();
+    other.verification.as_mut().unwrap().ran_in = "clean_copy".into();
+    assert_ne!(other.digest(), b.digest());
+    // And the words the screens use come from it.
+    let v = back.verification.unwrap();
+    assert_eq!(
+        v.hidden_text().as_deref(),
+        Some("hidden checks: not run (no clean copy was made (git broke))")
+    );
+    assert_eq!(v.not_run(&["test".to_string()]), ["slow suite"]);
+}
+
+/// A bundle sealed under schema 1, as it was written then.
+const V1: &str = include_str!("fixtures/bundle_v1.json");
+
+#[test]
+fn a_bundle_of_schema_1_still_reads_and_verifies_next_to_one_of_schema_2() {
+    let old = Bundle::from_json(V1.trim_end()).unwrap();
+    assert_eq!(old.schema, 1);
+    assert_eq!(old.verification, None, "a version 1 bundle never said");
+    assert_eq!(old.signature_ok(), Ok(true), "its signature still holds");
+    assert_eq!(
+        old.to_json(),
+        V1.trim_end(),
+        "read and written back, the same bytes"
+    );
+
+    // Whatever is put into it in memory, schema 1 writes none of it: its
+    // digest covers the bytes it was sealed with.
+    let mut stuffed = old.clone();
+    stuffed.verification = Some(how());
+    assert_eq!(stuffed.digest(), old.digest());
+    assert!(!stuffed.to_json().contains("verification"));
+
+    // A bundle of schema 2 beside it, verified the same way.
+    let mut new = bundle();
+    new.verification = Some(how());
+    new.signature = Some(Signature {
+        alg: "sha256".into(),
+        value: new.digest_hex(),
+    });
+    let new = Bundle::from_json(&new.to_json()).unwrap();
+    assert_eq!(new.schema, 2);
+    assert_eq!(new.signature_ok(), Ok(true));
+    assert_ne!(old.digest(), new.digest());
+}
+
+#[test]
+fn a_verdict_entry_without_the_new_keys_reads_as_nothing_recorded() {
+    let old = parse_verdict(r#"{"event":"stop","outcome":"pass","blocks":0,"checks":[]}"#).unwrap();
+    assert_eq!(old.how, HowChecked::default());
+    assert_eq!(old.how.hidden_text(), None);
+    let new = parse_verdict(
+        r#"{"outcome":"pass","checks":[],"ran_in":"clean_copy","planned":["a"],"substrate":["x"],"hidden_not_run":{"planned":1,"reason":"why"},"base_suite":{"outcome":"fail","restored":["t"],"verdict":"v"},"policy_sha256":"cd"}"#,
+    )
+    .unwrap();
+    assert_eq!(new.how.ran_in, "clean_copy");
+    assert_eq!(new.how.planned, ["a"]);
+    assert_eq!(new.how.hidden_not_run, Some((1, "why".to_string())));
+    assert!(!new.how.base_suite.unwrap().passed);
+    assert_eq!(new.how.policy_sha256, "cd");
+}
+
+/// Prints the bundle of the schema-1 fixture. Run once, by hand:
+/// `cargo test -p swarmux-domain print_v1_fixture -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn print_v1_fixture() {
+    let mut b = bundle();
+    b.schema = 1;
+    b.hidden = Some(crate::verifier::HiddenTally { ran: 2, passed: 2 });
+    b.signature = Some(Signature {
+        alg: "sha256".into(),
+        value: b.digest_hex(),
+    });
+    println!("{}", b.to_json());
 }
