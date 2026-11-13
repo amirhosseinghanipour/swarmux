@@ -1963,14 +1963,17 @@ impl App {
             Decision::Yes => self.engine.guard.approve(id),
             Decision::No => self.engine.guard.deny(id),
             _ => {
-                let done = self.engine.guard.always_allow(id)?;
-                self.notice = Some(match done.not_saved {
-                    None => format!("always allowing {} (saved to config.toml)", done.rule),
-                    Some(why) => format!(
-                        "always allowing {} for this run; not saved: {why}",
-                        done.rule
-                    ),
-                });
+                let done = match self.engine.guard.always_allow(id) {
+                    Ok(done) => done,
+                    // A call that can't be always-allowed stays held: it can be
+                    // allowed once.
+                    Err(AppError::Guard(why)) => {
+                        self.notice = Some(why);
+                        return Ok(());
+                    }
+                    Err(e) => return Err(e),
+                };
+                self.notice = Some(crate::inbox::always_notice("always allowing", &done));
                 Ok(())
             }
         }
@@ -2254,7 +2257,7 @@ pub(crate) mod tests_support {
     use swarmux_application::testing::{
         FakeAdvisor, FakeAgentCatalog, FakeConsents, FakeDecisionRepo, FakeGit, FakeHookInbox,
         FakeJobGates, FakeLinter, FakeMergeQueue, FakeMonitor, FakePlanner, FakeRouter,
-        FakeRuleWriter, FakeRunner, FakeTelemetry, FakeTerminal, FakeUsageProbe, FakeWorkspace,
+        FakeRuleStore, FakeRunner, FakeTelemetry, FakeTerminal, FakeUsageProbe, FakeWorkspace,
         FixedClock, InMemoryMissions, InMemoryPlans, InMemoryStore, InMemoryWorktrees,
     };
     use swarmux_application::{
@@ -2274,7 +2277,7 @@ pub(crate) mod tests_support {
         pub monitor: Rc<FakeMonitor>,
         pub inbox: Rc<FakeHookInbox>,
         pub decisions: Rc<FakeDecisionRepo>,
-        pub rules: Rc<FakeRuleWriter>,
+        pub rules: Rc<FakeRuleStore>,
         pub router: Rc<FakeRouter>,
         pub catalog: Rc<FakeAgentCatalog>,
         /// What Mission control's telemetry strip reads.
@@ -2343,14 +2346,14 @@ pub(crate) mod tests_support {
         let history = HistoryService::new(store.clone());
         let inbox = Rc::new(FakeHookInbox::default());
         let decisions = Rc::new(FakeDecisionRepo::default());
-        let rules = Rc::new(FakeRuleWriter::default());
+        let rules = Rc::new(FakeRuleStore::default());
         let mut guard = GuardService::new(
-            SharedPolicy::new(GuardPolicy::default()),
+            SharedPolicy::new(GuardPolicy::default()).with_now(clock.reader()),
             inbox.clone(),
             decisions.clone(),
             clock.clone(),
         )
-        .with_rule_writer(rules.clone());
+        .with_rule_store(rules.clone());
         let router = Rc::new(FakeRouter::default());
         let mut routing = RoutingService::new(
             store.clone(),

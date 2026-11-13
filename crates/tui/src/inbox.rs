@@ -2,7 +2,7 @@
 //! mode, offered rules and the typed confirmation of irreversible calls.
 
 use crossterm::event::{KeyCode, KeyEvent};
-use swarmux_application::{AppResult, PendingApproval, ShelveFor};
+use swarmux_application::{AlwaysAllowed, AppResult, Confirmation, PendingApproval, ShelveFor};
 use swarmux_domain::alarm::{
     Breakpoint, Challenge, IDLE_BREAKPOINT_MS, Reversibility, reversibility,
 };
@@ -13,6 +13,29 @@ use crate::keys::{SHELVE, SHELVE_15_MIN, SHELVE_60_MIN, SHELVE_UNTIL_JOB_ENDS, s
 use crate::mission::Pane;
 use crate::ui::input::{Input, InputAction};
 use swarmux_domain::keys::{Outcome, actions};
+
+/// What an added rule says to the user: the rule, where it applies and when
+/// it stops, and where it is kept.
+pub(crate) fn always_notice(what: &str, done: &AlwaysAllowed) -> String {
+    let at = match &done.root {
+        Some(root) => format!("{} {root}", done.scope.as_str()),
+        None => done.scope.as_str().to_string(),
+    };
+    let until = done.expires_at.map_or_else(
+        || "never expires".to_string(),
+        |at| format!("until {}", swarmux_domain::iso_date(at)),
+    );
+    match &done.not_saved {
+        None => format!(
+            "{what}: {} for {at}, {until} (id {}; `swarmux guard rules list`)",
+            done.rule, done.id
+        ),
+        Some(why) => format!(
+            "{what}: {} for {at} for this run; not saved: {why}",
+            done.rule
+        ),
+    }
+}
 
 /// Keys count as working the inbox for this long after the last one.
 const ENGAGED_WITHIN_MS: Millis = 10_000;
@@ -92,12 +115,14 @@ impl App {
             stay(self, c);
             return Ok(());
         }
+        let mut answer = None;
         let hit = if c.pick {
             match key.code {
                 KeyCode::Char(d) if d.is_ascii_digit() => {
                     let n = usize::from(d as u8 - b'0');
                     let ok = c.challenge.accepts_choice(n, now);
                     c.wrong = !ok;
+                    answer = Some(Confirmation::Choice(n));
                     ok
                 }
                 _ => false,
@@ -110,6 +135,7 @@ impl App {
                     if !ok {
                         c.input = Input::default();
                     }
+                    answer = Some(Confirmation::Typed(text));
                     ok
                 }
                 InputAction::Cancel => {
@@ -122,14 +148,18 @@ impl App {
                 }
             }
         };
-        if !hit {
+        let Some(answer) = answer.filter(|_| hit) else {
             stay(self, c);
             return Ok(());
-        }
+        };
         let request = c.challenge.request;
         let target = c.challenge.target.clone();
         let item = self.mission.alarms().find_request(request).cloned();
-        self.engine.guard.approve(request)?;
+        // The Guard checks the confirmation again: this key handler is not
+        // what allows the call.
+        self.engine
+            .guard
+            .confirm_irreversible(&c.challenge, &answer)?;
         if let Some(item) = &item {
             self.mission
                 .alarms_mut()
@@ -273,11 +303,19 @@ impl App {
             return Ok(());
         };
         if take {
-            let done = self.engine.guard.allow_rule(&offer.rule)?;
-            self.notice = Some(match done.not_saved {
-                None => format!("rule saved: {}", done.rule),
-                Some(why) => format!("rule {} for this run; not saved: {why}", done.rule),
-            });
+            let Some(request) = item.request else {
+                self.notice = Some("that ask is no longer held".into());
+                return Ok(());
+            };
+            let done = match self.engine.guard.allow_rule(&offer.rule, request) {
+                Ok(done) => done,
+                Err(swarmux_application::AppError::Guard(why)) => {
+                    self.notice = Some(why);
+                    return Ok(());
+                }
+                Err(e) => return Err(e),
+            };
+            self.notice = Some(always_notice("rule saved", &done));
         } else {
             self.notice = Some("no rule; this ask won't be offered one again".into());
         }

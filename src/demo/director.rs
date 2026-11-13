@@ -235,6 +235,7 @@ impl Director {
                     subject,
                     cwd,
                     content: String::new(),
+                    ..HookRequest::default()
                 };
                 // The transport answers from the policy; a call it asks about
                 // waits for the user. The time deciding took is fixed: the

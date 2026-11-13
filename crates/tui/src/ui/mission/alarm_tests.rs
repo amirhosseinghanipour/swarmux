@@ -364,7 +364,15 @@ fn ten_clean_approvals_offer_a_rule_and_r_writes_it() {
     println!("{out}");
     assert!(out.contains("r make it a rule? (10/10)"), "{out}");
     t.keys([KeyCode::Char('r')]);
-    assert_eq!(t.rules.rules(), ["Bash(cargo fmt:*)"]);
+    let kept = t.rules.rules();
+    assert_eq!(kept.len(), 1);
+    assert_eq!(kept[0].text, "Bash(cargo fmt:*)");
+    assert_eq!(kept[0].source.as_str(), "suggestion");
+    assert_eq!(
+        kept[0].scope.as_str(),
+        "repo",
+        "saved where its tally came from"
+    );
     assert!(allowed(&t).contains(&id), "the held ask is covered by it");
     assert!(
         !render_to_string(&t.app, 160, 48).contains("make it a rule"),

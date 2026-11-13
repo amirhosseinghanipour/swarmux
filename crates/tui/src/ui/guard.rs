@@ -405,12 +405,20 @@ mod tests {
         t.app.update();
         t.keys([KeyCode::Char('a')]);
         assert_eq!(t.inbox.answer_to(id).unwrap().verdict, Verdict::Allow);
-        assert_eq!(t.rules.rules(), ["Bash(cargo fmt)"]);
+        let kept = t.rules.rules();
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].text, "Bash(cargo fmt)");
+        assert_eq!(kept[0].scope.as_str(), "repo");
+        assert!(
+            kept[0].expires_at.is_some(),
+            "an always-allow expires by default"
+        );
         let out = render_to_string(&t.app, 120, 30);
         assert!(
-            out.contains("always allowing Bash(cargo fmt) (saved"),
+            out.contains("always allowing: Bash(cargo fmt) for repo"),
             "{out}"
         );
+        assert!(out.contains("until "), "{out}");
 
         t.rules.refuse(true);
         t.inbox.push(None, "Bash", "ls -la");

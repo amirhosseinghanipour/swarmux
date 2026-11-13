@@ -10,6 +10,7 @@ mod evidence;
 mod fetch;
 mod followup;
 mod gate;
+mod guardcmd;
 mod holdout;
 mod jev;
 mod keys;
@@ -27,20 +28,22 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use clap::{Parser, Subcommand};
-use swarmux_application::ledger::{LedgerService, LedgeredDecisions, LedgeredJobs};
+use swarmux_application::ledger::{
+    LedgerService, LedgeredDecisions, LedgeredJobs, LedgeredRules, ingest_fallbacks,
+};
 use swarmux_application::ports::Clock;
 use swarmux_application::{
-    Board, BoardDigest, BoardService, CombinedStatusline, GateKeeper, GateService, Governor,
-    GuardService, HandoffBoard, HistoryService, HookBus, HookMessenger, Jev, JobService,
+    AlwaysSettings, Board, BoardDigest, BoardService, CombinedStatusline, GateKeeper, GateService,
+    Governor, GuardService, HandoffBoard, HistoryService, HookBus, HookMessenger, Jev, JobService,
     MissionService, NotifyService, NudgeBoard, PromptService, RoutingService, ScopeClaims,
-    SessionService, SharedPolicy, StatuslineFeed, TruthBoard, Watchdog,
+    SessionService, SharedPolicy, StatuslineFeed, TruthBoard, UnattendedJobs, Watchdog,
 };
 use swarmux_infrastructure::hook::{self, HookServer, Responders};
 use swarmux_infrastructure::{
-    BoardMcp, ClaudeCli, ClaudePlanner, ConfigRuleWriter, FilePalette, FsAgentCatalog,
-    FsGateSource, GitCli, GitMergeQueue, GitVcs, GitWorktrees, GuardHook, HaikuDiagnoser,
-    HaikuExtractor, HaikuLinter, HaikuRouter, MissionFiles, Paths, SqliteLedger, SqliteStore,
-    SysinfoMonitor, SystemClock, WindowsTerminal, build_notifier_with, load_settings,
+    BoardMcp, ClaudeCli, ClaudePlanner, FilePalette, FsAgentCatalog, FsGateSource, GitCli,
+    GitMergeQueue, GitRepoRoots, GitVcs, GitWorktrees, GuardHook, HaikuDiagnoser, HaikuExtractor,
+    HaikuLinter, HaikuRouter, MissionFiles, Paths, SqliteLedger, SqliteStore, SysinfoMonitor,
+    SystemClock, TomlRuleStore, WindowsTerminal, build_notifier_with, load_settings, rules_file,
     utc_offset_minutes,
 };
 use swarmux_tui::{App, Launch};
@@ -84,6 +87,12 @@ enum Command {
     },
     /// Check that Claude Code is installed and swarmux's data is healthy.
     Doctor,
+    /// The Guard's rules: list or remove the allow rules added with "always
+    /// allow", and check the Guard's settings.
+    Guard {
+        #[command(subcommand)]
+        action: guardcmd::Action,
+    },
     /// JEV, the optional hosted decision model (bring your own key).
     Jev {
         #[command(subcommand)]
@@ -505,6 +514,12 @@ fn main() -> anyhow::Result<ExitCode> {
         None => return daemon::attach(cli.no_splash),
         Some(Command::Daemon { action }) => return daemon::run(action),
         Some(Command::Doctor) => doctor::run(),
+        Some(Command::Guard { action }) => {
+            if !guardcmd::run(action)? {
+                return Ok(ExitCode::FAILURE);
+            }
+            Ok(())
+        }
         Some(Command::Fetch { theme, color }) => fetch::run(theme.as_deref(), &color),
         Some(Command::Keys { action }) => {
             return keys::run(match action {
@@ -627,11 +642,30 @@ fn build_app(
     let nudges = NudgeBoard::new();
     // Tasks of a mission's graph write only inside the files they claim.
     let claims = ScopeClaims::new();
+    // What the Guard keeps from the agents' tools: swarmux's own commands and
+    // files, and the files that steer agents. The jobs nobody watches fail
+    // closed and may not write those.
+    let unattended = UnattendedJobs::new();
+    let roots = Arc::new(GitRepoRoots::new("git".into()).with_workspaces({
+        let hub = hub.clone();
+        Box::new(move |job| {
+            hub.job(job)
+                .filter(|i| !i.folders.is_empty())
+                .map(|i| i.root)
+        })
+    }));
+    let rule_store = Rc::new(LedgeredRules::new(
+        Rc::new(TomlRuleStore::new(rules_file(&paths.data_dir))),
+        ledger.clone(),
+    ));
     let policy = SharedPolicy::new(guard_settings.policy())
         .with_fence(keeper.clone())
         .with_fence(claims.clone())
         .with_nudges(nudges.clone())
-        .with_rules(hub.clone());
+        .with_rules(hub.clone())
+        .with_roots(roots)
+        .with_unattended(unattended.clone())
+        .with_protection(guardcmd::protection(&paths, &settings)?);
     let pipe = hook::endpoint_for(std::process::id());
     // Handoffs reach the sessions that start after a checkpoint.
     let board = HandoffBoard::new();
@@ -665,7 +699,10 @@ fn build_app(
         pipe,
         timeout_secs: guard_settings.approval_timeout_secs + HOOK_GRACE_SECS,
     };
-    let mut cli = ClaudeCli::new(doctor::claude_bin(), rt.handle().clone()).with_guard(guard_hook);
+    let mut cli = ClaudeCli::new(doctor::claude_bin(), rt.handle().clone())
+        .with_guard(guard_hook)
+        .with_guard_spool(hook::spool_file(&paths.data_dir))
+        .with_on_failure_block(guard_settings.hook_on_failure_block);
     if board_hub.is_some() {
         cli = cli.with_board(board_mcp);
     }
@@ -797,7 +834,34 @@ fn build_app(
     let board_inbox: Rc<dyn swarmux_application::BoardInbox> = server.clone();
     let mut guard = GuardService::new(policy, server, decisions.clone(), clock.clone())
         .with_timeout_secs(guard_settings.approval_timeout_secs)
-        .with_rule_writer(Rc::new(ConfigRuleWriter::new(paths.config.clone())));
+        .with_rule_store(rule_store)
+        .with_always(AlwaysSettings {
+            scope: guard_settings.always_scope,
+            expiry_days: guard_settings.always_expiry_days,
+        })
+        .with_jev_cap(settings.jev.max_allow);
+    // Rules added in earlier runs, and the hook calls that fell back while
+    // swarmux was not running.
+    let mut startup_notes: Vec<String> = settings.warnings.clone();
+    match guard.load_rules() {
+        Ok(skipped) => startup_notes.extend(skipped.iter().map(|r| {
+            format!(
+                "guard rule {} ({}) can't be read and is not applied",
+                r.id, r.text
+            )
+        })),
+        Err(e) => startup_notes.push(format!("guard rules: {e}")),
+    }
+    match ingest_fallbacks(
+        &hook::FileSpool::new(hook::spool_file(&paths.data_dir)),
+        &ledger,
+    ) {
+        Ok(0) => {}
+        Ok(n) => startup_notes.push(format!(
+            "{n} tool call(s) fell back while swarmux was not reachable: see `swarmux audit tail` (policy entries, guard_fallback)"
+        )),
+        Err(e) => startup_notes.push(format!("guard fallbacks: {e}")),
+    }
     let router = HaikuRouter::new(doctor::claude_bin(), rt.handle().clone());
     let mut routing =
         RoutingService::new(store.clone(), jobs_log.clone(), decisions, clock.clone())
@@ -836,6 +900,7 @@ fn build_app(
     let alarm_store = store.clone();
     let workspaces = workspace::service(store.clone());
     let mut jobs = JobService::new(store.clone(), jobs_log, runner, clock)
+        .with_unattended(unattended, guard_settings.on_unreachable)
         .with_workspaces(store.clone())
         .with_telemetry_store(store)
         .with_limits(settings.limits())
@@ -902,6 +967,9 @@ fn build_app(
     .with_telemetry_feed(telemetry, &settings.telemetry);
     if let Some(e) = recovered.errors.into_iter().last() {
         app.error = Some(format!("picking missions up again: {e}"));
+    }
+    if !startup_notes.is_empty() {
+        app.notice = Some(startup_notes.join("; "));
     }
     // `theme = "wal"` and friends: a file the theme is read from and watched.
     let app = match FilePalette::from_spec(&settings.ui.theme, &paths.home) {

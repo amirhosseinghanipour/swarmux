@@ -71,6 +71,14 @@ pub fn run() -> anyhow::Result<()> {
     Ok(())
 }
 
+fn mode_words(m: swarmux_application::FailMode) -> &'static str {
+    match m {
+        swarmux_application::FailMode::Closed => "denied",
+        swarmux_application::FailMode::Ask => "left to Claude Code's own question",
+        swarmux_application::FailMode::Open => "left to Claude Code's own rules",
+    }
+}
+
 fn guard_summary(s: &Settings) {
     let g = &s.guard;
     let policy = g.policy();
@@ -86,6 +94,41 @@ fn guard_summary(s: &Settings) {
         "       approval_timeout_secs = {}, loop_repeats = {}",
         g.approval_timeout_secs, g.loop_repeats
     );
+    // What happens when swarmux can't be reached: said as it is, not as a
+    // reassurance. Jobs nobody watches (missions, reviewers) are denied by
+    // default; the rest are left to Claude Code's own rules.
+    let (unattended, watched) = (g.on_unreachable.mode(true), g.on_unreachable.mode(false));
+    let line = format!(
+        "       on_unreachable = \"{}\": when swarmux can't be reached, unattended jobs are {}, other jobs are {}",
+        g.on_unreachable.as_str(),
+        mode_words(unattended),
+        mode_words(watched),
+    );
+    if unattended == swarmux_application::FailMode::Open {
+        println!("warn guard fails OPEN for unattended jobs\n{line}");
+    } else {
+        println!("ok   guard fail mode\n{line}");
+    }
+    println!(
+        "       always allow: scope = {}, expires after {}; protected paths: {} built-in + {} of yours",
+        g.always_scope.as_str(),
+        g.always_expiry_days
+            .map_or("never".to_string(), |d| format!("{d} days")),
+        g.protected_globs().len() - g.protected_paths.len(),
+        g.protected_paths.len(),
+    );
+    if g.hook_on_failure_block {
+        println!(
+            "       hook_on_failure_block = true: PreToolUse carries onFailure=block (needs a Claude Code that knows it; the version is not checked)"
+        );
+    }
+    println!(
+        "       irreversible calls (R4) are allowed only by a typed confirmation; jev.max_allow = {}",
+        s.jev.max_allow.as_str()
+    );
+    for w in &s.warnings {
+        println!("warn {w}");
+    }
     for rule in &g.allow {
         println!("       allow {rule}");
     }
@@ -162,12 +205,61 @@ fn hook_checks() {
     }
     match run_hook(&exe, None) {
         Some((out, took)) if out.is_empty() => println!(
-            "ok   hook without swarmux running stays silent and exits 0 ({:.1} ms)",
+            "ok   a hook outside any swarmux job guards nothing and prints nothing ({:.1} ms)",
             took.as_secs_f64() * 1e3
         ),
-        Some((out, _)) => println!("fail hook without swarmux printed: {out}"),
-        None => println!("fail hook without swarmux didn't exit 0"),
+        Some((out, _)) => println!("fail hook outside a job printed: {out}"),
+        None => println!("fail hook outside a job didn't exit 0"),
     }
+    unreachable_checks(&exe);
+}
+
+/// Runs the hook as a job's process would while the app is not running, in
+/// each fail mode, with a spool of its own (the real one is left alone).
+fn unreachable_checks(exe: &Path) {
+    let dir = std::env::temp_dir().join(format!("swarmux-doctor-{}", std::process::id()));
+    let spool = dir.join("guard-fallback.jsonl");
+    let gone = hook::endpoint_for(u32::MAX - 3);
+    for (mode, expect) in [("closed", "deny"), ("ask", "ask"), ("open", "")] {
+        let env = [
+            (ENV_PIPE, gone.as_str()),
+            (ENV_JOB, "1"),
+            ("SWARMUX_GUARD_FAIL", mode),
+            ("SWARMUX_GUARD_SPOOL", spool.to_str().unwrap_or_default()),
+        ];
+        let got = run_hook_with(exe, "pre-tool", PROBE, &env);
+        let printed = got.as_ref().map(|(o, _)| {
+            serde_json::from_str::<serde_json::Value>(o)
+                .ok()
+                .and_then(|v| {
+                    v["hookSpecificOutput"]["permissionDecision"]
+                        .as_str()
+                        .map(str::to_string)
+                })
+                .unwrap_or_default()
+        });
+        match printed {
+            Some(p) if p == expect => println!(
+                "ok   app unreachable, SWARMUX_GUARD_FAIL={mode}: the hook {}",
+                if expect.is_empty() {
+                    "prints nothing (Claude Code's rules decide)".to_string()
+                } else {
+                    format!("prints a PreToolUse {expect}")
+                }
+            ),
+            Some(p) => println!("fail app unreachable, mode {mode}: the hook printed {p:?}"),
+            None => println!("fail app unreachable, mode {mode}: the hook didn't exit 0"),
+        }
+    }
+    let lines = std::fs::read_to_string(&spool).map_or(0, |t| t.lines().count());
+    if lines == 3 {
+        println!(
+            "ok   each fallback leaves a line in the spool, which the app puts in the ledger at its next start"
+        );
+    } else {
+        println!("fail the fallbacks left {lines} spool lines, expected 3");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// A hook input for `event` that every policy lets through.
@@ -229,15 +321,30 @@ fn run_hook_event(
     arg: &str,
     input: &str,
 ) -> Option<(String, Duration)> {
+    match pipe {
+        Some(pipe) => run_hook_with(exe, arg, input, &[(ENV_PIPE, pipe)]),
+        None => run_hook_with(exe, arg, input, &[]),
+    }
+}
+
+/// Runs `exe hook <arg>` on `input` with `env` set (and no socket or job
+/// id unless `env` gives them); its stdout and run time if it exited 0.
+fn run_hook_with(
+    exe: &Path,
+    arg: &str,
+    input: &str,
+    env: &[(&str, &str)],
+) -> Option<(String, Duration)> {
     let mut cmd = Command::new(exe);
     cmd.args(["hook", arg])
         .env_remove(ENV_PIPE)
         .env_remove(ENV_JOB)
+        .env_remove("SWARMUX_GUARD_FAIL")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
-    if let Some(pipe) = pipe {
-        cmd.env(ENV_PIPE, pipe);
+    for (k, v) in env {
+        cmd.env(k, v);
     }
     hide_std(&mut cmd);
     let start = Instant::now();
