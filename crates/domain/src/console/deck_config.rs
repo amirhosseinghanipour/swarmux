@@ -366,11 +366,14 @@ mod tests {
 
     #[test]
     fn the_direction_is_left_to_right_and_nothing_else_yet() {
-        let mut c = DeckConfig::default();
-        c.direction = Some("lr".into());
-        assert!(resolve(&c).problems.is_empty());
-        c.direction = Some("tb".into());
-        let l = resolve(&c);
+        let with = |d: &str| {
+            resolve(&DeckConfig {
+                direction: Some(d.into()),
+                ..DeckConfig::default()
+            })
+        };
+        assert!(with("lr").problems.is_empty());
+        let l = with("tb");
         assert_eq!(l.direction, Direction::LeftToRight);
         assert_eq!(l.problems.len(), 1);
         assert!(l.problems[0].message.contains("\"tb\""));
