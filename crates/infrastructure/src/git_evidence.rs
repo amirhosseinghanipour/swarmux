@@ -289,6 +289,10 @@ impl Drop for GitCheckout {
 }
 
 impl Checkouts for GitCheckouts {
+    fn holdout_key(&self, repo: &Path) -> Option<String> {
+        crate::clean_checkout::holdout_key(&self.bin, repo)
+    }
+
     fn checkout(&self, repo: &Path, sha: &str) -> AppResult<Box<dyn Checkout>> {
         let dir = self.base.join(format!(
             "swarmux-verify-{}-{}",

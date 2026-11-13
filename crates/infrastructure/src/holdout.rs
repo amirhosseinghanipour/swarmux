@@ -1,6 +1,12 @@
 //! `HoldoutStore` adapter: hidden checks kept as files outside every
 //! repository, at `~/.swarmux/holdout/<repo>/<check>/`.
 //!
+//! A repository is known by its folder name and what it is (its remote and
+//! its root commit), like `shop.id-3fa9c1d2e4b7`, so two repositories whose
+//! folders share a name do not share hidden checks. Checks kept under the
+//! plain folder name by an earlier version move to the identity key the first
+//! time that repository is looked at (see `FsHoldoutStore::migrate`).
+//!
 //! Each check has a `check.toml` (its command, timeout and the SHA-256 of
 //! each of its files, taken when it was added) and a `files/` folder that
 //! mirrors where those files go in the repository. Before a file is placed
@@ -13,7 +19,7 @@ use serde::Deserialize;
 use swarmux_application::{AppError, AppResult, HoldoutStore};
 use swarmux_domain::gate::{DEFAULT_CHECK_TIMEOUT_SECS, GateCheck, Pin};
 use swarmux_domain::ledger::{hex, sha256};
-use swarmux_domain::verifier::{HoldoutCheck, holdout_path, valid_name};
+use swarmux_domain::verifier::{HoldoutCheck, holdout_path, legacy_name, valid_name};
 
 /// A check's description, in its folder.
 pub const CHECK_FILE: &str = "check.toml";
@@ -37,19 +43,70 @@ struct RawFile {
     sha256: String,
 }
 
+/// Told when hidden checks move from a folder-name key to an identity key:
+/// the old key, the new one.
+pub type MigrationLog = Box<dyn Fn(&str, &str) + Send + Sync>;
+
 /// Keeps hidden checks below one folder.
 pub struct FsHoldoutStore {
     root: PathBuf,
+    migrated: Option<MigrationLog>,
 }
+
+/// Which folder names were handed to which repository, one `name<TAB>key`
+/// per line, so a second repository of the same name is not given the first
+/// one's hidden checks.
+const MIGRATED_FILE: &str = ".migrated";
 
 impl FsHoldoutStore {
     pub fn new(root: PathBuf) -> FsHoldoutStore {
-        FsHoldoutStore { root }
+        FsHoldoutStore {
+            root,
+            migrated: None,
+        }
+    }
+
+    /// Calls `log` whenever hidden checks move to an identity key.
+    pub fn with_migration_log(mut self, log: MigrationLog) -> FsHoldoutStore {
+        self.migrated = Some(log);
+        self
     }
 
     fn repo_dir(&self, repo: &str) -> AppResult<PathBuf> {
         valid_name(repo).map_err(|e| AppError::Workspace(format!("repository name {e}")))?;
-        Ok(self.root.join(repo))
+        let dir = self.root.join(repo);
+        if !dir.exists()
+            && let Some(legacy) = legacy_name(repo)
+        {
+            self.migrate(legacy, repo, &dir);
+        }
+        Ok(dir)
+    }
+
+    /// An earlier version kept a repository's hidden checks under its
+    /// folder name alone. The first repository of that name to be looked at
+    /// by its identity takes them over: the folder is renamed to its key
+    /// and the move is written to `.migrated`. A name already handed to
+    /// another repository is not handed out twice (the later repository
+    /// simply has no hidden checks of its own yet).
+    fn migrate(&self, legacy: &str, key: &str, to: &Path) {
+        let from = self.root.join(legacy);
+        if !from.is_dir() {
+            return;
+        }
+        let marker = self.root.join(MIGRATED_FILE);
+        let taken = fs::read_to_string(&marker).unwrap_or_default();
+        if taken.lines().any(|l| l.split('\t').next() == Some(legacy)) {
+            return;
+        }
+        if fs::rename(&from, to).is_err() {
+            return;
+        }
+        let line = format!("{legacy}\t{key}\n");
+        let _ = fs::write(&marker, format!("{taken}{line}"));
+        if let Some(log) = &self.migrated {
+            log(legacy, key);
+        }
     }
 
     fn check_dir(&self, repo: &str, name: &str) -> AppResult<PathBuf> {
@@ -315,6 +372,45 @@ mod tests {
         }
         let twice = [("a.rs".to_string(), vec![]), ("./a.rs".to_string(), vec![])];
         assert!(store.add("shop", &hidden(), &twice).is_err());
+    }
+
+    #[test]
+    fn checks_kept_under_a_folder_name_move_to_the_identity_key_once() {
+        let (_d, store) = store();
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log = seen.clone();
+        let store = store.with_migration_log(Box::new(move |from, to| {
+            log.lock().unwrap().push((from.to_string(), to.to_string()));
+        }));
+        store
+            .add("shop", &hidden(), &[("t/h.rs".into(), b"x".to_vec())])
+            .unwrap();
+
+        let first = "shop.id-0123456789ab";
+        let held = store.list(first).unwrap();
+        assert_eq!(
+            held.len(),
+            1,
+            "the first repository of that name takes them over"
+        );
+        assert!(!store.root().join("shop").exists(), "moved, not copied");
+        assert!(store.root().join(first).join("bigger/check.toml").is_file());
+        let dest = tempfile::tempdir().unwrap();
+        store.place(first, &held[0], dest.path()).unwrap();
+        assert!(dest.path().join("t/h.rs").is_file());
+        assert_eq!(
+            *seen.lock().unwrap(),
+            [("shop".to_string(), first.to_string())]
+        );
+
+        // A second repository in a folder of the same name is not given
+        // the first one's hidden checks, and a name is handed out once.
+        store
+            .add("shop", &hidden(), &[("t/h.rs".into(), b"y".to_vec())])
+            .unwrap();
+        assert!(store.list("shop.id-ba9876543210").unwrap().is_empty());
+        assert_eq!(store.list(first).unwrap().len(), 1, "still the first one's");
+        assert_eq!(seen.lock().unwrap().len(), 1);
     }
 
     #[test]

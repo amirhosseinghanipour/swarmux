@@ -113,6 +113,7 @@ fn pass(at: Millis) -> GateState {
         at,
         checks_weakened: false,
         base_suite: None,
+        notes: Default::default(),
     }
 }
 

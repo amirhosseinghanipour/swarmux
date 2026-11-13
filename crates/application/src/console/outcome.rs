@@ -63,6 +63,10 @@ pub(super) struct Sealed {
     pub runs: Vec<CheckRunView>,
     pub gate: Option<GateView>,
     pub hidden: Option<(u32, u32)>,
+    /// `hidden checks: not run (why)`, when the sealed verdict says so.
+    pub hidden_note: Option<String>,
+    /// Harness files the sealed verdict names as created or changed.
+    pub substrate: Vec<String>,
     pub review: Option<(String, u32)>,
 }
 
@@ -124,6 +128,12 @@ impl Sealed {
                 })
             }),
             hidden: b.hidden.map(|h| (h.ran, h.passed)),
+            hidden_note: b.verification.as_ref().and_then(|v| v.hidden_text()),
+            substrate: b
+                .verification
+                .as_ref()
+                .map(|v| v.substrate.clone())
+                .unwrap_or_default(),
             review: b.review.as_ref().map(|r| (r.verdict.clone(), r.concerns)),
         }
     }
@@ -454,15 +464,34 @@ fn checks_view(
         ),
     };
     let weakening = match (detail, judged) {
-        (Some(d), _) if !d.tampering.is_empty() => stage(
-            StageKey::TestWeakening,
-            StageState::Failed,
-            &format!(
-                "{} test change(s) make the checks easier to pass",
-                d.tampering.len()
-            ),
-            d.tampering.clone(),
-        ),
+        (Some(d), _) if !d.tampering.is_empty() || !d.substrate.is_empty() => {
+            let mut items = d.tampering.clone();
+            items.extend(d.substrate.iter().cloned());
+            let summary = if d.substrate.is_empty() {
+                format!(
+                    "{} test change(s) make the checks easier to pass",
+                    d.tampering.len()
+                )
+            } else {
+                format!(
+                    "{} change(s) to tests or to the harness that runs them",
+                    items.len()
+                )
+            };
+            stage(StageKey::TestWeakening, StageState::Failed, &summary, items)
+        }
+        (None, true) if sealed.is_some_and(|s| !s.substrate.is_empty()) => {
+            let items = sealed.map(|s| s.substrate.clone()).unwrap_or_default();
+            stage(
+                StageKey::TestWeakening,
+                StageState::Flagged,
+                &format!(
+                    "{} harness file(s) changed, as the repository allows",
+                    items.len()
+                ),
+                items,
+            )
+        }
         (_, true) => stage(
             StageKey::TestWeakening,
             StageState::Passed,
@@ -522,12 +551,19 @@ fn checks_view(
             ran: Some(ran),
             passed: Some(passed),
         },
-        None => stage(
-            StageKey::HiddenChecks,
-            StageState::NotRun,
-            "no hidden checks ran",
-            Vec::new(),
-        ),
+        None => {
+            // Hidden checks that exist and did not run say so, with why:
+            // never a bare "none ran".
+            let note = detail
+                .and_then(|d| d.hidden_not_run.clone())
+                .or_else(|| sealed.and_then(|s| s.hidden_note.clone()));
+            stage(
+                StageKey::HiddenChecks,
+                StageState::NotRun,
+                note.as_deref().unwrap_or("no hidden checks ran"),
+                Vec::new(),
+            )
+        }
     };
     let gaps = match (detail, judged) {
         (Some(d), _) if !d.gaps.is_empty() => stage(

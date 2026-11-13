@@ -53,7 +53,7 @@ pub use claude_cli::{
     BoardMcp, ClaudeCli, ClaudePlanner, GuardHook, HaikuDiagnoser, HaikuExtractor, HaikuLinter,
     HaikuRouter,
 };
-pub use clean_checkout::GitCleanCheckout;
+pub use clean_checkout::{GitCleanCheckout, holdout_key};
 pub use clock::SystemClock;
 pub use config::{ConfigError, load_settings};
 pub use config_edit::ConfigRuleWriter;
@@ -63,7 +63,7 @@ pub use gate::{FsGateSource, ProcessChecker};
 pub use git::GitCli;
 pub use git_evidence::{GitCheckouts, GitVcs};
 pub use guard_rules::{GitRepoRoots, TomlRuleStore, rules_file};
-pub use holdout::FsHoldoutStore;
+pub use holdout::{FsHoldoutStore, MigrationLog};
 pub use hook::HookServer;
 pub use knowledge::{FsAnchorReader, TomlKnowledge};
 pub use merge_queue::GitMergeQueue;

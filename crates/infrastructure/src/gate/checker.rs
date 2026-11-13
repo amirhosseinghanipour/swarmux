@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use swarmux_application::Checker;
-use swarmux_domain::gate::{CheckRun, GateCheck};
+use swarmux_domain::gate::{CheckRun, GateCheck, env_passes};
 
 use crate::process::spawn_std;
 
@@ -101,6 +101,13 @@ impl Checker for ProcessChecker {
             return run;
         };
         let mut cmd = Command::new(&program);
+        // A check sees what a program needs to find its tools and its
+        // home, and what the check lists: never swarmux's own variables or
+        // a provider's credentials, which the agent's code runs next to.
+        cmd.env_clear();
+        for (name, value) in scrubbed_env(std::env::vars_os(), &check.env) {
+            cmd.env(name, value);
+        }
         cmd.args(&check.args)
             .current_dir(&dir)
             .stdin(Stdio::null())
@@ -178,6 +185,15 @@ impl Checker for ProcessChecker {
     }
 }
 
+/// The variables of `vars` a check that lists `extra` may see.
+pub(crate) fn scrubbed_env(
+    vars: impl Iterator<Item = (OsString, OsString)>,
+    extra: &[String],
+) -> Vec<(OsString, OsString)> {
+    vars.filter(|(name, _)| name.to_str().is_some_and(|n| env_passes(n, extra)))
+        .collect()
+}
+
 /// The executable for `program`: a path as given (relative to `root`), or
 /// the first match on `PATH`. On Windows `npm` finds `npm.cmd`.
 fn resolve(program: &str, root: &Path) -> Option<PathBuf> {
@@ -229,6 +245,53 @@ mod tests {
         let mut small = Kept::default();
         small.push(b"ok");
         assert_eq!(small.text(), "ok");
+    }
+
+    #[test]
+    fn a_check_sees_its_tools_and_not_the_secrets_around_it() {
+        let vars = [
+            ("PATH", "/bin"),
+            ("HOME", "/home/me"),
+            ("LC_ALL", "C"),
+            ("CARGO_HOME", "/c"),
+            ("SWARMUX_JOB_ID", "7"),
+            ("SWARMUX_HOOK_PIPE", "/p"),
+            ("ANTHROPIC_API_KEY", "k"),
+            ("OPENAI_API_KEY", "k"),
+            ("AWS_SECRET_ACCESS_KEY", "k"),
+            ("GITHUB_TOKEN", "t"),
+            ("NPM_TOKEN", "t"),
+            ("MY_APP_TOKEN", "t"),
+            ("DATABASE_URL", "postgres://x"),
+            ("RUST_LOG", "debug"),
+        ]
+        .map(|(k, v)| (OsString::from(k), OsString::from(v)));
+        let seen = |extra: &[String]| -> Vec<String> {
+            scrubbed_env(vars.clone().into_iter(), extra)
+                .into_iter()
+                .map(|(k, _)| k.to_string_lossy().into_owned())
+                .collect()
+        };
+        assert_eq!(seen(&[]), ["PATH", "HOME", "LC_ALL", "CARGO_HOME"]);
+        // A check can ask for more by name, but never for a credential.
+        let extra = vec![
+            "DATABASE_URL".to_string(),
+            "RUST_LOG".to_string(),
+            "ANTHROPIC_API_KEY".to_string(),
+            "SWARMUX_JOB_ID".to_string(),
+            "MY_APP_TOKEN".to_string(),
+        ];
+        assert_eq!(
+            seen(&extra),
+            [
+                "PATH",
+                "HOME",
+                "LC_ALL",
+                "CARGO_HOME",
+                "DATABASE_URL",
+                "RUST_LOG"
+            ]
+        );
     }
 
     #[test]

@@ -151,10 +151,21 @@ impl Engine {
         facts: &[JobFact],
         gates: &HashMap<JobId, GateState>,
     ) -> MissionsPump {
+        // Plain jobs that ended get their gate run once more, whether or
+        // not there are missions.
+        let finished_errors = self
+            .gate
+            .as_mut()
+            .map(|g| g.pump_finished(facts))
+            .unwrap_or_default();
         let Some(service) = &mut self.missions else {
-            return MissionsPump::default();
+            return MissionsPump {
+                errors: finished_errors,
+                ..MissionsPump::default()
+            };
         };
         let mut report = service.pump(facts, gates);
+        report.errors.extend(finished_errors);
         let graphs = service.pump_graphs(&mut self.jobs, facts, gates);
         report.errors.extend(graphs.errors);
         report.cancel.extend(graphs.cancel);

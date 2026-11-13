@@ -105,6 +105,7 @@ fn passed(at: i64) -> GateState {
         digest: String::new(),
         problem: None,
         at,
+        notes: Default::default(),
     }
 }
 

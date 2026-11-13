@@ -71,8 +71,8 @@ pub use followup::{
     ReplySource,
 };
 pub use gate::{
-    Checker, ExecutionLog, GateDetail, GateKeeper, GateRecord, GateRun, GateService, GateSource,
-    GateState, JobGates, LoadedGate, WriteFence, run_checks,
+    Checker, ExecutionLog, GateDetail, GateKeeper, GateNotes, GateRecord, GateRun, GateService,
+    GateSource, GateState, JobGates, LoadedGate, WriteFence, manual_outcome, run_checks,
 };
 pub use governor::{Governor, PendingResume, ResumeBook, UsageProbe};
 pub use guard::{
@@ -122,7 +122,10 @@ pub use telemetry::{
     TOP_FILES, TelemetryService, TelemetrySnapshot, TruthBoard,
 };
 pub use terminal::SessionTerminal;
-pub use verifier::{CleanCheckout, CleanCopy, HoldoutStore, Verification, Verifier, VerifyRequest};
+pub use verifier::{
+    CleanCheckout, CleanCopy, HoldoutStore, Probe, SelfTest, Verification, Verifier, VerifyRequest,
+    plan_checks,
+};
 pub use watchdog::{
     CheckpointRestore, Diagnoser, Diagnosis, DiagnosisReply, DiagnosisRequest, DiagnosisSink,
     HookMessenger, NoMessenger, Nudge, NudgeBoard, NudgeGate, SessionMessenger, WatchReport,

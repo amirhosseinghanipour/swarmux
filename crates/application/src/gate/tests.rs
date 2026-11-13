@@ -5,6 +5,7 @@ use crate::SharedPolicy;
 use crate::contracts::{ContractGate, ContractJudgement};
 use crate::ports::{HookRequest, NewJob, SessionRepository};
 use crate::testing::{FixedClock, InMemoryLedger, InMemoryStore};
+use swarmux_domain::gate::WorktreeChecks;
 use swarmux_domain::ledger::LedgerKind;
 use swarmux_domain::{AttentionKind, GuardPolicy, Session, Unmatched, Verdict};
 
@@ -643,12 +644,41 @@ fn verify_runs_the_checks_with_no_agent_waiting() {
     );
     assert_eq!(state.blocks, 0);
     f.fix();
+    // This fixture has no clean copies: the checks run in the worktree,
+    // which a mission only accepts when the repository says so.
+    lock(&f.source.spec).verifier.worktree_checks = WorktreeChecks::Allow;
     f.keeper.verify(f.job, Path::new("/w")).unwrap();
     next_record(&mut f);
     let state = f.service.state(f.job).unwrap();
     assert_eq!(state.outcome, GateOutcome::Pass);
     assert_eq!(state.checks.len(), 2);
     assert_eq!(f.gate_entries().len(), 2, "both runs are in the ledger");
+}
+
+#[test]
+fn a_mission_whose_checks_ran_in_the_worktree_is_escalated_not_passed() {
+    let mut f = fixture(3);
+    f.keeper.assign(f.job, mission_gate());
+    f.fix();
+    f.keeper.verify(f.job, Path::new("/w")).unwrap();
+    next_record(&mut f);
+    let state = f.service.state(f.job).unwrap().clone();
+    assert!(state.checks.iter().all(|c| c.1), "every check passed");
+    assert_eq!(
+        state.outcome,
+        GateOutcome::Escalate,
+        "but not in a clean copy"
+    );
+    assert_eq!(state.notes.ran_in, Some(RanIn::Worktree));
+    assert_eq!(
+        state.notes.incomplete,
+        ["the checks ran in the worktree, not in a clean copy of the work"]
+    );
+    assert!(state.digest.contains("cannot vouch"), "{}", state.digest);
+    let entry = f.gate_entries().pop().unwrap();
+    assert!(entry.contains("\"ran_in\":\"worktree\""), "{entry}");
+    assert!(entry.contains("\"outcome\":\"escalate\""), "{entry}");
+    assert!(entry.contains("\"policy_sha256\":\""), "{entry}");
 }
 
 #[test]

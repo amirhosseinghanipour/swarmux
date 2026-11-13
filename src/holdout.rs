@@ -1,15 +1,22 @@
 //! `swarmux holdout`: hidden checks the verifier runs in clean copies and
 //! agents never see. They live in `~/.swarmux/holdout/<repo>/`, outside
-//! every repository.
+//! every repository. `<repo>` is the repository's folder name and what it
+//! is (`shop.id-3fa9c1d2e4b7`), so two folders of the same name do not share.
 
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::Arc;
 
 use anyhow::Context;
+use swarmux_application::ledger::LedgerService;
+use swarmux_application::ports::Clock;
 use swarmux_application::{Checker, CleanCheckout, HoldoutStore, Verifier};
 use swarmux_domain::gate::{DEFAULT_CHECK_TIMEOUT_SECS, GateCheck};
 use swarmux_domain::verifier::{holdout_path, valid_name};
-use swarmux_infrastructure::{FsHoldoutStore, GitCleanCheckout, Paths, ProcessChecker};
+use swarmux_infrastructure::{
+    FsHoldoutStore, GitCleanCheckout, MigrationLog, Paths, ProcessChecker, SqliteLedger,
+    SystemClock,
+};
 
 /// The verifier the app and `swarmux gate run` use.
 pub fn verifier(paths: &Paths, checker: Arc<dyn Checker>) -> Verifier {
@@ -17,7 +24,27 @@ pub fn verifier(paths: &Paths, checker: Arc<dyn Checker>) -> Verifier {
         Arc::new(GitCleanCheckout::new("git".into(), paths.verify.clone())),
         checker,
     )
-    .with_holdout(Arc::new(FsHoldoutStore::new(paths.holdout.clone())))
+    .with_holdout(Arc::new(holdout_store(paths)))
+}
+
+/// Writes a `holdout_migrated` entry to the ledger when hidden checks move
+/// to a repository's identity key. Best effort: the move itself has
+/// happened, and the entry is only the record of it.
+fn migration_log(paths: &Paths) -> MigrationLog {
+    let db = paths.db.clone();
+    Box::new(move |from, to| {
+        let Ok(ledger) = SqliteLedger::open(&db) else {
+            return;
+        };
+        let clock = Rc::new(SystemClock);
+        let service = LedgerService::new(Rc::new(ledger), clock.clone());
+        let _ = service.record_holdout_migrated(from, to, clock.now());
+    })
+}
+
+/// The store of hidden checks, ledgering migrations.
+pub fn holdout_store(paths: &Paths) -> FsHoldoutStore {
+    FsHoldoutStore::new(paths.holdout.clone()).with_migration_log(migration_log(paths))
 }
 
 /// The plain checker, for callers that build their own verifier.
@@ -26,7 +53,7 @@ pub fn checker() -> Arc<dyn Checker> {
 }
 
 fn store() -> anyhow::Result<FsHoldoutStore> {
-    Ok(FsHoldoutStore::new(Paths::default_home()?.holdout))
+    Ok(holdout_store(&Paths::default_home()?))
 }
 
 /// A repository given by folder (inside it, or a worktree of it) or by
@@ -41,7 +68,29 @@ fn repo_name(repo: &str, paths: &Paths) -> anyhow::Result<String> {
     }
     valid_name(repo).map_err(|e| anyhow::anyhow!("repository name {e}"))?;
     // Names are kept lowercased, as they are found from a folder.
-    Ok(repo.to_ascii_lowercase())
+    let name = repo.to_ascii_lowercase();
+    // A name alone finds the repository that took it over (`shop` is
+    // `shop.id-...`), when there is just one.
+    let prefix = format!("{name}.id-");
+    let mut keyed: Vec<String> = std::fs::read_dir(&paths.holdout)
+        .map(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .filter(|n| n.starts_with(&prefix) && !n.contains('/'))
+                .collect()
+        })
+        .unwrap_or_default();
+    keyed.sort();
+    match keyed.as_slice() {
+        [] => Ok(name),
+        [one] => Ok(one.clone()),
+        many => anyhow::bail!(
+            "{name} is the folder name of {} repositories ({}): give a folder inside the one you mean",
+            many.len(),
+            many.join(", ")
+        ),
+    }
 }
 
 /// `tests/hidden.rs=C:\keep\hidden.rs` (where it goes = where it is now),

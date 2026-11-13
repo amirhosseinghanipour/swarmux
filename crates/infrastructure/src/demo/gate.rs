@@ -6,10 +6,14 @@ use swarmux_application::evidence::{HeadFacts, Vcs};
 use swarmux_application::gate::Checker;
 use swarmux_application::{AppResult, GateSource, LoadedGate};
 use swarmux_domain::evidence::{ChangeKind, DiffFile, DiffSummary};
-use swarmux_domain::gate::{CheckRun, GateCheck, GateOrigin, GateSpec, Pin};
+use swarmux_domain::gate::{
+    CheckRun, GateCheck, GateOrigin, GateSpec, Pin, VerifierSpec, WorktreeChecks,
+};
 
 /// Every demo repository has the same gate: its tests are protected and
-/// there are no checks of its own (missions bring theirs).
+/// there are no checks of its own (missions bring theirs). The demo has no
+/// repository to copy, so its checks run where they are, and its gate says
+/// that this is fine (the real gate does not, for a mission).
 pub struct DemoGateSource;
 
 impl GateSource for DemoGateSource {
@@ -19,6 +23,10 @@ impl GateSource for DemoGateSource {
             spec: GateSpec {
                 protected: vec!["tests/**".into()],
                 evidence: false,
+                verifier: VerifierSpec {
+                    worktree_checks: WorktreeChecks::Allow,
+                    ..VerifierSpec::default()
+                },
                 ..GateSpec::default()
             },
             origin: GateOrigin::File,

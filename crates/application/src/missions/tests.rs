@@ -153,6 +153,7 @@ fn gate(outcome: GateOutcome, at: Millis) -> GateState {
         digest: String::new(),
         problem: None,
         at,
+        notes: Default::default(),
     }
 }
 

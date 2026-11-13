@@ -359,6 +359,7 @@ fn pass(at: Millis) -> GateState {
         digest: String::new(),
         problem: None,
         at,
+        notes: Default::default(),
     }
 }
 

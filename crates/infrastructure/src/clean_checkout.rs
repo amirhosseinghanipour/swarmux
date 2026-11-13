@@ -16,7 +16,7 @@ use std::process::Output;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use swarmux_application::{AppError, AppResult, CleanCheckout, CleanCopy};
-use swarmux_domain::verifier::repo_key;
+use swarmux_domain::verifier::{identity_key, repo_identity, repo_key};
 
 use crate::git::git_command;
 use crate::holdout::quoted;
@@ -73,6 +73,52 @@ fn must(bin: &Path, cwd: &Path, args: &[&str], index: Option<&Path>) -> AppResul
         )));
     }
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+/// What the repository `dir` lies in is, apart from where it lives: a hash
+/// of its remote URL and its root commit. `None` while it has no commit.
+pub(crate) fn identity_of(bin: &Path, dir: &Path) -> Option<String> {
+    let roots = ok(bin, dir, &["rev-list", "--max-parents=0", "HEAD"])?;
+    // A repository with several roots (merged histories) is known by the
+    // smallest, so the choice does not depend on the order git lists them.
+    let root = roots.lines().map(str::trim).min()?.to_string();
+    let remote = ok(bin, dir, &["config", "--get", "remote.origin.url"])
+        .or_else(|| {
+            let first = ok(bin, dir, &["remote"])?
+                .lines()
+                .next()?
+                .trim()
+                .to_string();
+            ok(
+                bin,
+                dir,
+                &["config", "--get", &format!("remote.{first}.url")],
+            )
+        })
+        .unwrap_or_default();
+    Some(repo_identity(&remote, &root))
+}
+
+/// The key under which hidden checks of the repository `dir` lies in are
+/// kept, as [`CleanCheckout::repo`] gives it.
+pub fn holdout_key(bin: &Path, dir: &Path) -> Option<String> {
+    GitCleanCheckout::new(bin.to_path_buf(), PathBuf::new()).repo(dir)
+}
+
+/// A path that stays inside the folder it is joined to: relative, no `..`.
+fn inside(path: &str) -> AppResult<String> {
+    let p = path.replace('\\', "/");
+    let p = p.trim_start_matches("./");
+    let bad = p.is_empty()
+        || p.starts_with('/')
+        || p.as_bytes().get(1) == Some(&b':')
+        || p.split('/').any(|s| s.is_empty() || s == "..");
+    if bad {
+        return Err(AppError::Workspace(format!(
+            "{path:?} is not a path inside the copy"
+        )));
+    }
+    Ok(p.to_string())
 }
 
 impl GitCleanCheckout {
@@ -168,7 +214,14 @@ impl CleanCheckout for GitCleanCheckout {
         };
         let name = main.to_string_lossy();
         let name = name.trim_end_matches(".git");
-        Some(repo_key(name).unwrap_or_else(|| UNNAMED.to_string()))
+        let name = repo_key(name).unwrap_or_else(|| UNNAMED.to_string());
+        // Known by what it is: its remote and its root commit, not only
+        // the folder it lives in. A repository with no commit yet has no
+        // identity and keeps the plain name.
+        Some(match identity_of(&self.bin, dir) {
+            Some(id) => identity_key(&name, &id),
+            None => name,
+        })
     }
 
     fn snapshot(&self, dir: &Path) -> AppResult<Box<dyn CleanCopy>> {
@@ -273,15 +326,97 @@ impl CleanCopy for GitCleanCopy {
 
     fn restore(&self, base: &str, paths: &[String]) -> AppResult<()> {
         // The copy is a worktree of the repository, so `base` is there.
-        // `--` and literal pathspecs keep a file name from being read as
-        // an option or a pattern.
-        for chunk in paths.chunks(100) {
+        // A file the base never had is removed; the others are checked
+        // out. `--` and literal pathspecs keep a file name from being read
+        // as an option or a pattern.
+        let mut had = Vec::new();
+        for p in paths {
+            let p = inside(p)?;
+            if self.show(base, &p)?.is_some() {
+                had.push(p);
+            } else {
+                self.remove(&p)?;
+            }
+        }
+        for chunk in had.chunks(100) {
             let mut args: Vec<String> = vec!["checkout".into(), base.into(), "--".into()];
             args.extend(chunk.iter().map(|p| format!(":(literal){p}")));
             let args: Vec<&str> = args.iter().map(String::as_str).collect();
             must(&self.bin, &self.path, &args, None)?;
         }
         Ok(())
+    }
+
+    fn head(&self) -> Option<&str> {
+        self.head.as_deref()
+    }
+
+    fn show(&self, commit: &str, path: &str) -> AppResult<Option<Vec<u8>>> {
+        let path = inside(path)?;
+        let spec = format!("{commit}:{path}");
+        let out = run(
+            &self.bin,
+            &self.path,
+            &["cat-file", "blob", spec.as_str()],
+            None,
+        )?;
+        Ok(out.status.success().then_some(out.stdout))
+    }
+
+    fn read(&self, path: &str) -> Option<Vec<u8>> {
+        let p = inside(path).ok()?;
+        fs::read(self.path.join(p)).ok()
+    }
+
+    fn write(&self, path: &str, bytes: &[u8]) -> AppResult<()> {
+        let to = self.path.join(inside(path)?);
+        if let Some(parent) = to.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|e| AppError::Workspace(format!("{}: {e}", parent.display())))?;
+        }
+        fs::write(&to, bytes).map_err(|e| AppError::Workspace(format!("{}: {e}", to.display())))
+    }
+
+    fn reset(&self) -> AppResult<()> {
+        // The copy is a detached worktree at the snapshot commit: hard
+        // reset puts back every tracked file, and `clean` removes what the
+        // checks made (ignored files too: a check that leaves a cache
+        // behind leaves none for the next).
+        must(
+            &self.bin,
+            &self.path,
+            &["reset", "--hard", "--quiet", self.commit.as_str()],
+            None,
+        )?;
+        must(&self.bin, &self.path, &["clean", "-ffdxq"], None)?;
+        Ok(())
+    }
+
+    fn files(&self) -> AppResult<Vec<String>> {
+        // `-z` keeps odd file names whole. The copy was made from a commit,
+        // so what git lists is what the copy holds.
+        let out = run(&self.bin, &self.path, &["ls-files", "-z"], None)?;
+        if !out.status.success() {
+            return Err(AppError::Workspace(format!(
+                "git ls-files: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            )));
+        }
+        Ok(out
+            .stdout
+            .split(|b| *b == 0)
+            .filter(|s| !s.is_empty())
+            .map(|s| String::from_utf8_lossy(s).into_owned())
+            .collect())
+    }
+
+    fn remove(&self, path: &str) -> AppResult<()> {
+        let at = self.path.join(inside(path)?);
+        match fs::remove_file(&at) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(AppError::Workspace(format!("{}: {e}", at.display()))),
+        }
     }
 }
 
@@ -340,13 +475,27 @@ mod tests {
         Some((dir, p))
     }
 
+    /// The key a repository `Shop` with no remote has: its folder name and
+    /// what its root commit is.
+    fn shop_key(p: &Path) -> String {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(p)
+            .args(["rev-list", "--max-parents=0", "HEAD"])
+            .output()
+            .unwrap();
+        let root = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        identity_key("shop", &repo_identity("", &root))
+    }
+
     #[test]
     fn a_copy_holds_uncommitted_work_but_nothing_ignored_and_goes_away() {
         let Some((dir, p)) = repo() else { return };
         let base = dir.path().join("verify");
         let checkouts = GitCleanCheckout::new("git".into(), base.clone());
         let head = checkouts.head(&p).expect("a head");
-        assert_eq!(checkouts.repo(&p).as_deref(), Some("shop"));
+        let key = shop_key(&p);
+        assert_eq!(checkouts.repo(&p).as_deref(), Some(key.as_str()));
 
         fs::write(p.join("new.rs"), "fn new() {}\n").unwrap();
         fs::write(p.join("tests/a.rs"), "assert_eq!(f(), 2);\n").unwrap();
@@ -362,7 +511,7 @@ mod tests {
 
         let copy = checkouts.snapshot(&p).unwrap();
         let path = copy.path().to_path_buf();
-        assert!(path.starts_with(base.join("shop")), "{}", path.display());
+        assert!(path.starts_with(base.join(&key)), "{}", path.display());
         // Line endings are what a fresh checkout gives (core.autocrlf).
         let new = fs::read_to_string(path.join("new.rs")).unwrap();
         assert_eq!(new.trim_end(), "fn new() {}");
@@ -376,12 +525,12 @@ mod tests {
             !path.join("target/planted.txt").exists(),
             "ignored files stay out"
         );
-        assert_eq!(copy.repo(), "shop");
+        assert_eq!(copy.repo(), key);
         let diff = copy.diff_from(Some(&head)).unwrap();
         assert!(diff.contains("-assert_eq!(f(), 1);"), "{diff}");
         assert!(diff.contains("+fn new() {}"), "{diff}");
         // Builds of the copies share one folder.
-        let config = fs::read_to_string(base.join("shop/.cargo/config.toml")).unwrap();
+        let config = fs::read_to_string(base.join(&key).join(".cargo/config.toml")).unwrap();
         assert!(config.contains("target-dir"), "{config}");
 
         // The repository itself was not touched.
@@ -415,9 +564,10 @@ mod tests {
             &["worktree", "add", "-q", "-b", "job", wt.to_str().unwrap()]
         ));
         let checkouts = GitCleanCheckout::new("git".into(), dir.path().join("verify"));
-        assert_eq!(checkouts.repo(&wt).as_deref(), Some("shop"));
+        let key = shop_key(&p);
+        assert_eq!(checkouts.repo(&wt).as_deref(), Some(key.as_str()));
         let copy = checkouts.snapshot(&wt).unwrap();
-        assert_eq!(copy.repo(), "shop");
+        assert_eq!(copy.repo(), key);
         assert!(copy.path().join("tests/a.rs").is_file());
     }
 

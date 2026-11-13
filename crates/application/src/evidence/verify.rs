@@ -56,7 +56,11 @@ impl Rerunner {
         let Some(store) = &self.holdout else {
             return Some(VerifyItem::bad(subject, &expected, "no hidden check store"));
         };
-        let Some(repo) = repo_key(&bundle.repo) else {
+        let repo = self
+            .checkouts
+            .holdout_key(Path::new(&bundle.repo))
+            .or_else(|| repo_key(&bundle.repo));
+        let Some(repo) = repo else {
             return Some(VerifyItem::bad(subject, &expected, "no repository name"));
         };
         let checks = match store.list(&repo) {
@@ -111,6 +115,7 @@ impl Rerunner {
                     args: c.args.clone(),
                     timeout_secs: c.timeout_secs,
                     dir: None,
+                    ..GateCheck::new("", "", &[])
                 };
                 let run = run_checks(&*self.checker, &[check], checkout.path())
                     .into_iter()
@@ -194,6 +199,36 @@ impl EvidenceService {
                 "everything committed",
                 "files were uncommitted when it was sealed",
             ));
+        }
+        out.extend(self.how_items(bundle));
+        out
+    }
+
+    /// What the bundle says about how its verdict was reached, as plain
+    /// findings: they do not mismatch, they tell what the bundle does not
+    /// establish.
+    fn how_items(&self, bundle: &Bundle) -> Vec<VerifyItem> {
+        let Some(how) = &bundle.verification else {
+            return vec![VerifyItem::ok(
+                "how it was checked",
+                "not recorded (a bundle of schema 1)",
+            )];
+        };
+        let mut out = Vec::new();
+        match how.ran_in.as_str() {
+            "clean_copy" => out.push(VerifyItem::ok("checks ran in", "a clean copy")),
+            "worktree" => out.push(VerifyItem::ok(
+                "checks ran in",
+                "the worktree, next to what the agent left (not a clean copy)",
+            )),
+            _ => out.push(VerifyItem::ok("checks ran in", "not recorded")),
+        }
+        if let Some(text) = how.hidden_text() {
+            out.push(VerifyItem::ok("hidden checks", &text));
+        }
+        let ran: Vec<String> = bundle.checks.iter().map(|c| c.name.clone()).collect();
+        for name in how.not_run(&ran) {
+            out.push(VerifyItem::ok("planned check", &format!("{name}: not run")));
         }
         out
     }

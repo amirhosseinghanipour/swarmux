@@ -110,6 +110,12 @@ pub trait Checkouts: Send + Sync {
     /// `sha` of `repo`, checked out into a folder of its own, with
     /// nothing from the repository's working files in it.
     fn checkout(&self, repo: &Path, sha: &str) -> AppResult<Box<dyn Checkout>>;
+    /// The key the repository's hidden checks are kept under (its folder
+    /// name and what it is); `None` when it has none. Without one, hidden
+    /// checks cannot be found again.
+    fn holdout_key(&self, _repo: &Path) -> Option<String> {
+        None
+    }
 }
 
 /// The branch to look up.
@@ -298,6 +304,7 @@ impl EvidenceService {
             diff,
             checks,
             hidden: verdict.facts.hidden,
+            verification: Some(verdict.facts.how.clone()),
             gates: trail.gates(),
             review,
             checkpoints,

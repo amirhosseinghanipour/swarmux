@@ -9,20 +9,21 @@
 //! the ledger and turns it into wall chips, change-log rows and, once a gate
 //! gives up, an inbox item.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
+use swarmux_domain::gate::flake::FlakeHistory;
 use swarmux_domain::gate::{
-    CheckRun, Executed, GateCheck, GateFindings, GateOrigin, GateOutcome, GateSpec, Pin, PinChange,
-    digest, evidence_gaps, judge, pin_changes, protected_write,
+    CheckRun, Executed, GateCheck, GateFindings, GateOrigin, GateOutcome, GateSpec, HiddenNotRun,
+    Pin, PinChange, RanIn, digest, evidence_gaps, judge, pin_changes, protected_write,
 };
 use swarmux_domain::mission::MissionGate;
 use swarmux_domain::verifier::{BaseSuite, HiddenTally};
 use swarmux_domain::{
-    AttentionItem, CheckpointReason, HookEvent, JobId, Millis, Priority, SessionId,
+    AttentionItem, CheckpointReason, HookEvent, JobId, JobStatus, Millis, Priority, SessionId,
 };
 
 use crate::attention::{Change, ChangeKind};
@@ -33,12 +34,17 @@ use crate::knowledge::{RuleCheck, RuleChecks};
 use crate::ledger::LedgerService;
 use crate::ports::{Clock, JobRepository};
 use crate::verifier::{
-    Verifier, VerifyRequest, fenced_folder, runs_holdout_command, runs_knowledge_command,
+    Verification, Verifier, VerifyRequest, fenced_folder, plan_checks, runs_holdout_command,
+    runs_knowledge_command,
 };
 use crate::{AppError, AppResult, JobFact};
 
 /// Commands remembered per job for the evidence check.
 const EXECUTED_KEPT: usize = 500;
+/// Ledger entries read to seed the flake history.
+const RECENT_VERDICTS: usize = 5000;
+/// The most runs of a check the flake history keeps.
+const FLAKE_WINDOW_MAX: u32 = 50;
 /// Gate changes kept for the change log.
 const CHANGES_KEPT: usize = 100;
 
@@ -95,6 +101,13 @@ pub trait JobGates {
     /// `dir`'s), with no agent waiting. The verdict arrives like a stop's:
     /// a pass, or an escalation. Why the checks could not start, if not.
     fn verify(&self, job: JobId, dir: &Path) -> Result<(), String>;
+    /// A plain job ended: runs its gate once more when its last stop was
+    /// not a pass on the tree it left behind (nothing judged it, or it
+    /// changed files after). Whether a run was started. Missions have
+    /// their own verification; the default does nothing.
+    fn finish(&self, _job: JobId) -> Result<bool, String> {
+        Ok(false)
+    }
 }
 
 /// Runs `checks` in `root`; a failing check is run once more, and passing
@@ -162,6 +175,8 @@ struct Watch {
     touched: bool,
     lead_blocks: u32,
     subagent_blocks: u32,
+    /// The lead's last stop was judged a pass.
+    last_pass: bool,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -185,50 +200,73 @@ pub struct GateKeeper {
     contracts: Option<Arc<dyn ContractGate>>,
 }
 
-/// What running a repository's checks found.
-#[derive(Default)]
-struct Checked {
-    runs: Vec<CheckRun>,
-    /// Protected files the clean copy changes, as git compares them.
-    protected: Vec<PinChange>,
-    hidden: Option<HiddenTally>,
-    tampering: Vec<String>,
-    checks_weakened: bool,
-    base_suite: Option<BaseSuite>,
-    problem: Option<String>,
-}
-
 /// What running checks takes.
 struct Work<'a> {
     checker: &'a dyn Checker,
     verifier: Option<&'a Verifier>,
+    /// A mission's verification: what could not be checked is not waved
+    /// through.
+    unattended: bool,
 }
 
 impl Work<'_> {
     /// Runs the gate's checks: in a clean copy when there is a verifier and
-    /// the repository is in git, else in place. The hidden checks and the
-    /// tamper scan need the copy.
-    fn check(&self, gate: &LoadedGate, base: Option<&str>, visible: bool, hidden: bool) -> Checked {
+    /// the repository is in git, else in place. The hidden checks, the
+    /// tamper scan and the harness scan need the copy; when the checks run
+    /// in place the result says so, and says when hidden checks that exist
+    /// could not run.
+    fn check(
+        &self,
+        gate: &LoadedGate,
+        base: Option<&str>,
+        visible: bool,
+        hidden: bool,
+    ) -> Verification {
         let spec = &gate.spec;
-        let in_place = |problem: Option<String>| Checked {
-            runs: if visible {
-                run_checks(self.checker, &spec.checks, &gate.root)
+        let (planned, left_out, optional) = plan_checks(spec);
+        let in_place = |why: Option<String>, problem: Option<String>| {
+            let runs = if visible {
+                run_checks(self.checker, &planned, &gate.root)
             } else {
                 Vec::new()
-            },
-            problem,
-            ..Checked::default()
+            };
+            let hidden_not_run = match (hidden, why) {
+                (true, Some(reason)) => self
+                    .verifier
+                    .and_then(|v| v.hidden_planned(&gate.root))
+                    .map(|planned| HiddenNotRun { planned, reason }),
+                _ => None,
+            };
+            Verification {
+                ran_in: (!runs.is_empty()).then_some(RanIn::Worktree),
+                runs,
+                hidden_not_run,
+                planned: planned.iter().map(|c| c.name.clone()).collect(),
+                left_out: left_out.clone(),
+                optional: optional.clone(),
+                problem,
+                ..Verification::default()
+            }
         };
         // Checks of a workspace's repositories run in the task folder: one
         // clean copy of one repository can't hold them.
         if spec.checks.iter().any(|c| c.dir.is_some()) {
-            return in_place(None);
+            return in_place(
+                Some(
+                    "checks that name a folder run in the task folder, not in a clean copy".into(),
+                ),
+                None,
+            );
         }
         let Some(verifier) = self.verifier.filter(|_| spec.verifier.clean) else {
-            return in_place(None);
+            return in_place(
+                self.verifier
+                    .map(|_| "clean = false in gates.toml: the checks run in the worktree".into()),
+                None,
+            );
         };
         if !verifier.applies(&gate.root, spec, hidden) {
-            return in_place(None);
+            return in_place(None, None);
         }
         let request = VerifyRequest {
             dir: &gate.root,
@@ -238,18 +276,13 @@ impl Work<'_> {
             hidden,
         };
         match verifier.verify(&request) {
-            Ok(v) => Checked {
-                runs: v.runs,
-                protected: v.protected,
-                hidden: v.hidden,
-                tampering: v.tampering,
-                checks_weakened: v.checks_weakened,
-                base_suite: v.base_suite,
-                problem: v.problem,
-            },
-            Err(why) => in_place(Some(format!(
-                "verifier: no clean copy ({why}); the checks ran in the worktree"
-            ))),
+            Ok(v) => v,
+            Err(why) => in_place(
+                Some(format!("no clean copy was made ({why})")),
+                Some(format!(
+                    "verifier: no clean copy ({why}); the checks ran in the worktree"
+                )),
+            ),
         }
     }
 }
@@ -379,6 +412,9 @@ impl GateKeeper {
         add_lint(&mut gate.spec, &rules);
         let key = Key::of(stop.job, &stop.session);
         let subagent = stop.event == HookEvent::SubagentStop;
+        // A mission has nobody at the keyboard: what the gate could not
+        // check, it does not wave through.
+        let unattended = stop.job.is_some_and(|j| lock(&self.jobs).contains_key(&j));
         let contract = if subagent {
             None
         } else {
@@ -406,10 +442,11 @@ impl GateKeeper {
             let work = Work {
                 checker: &*self.checker,
                 verifier: self.verifier.as_ref(),
+                unattended,
             };
             work.check(&gate, base.as_deref(), true, !subagent)
         } else {
-            Checked::default()
+            Verification::default()
         };
         if let (true, Some(c)) = (touched && !subagent, contract) {
             checked.runs.push(c.run);
@@ -437,17 +474,17 @@ impl GateKeeper {
         } else {
             Vec::new()
         };
-        let findings = GateFindings {
-            runs: checked.runs,
-            pins,
-            gaps,
-            hidden: checked.hidden,
-            tampering: checked.tampering,
-            checks_weakened: checked.checks_weakened,
-            base_suite: checked.base_suite,
-        };
-        let problem = gate.problem.clone().or(checked.problem);
-        if !findings.checked() && findings.clean() && problem.is_none() {
+        let problem = gate.problem.clone().or_else(|| checked.problem.clone());
+        let mut findings = checked.into_findings(spec, unattended);
+        findings.pins = pins;
+        findings.gaps = gaps;
+        findings.config_problem = gate.problem.clone();
+        findings.policy_sha256 = spec.policy_sha256();
+        if !findings.checked()
+            && findings.clean()
+            && problem.is_none()
+            && findings.incomplete().is_empty()
+        {
             // Nothing was checked and nothing is wrong: not worth a record.
             return None;
         }
@@ -468,6 +505,9 @@ impl GateKeeper {
             // or not.
             if !subagent && outcome != GateOutcome::Block {
                 w.touched = false;
+            }
+            if !subagent {
+                w.last_pass = outcome == GateOutcome::Pass;
             }
         }
         let text = digest(
@@ -600,6 +640,47 @@ impl JobGates for GateKeeper {
     }
 
     fn verify(&self, job: JobId, dir: &Path) -> Result<(), String> {
+        self.start(job, dir, true)
+    }
+
+    fn finish(&self, job: JobId) -> Result<bool, String> {
+        if lock(&self.jobs).contains_key(&job) {
+            return Ok(false);
+        }
+        let (known, fresh) = lock(&self.watches)
+            .get(&Key::Job(job))
+            .map_or((false, false), |w| {
+                (w.pins.is_some(), w.last_pass && !w.touched)
+            });
+        // A job that never opened a session in a repository has nothing to
+        // judge; one whose last stop passed on this very tree is judged.
+        if !known || fresh {
+            return Ok(false);
+        }
+        let Some(root) = lock(&self.watches)
+            .get(&Key::Job(job))
+            .and_then(|w| w.pins.as_ref().map(|(r, _)| r.clone()))
+        else {
+            return Ok(false);
+        };
+        let gate = self.load(Some(job), &root);
+        let hidden = self
+            .verifier
+            .as_ref()
+            .and_then(|v| v.hidden_planned(&gate.root))
+            .is_some();
+        if gate.spec.checks.is_empty() && !hidden && gate.problem.is_none() {
+            return Ok(false);
+        }
+        self.start(job, &root, false).map(|()| true)
+    }
+}
+
+impl GateKeeper {
+    /// Runs `job`'s checks on a thread of their own, with no agent
+    /// waiting; the verdict arrives like a stop's. `unattended` jobs are
+    /// missions: what could not be checked is not waved through.
+    fn start(&self, job: JobId, dir: &Path, unattended: bool) -> Result<(), String> {
         let (baseline, base) = lock(&self.watches)
             .get(&Key::Job(job))
             .map(|w| (w.pins.clone(), w.base.clone()))
@@ -622,6 +703,7 @@ impl JobGates for GateKeeper {
                 let work = Work {
                     checker: &*checker,
                     verifier: verifier.as_ref(),
+                    unattended,
                 };
                 let mut gate = gate;
                 let contract = contracts.and_then(|c| c.judge(job));
@@ -639,10 +721,10 @@ impl JobGates for GateKeeper {
                     extra,
                 );
                 if !rules.is_empty() {
-                    let mut checked = Checked {
+                    let mut checked = Verification {
                         runs: record.findings.runs.clone(),
                         hidden: record.findings.hidden,
-                        ..Checked::default()
+                        ..Verification::default()
                     };
                     run_rule_checks(
                         &*checker,
@@ -654,12 +736,7 @@ impl JobGates for GateKeeper {
                     );
                     if checked.hidden != record.findings.hidden {
                         record.findings.hidden = checked.hidden;
-                        let checked_any = record.findings.checked();
-                        record.outcome = if checked_any && record.findings.clean() {
-                            GateOutcome::Pass
-                        } else {
-                            GateOutcome::Escalate
-                        };
+                        record.outcome = manual_outcome(&record.findings);
                         record.digest = digest(
                             &record.findings,
                             record.outcome,
@@ -684,6 +761,10 @@ impl<T: JobGates + ?Sized> JobGates for Arc<T> {
 
     fn verify(&self, job: JobId, dir: &Path) -> Result<(), String> {
         (**self).verify(job, dir)
+    }
+
+    fn finish(&self, job: JobId) -> Result<bool, String> {
+        (**self).finish(job)
     }
 }
 
@@ -714,7 +795,7 @@ fn run_rule_checks(
     job: Option<JobId>,
     rules: &[RuleCheck],
     root: &Path,
-    checked: &mut Checked,
+    checked: &mut Verification,
 ) {
     let (Some(job), Some(provider)) = (job, provider) else {
         return;
@@ -777,21 +858,13 @@ fn verify_now(
         }
         _ => pin_findings(None, &[], &found.protected),
     };
-    let findings = GateFindings {
-        runs: found.runs,
-        pins,
-        gaps: Vec::new(),
-        hidden: found.hidden,
-        tampering: found.tampering,
-        checks_weakened: found.checks_weakened,
-        base_suite: found.base_suite,
-    };
+    let problem = gate.problem.clone().or_else(|| found.problem.clone());
+    let mut findings = found.into_findings(spec, work.unattended);
+    findings.pins = pins;
+    findings.config_problem = gate.problem.clone();
+    findings.policy_sha256 = spec.policy_sha256();
     let checked = findings.checked();
-    let outcome = if checked && findings.clean() {
-        GateOutcome::Pass
-    } else {
-        GateOutcome::Escalate
-    };
+    let outcome = manual_outcome(&findings);
     let text = if checked {
         digest(&findings, outcome, 0, spec.max_blocks, &globs)
     } else {
@@ -808,7 +881,18 @@ fn verify_now(
         max_blocks: spec.max_blocks,
         findings,
         digest: text,
-        problem: gate.problem.clone().or(found.problem),
+        problem,
+    }
+}
+
+/// The verdict of a run that has no agent waiting (a mission's verification,
+/// a plain job's last look, swarmux gate run): it passes, or a person is
+/// asked. With nothing to run there is nothing to pass.
+pub fn manual_outcome(findings: &GateFindings) -> GateOutcome {
+    if findings.checked() {
+        judge(findings, 0, 0)
+    } else {
+        GateOutcome::Escalate
     }
 }
 
@@ -834,6 +918,29 @@ pub struct GateState {
     pub digest: String,
     pub problem: Option<String>,
     pub at: Millis,
+    /// What the verdict says about how far it can be trusted.
+    pub notes: GateNotes,
+}
+
+/// What a verdict says about how it was reached, beside what it found:
+/// where the checks ran, which hidden checks did not run and why the gate
+/// could not vouch for the work. Shown wherever the verdict is.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct GateNotes {
+    /// Hidden checks exist for the repository and did not run: why.
+    pub hidden_not_run: Option<String>,
+    /// Where the visible checks ran; `None` when none did.
+    pub ran_in: Option<RanIn>,
+    /// Harness files (test runner configuration, build scripts) the job
+    /// created, changed or removed.
+    pub substrate: usize,
+    /// Manifests and lockfiles that gained or changed dependencies.
+    pub dependencies: usize,
+    /// Why the gate could not vouch for work in which nothing was wrong.
+    pub incomplete: Vec<String>,
+    /// Checks that flaked often enough to be called flaky: the name, how
+    /// many of the last runs flaked and how many runs that is.
+    pub flaky: Vec<(String, u32, u32)>,
 }
 
 /// One check of a job's latest verdict, with what [`GateState`] leaves out:
@@ -871,6 +978,25 @@ pub struct GateDetail {
     /// The base-suite check, when it ran: whether it was clean, and its
     /// finding in a line.
     pub base_suite: Option<(bool, String)>,
+    /// Harness files created, changed or removed: the evidence lines.
+    pub substrate: Vec<String>,
+    /// New or changed dependencies, one line per manifest or lockfile.
+    pub dependencies: Vec<String>,
+    /// Hidden checks that exist and did not run, and why.
+    pub hidden_not_run: Option<String>,
+    /// Where the visible checks ran.
+    pub ran_in: Option<RanIn>,
+    /// The checks planned at the gate's level, and the ones left out.
+    pub planned: Vec<String>,
+    pub left_out: Vec<(String, String)>,
+    /// The revert probe, when it ran: whether it proved the change, and a line.
+    pub revert_probe: Option<(bool, String)>,
+    /// Why the gate could not vouch for the work.
+    pub incomplete: Vec<String>,
+    /// Checks called flaky from their history.
+    pub flaky: Vec<(String, u32, u32)>,
+    /// The hash of the gate configuration that judged.
+    pub policy_sha256: String,
 }
 
 impl GateDetail {
@@ -901,6 +1027,19 @@ impl GateDetail {
             tampering: findings.tampering.clone(),
             gaps: findings.gaps.clone(),
             base_suite: findings.base_suite.as_ref().map(|b| (b.clean(), b.text())),
+            substrate: findings.substrate.clone(),
+            dependencies: findings.dependencies.clone(),
+            hidden_not_run: findings.hidden_not_run.as_ref().map(HiddenNotRun::text),
+            ran_in: findings.ran_in,
+            planned: findings.planned.clone(),
+            left_out: findings.left_out.clone(),
+            revert_probe: findings
+                .revert_probe
+                .as_ref()
+                .map(|p| (p.proved, p.detail.clone())),
+            incomplete: findings.incomplete(),
+            flaky: Vec::new(),
+            policy_sha256: findings.policy_sha256.clone(),
         }
     }
 }
@@ -915,6 +1054,14 @@ pub struct GateService {
     details: HashMap<JobId, GateDetail>,
     changes: VecDeque<Change>,
     checkpoints: Option<Rc<CheckpointService>>,
+    /// How often each check flaked, from the ledger and this run.
+    flake: FlakeHistory,
+    flake_seeded: bool,
+    /// Runs the gate once more for plain jobs that end.
+    finisher: Option<Rc<dyn JobGates>>,
+    /// Jobs seen running; the ones that end from here are plain jobs
+    /// finishing, not history.
+    running: HashSet<JobId>,
 }
 
 impl GateService {
@@ -933,6 +1080,74 @@ impl GateService {
             details: HashMap::new(),
             changes: VecDeque::new(),
             checkpoints: None,
+            flake: FlakeHistory::default(),
+            flake_seeded: false,
+            finisher: None,
+            running: HashSet::new(),
+        }
+    }
+
+    /// Runs the gate once more for each plain job that ends, when its last
+    /// stop was not a pass on the tree it left.
+    pub fn with_finisher(mut self, finisher: Rc<dyn JobGates>) -> GateService {
+        self.finisher = Some(finisher);
+        self
+    }
+
+    /// Looks at the jobs that ended since the last look: a plain job that
+    /// finished gets its gate run once more (when its last stop did not
+    /// pass on the final tree), and one that cannot be verified says so
+    /// instead of showing nothing.
+    pub fn pump_finished(&mut self, facts: &[JobFact]) -> Vec<AppError> {
+        let mut errors = Vec::new();
+        let Some(finisher) = self.finisher.clone() else {
+            return errors;
+        };
+        for f in facts.iter().filter(|f| f.review_of.is_none()) {
+            if !f.status.is_finished() {
+                self.running.insert(f.job_id);
+                continue;
+            }
+            if !self.running.remove(&f.job_id) || f.status != JobStatus::Done {
+                continue;
+            }
+            match finisher.finish(f.job_id) {
+                Ok(_) => {}
+                Err(why) => {
+                    let findings = GateFindings {
+                        unverified: Some(why.clone()),
+                        ..GateFindings::default()
+                    };
+                    let record = GateRecord {
+                        job: Some(f.job_id),
+                        session: String::new(),
+                        event: None,
+                        root: String::new(),
+                        origin: GateOrigin::Detected,
+                        outcome: GateOutcome::Escalate,
+                        blocks: 0,
+                        max_blocks: 0,
+                        digest: format!("swarmux gate: unverified: {why}"),
+                        problem: Some(why),
+                        findings,
+                    };
+                    errors.extend(self.apply(&record).err());
+                }
+            }
+        }
+        errors
+    }
+
+    /// Reads the check runs the ledger holds, so a check that flaked
+    /// before this run is known to have.
+    fn seed_flake_history(&mut self) {
+        if std::mem::replace(&mut self.flake_seeded, true) {
+            return;
+        }
+        for (root, runs) in self.ledger.recent_gate_runs(RECENT_VERDICTS) {
+            for (name, flaked) in runs {
+                self.flake.record(&root, &name, flaked, FLAKE_WINDOW_MAX);
+            }
         }
     }
 
@@ -961,7 +1176,10 @@ impl GateService {
                 GateOutcome::Block => r.blocks + 1,
                 _ => r.blocks,
             };
-            self.details.insert(job, GateDetail::of(&r.findings));
+            let flaky = self.note_flakes(r);
+            let mut detail = GateDetail::of(&r.findings);
+            detail.flaky = flaky.clone();
+            self.details.insert(job, detail);
             self.states.insert(
                 job,
                 GateState {
@@ -983,6 +1201,14 @@ impl GateService {
                     digest: r.digest.clone(),
                     problem: r.problem.clone(),
                     at: now,
+                    notes: GateNotes {
+                        hidden_not_run: r.findings.hidden_not_run.as_ref().map(HiddenNotRun::text),
+                        ran_in: r.findings.ran_in,
+                        substrate: r.findings.substrate.len(),
+                        dependencies: r.findings.dependencies.len(),
+                        incomplete: r.findings.incomplete(),
+                        flaky,
+                    },
                 },
             );
         }
@@ -1012,6 +1238,24 @@ impl GateService {
         };
         self.ledger.record_gate(r, session, now)?;
         self.checkpoint_on_pass(r)
+    }
+
+    /// Notes the runs of `r` in the flake history and names the checks of
+    /// it that are over the line.
+    fn note_flakes(&mut self, r: &GateRecord) -> Vec<(String, u32, u32)> {
+        let (after, window) = r.findings.flake_policy;
+        if after == 0 || r.findings.runs.is_empty() {
+            return Vec::new();
+        }
+        self.seed_flake_history();
+        let mut out = Vec::new();
+        for run in &r.findings.runs {
+            self.flake.record(&r.root, &run.name, run.flaky, window);
+            if let Some((n, of)) = self.flake.flaky(&r.root, &run.name, after, window) {
+                out.push((run.name.clone(), n, of));
+            }
+        }
+        out
     }
 
     /// A passed stop of a job's lead is a point worth coming back to.
@@ -1055,13 +1299,18 @@ impl GateService {
             .filter_map(|(job, s)| {
                 let f = facts.iter().find(|f| f.job_id == *job)?;
                 let title = f.prompt.lines().next().unwrap_or_default().trim();
-                let detail = s
+                let mut detail = s
                     .digest
                     .lines()
                     .nth(1)
                     .unwrap_or("checks still failing")
                     .to_string();
-                let priority = if s.tampering > 0 && s.checks_weakened {
+                for (name, n, of) in &s.notes.flaky {
+                    detail.push_str(&format!("; {name} is flaky ({n} of its last {of} runs)"));
+                }
+                // Tests weakened under the checks, or the harness that runs
+                // them changed, is P1; so is a verdict that could not tell.
+                let priority = if (s.tampering > 0 && s.checks_weakened) || s.notes.substrate > 0 {
                     Priority::P1
                 } else {
                     Priority::P2
@@ -1093,6 +1342,9 @@ fn first_line(s: &str) -> &str {
 
 /// The first thing wrong, in a few words.
 fn headline(f: &GateFindings) -> String {
+    if let Some(why) = f.config_problem.as_ref().or(f.unverified.as_ref()) {
+        return format!("cannot vouch for the work: {why}");
+    }
     if let Some(run) = f.failed().next() {
         return format!("{} {}", run.name, run.status_text());
     }
@@ -1102,16 +1354,27 @@ fn headline(f: &GateFindings) -> String {
     if let Some(t) = f.tampering.first() {
         return format!("tests weakened: {t}");
     }
+    if let Some(s) = f.substrate.first() {
+        return format!("test harness changed: {s}");
+    }
     if let Some(b) = f.base_suite.as_ref().filter(|b| !b.clean()) {
         return b.text();
     }
     if let Some(h) = f.hidden.filter(|h| !h.clean()) {
         return format!("{} of {} hidden checks failed", h.failed(), h.ran);
     }
-    f.gaps
-        .first()
-        .cloned()
-        .unwrap_or_else(|| "checks failed".to_string())
+    if let Some(p) = f.revert_probe.as_ref().filter(|p| !p.proved) {
+        return format!("revert probe: {}", p.detail);
+    }
+    if let Some(first) = f.gaps.first() {
+        return first.clone();
+    }
+    if f.clean()
+        && let Some(why) = f.incomplete().first()
+    {
+        return format!("cannot vouch for the work: {why}");
+    }
+    "checks failed".to_string()
 }
 
 #[cfg(test)]

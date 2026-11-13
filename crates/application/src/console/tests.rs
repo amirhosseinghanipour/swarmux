@@ -131,6 +131,7 @@ fn gate_state(outcome: GateOutcome, checks: &[(&str, bool)], at: Millis) -> Gate
         digest: String::new(),
         problem: None,
         at,
+        notes: Default::default(),
     }
 }
 
@@ -518,6 +519,7 @@ fn evening() -> Rig {
             tampering: Vec::new(),
             gaps: vec!["says the tests pass; no test ran".into()],
             base_suite: Some((false, "base suite: etl::counts failed".into())),
+            ..GateDetail::default()
         },
     );
 

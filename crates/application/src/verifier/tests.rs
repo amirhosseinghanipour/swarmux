@@ -121,6 +121,10 @@ struct Copies {
     restored: Mutex<Vec<(String, Vec<String>)>>,
     /// Once files are put back, this check starts failing.
     fail_on_restore: Mutex<Option<(Arc<Checks>, String)>>,
+    /// What the copies hold, and what the base commit held.
+    resets: Mutex<Vec<()>>,
+    files: Mutex<std::collections::BTreeMap<String, Vec<u8>>>,
+    base_files: Mutex<std::collections::BTreeMap<String, Vec<u8>>>,
 }
 
 struct Copy {
@@ -150,6 +154,37 @@ impl CleanCopy for Copy {
         if let Some((checks, name)) = &*lock(&self.owner.fail_on_restore) {
             checks.fail(name);
         }
+        Ok(())
+    }
+
+    fn head(&self) -> Option<&str> {
+        Some("base-sha")
+    }
+
+    fn show(&self, _commit: &str, path: &str) -> AppResult<Option<Vec<u8>>> {
+        Ok(lock(&self.owner.base_files).get(path).cloned())
+    }
+
+    fn read(&self, path: &str) -> Option<Vec<u8>> {
+        lock(&self.owner.files).get(path).cloned()
+    }
+
+    fn write(&self, path: &str, bytes: &[u8]) -> AppResult<()> {
+        lock(&self.owner.files).insert(path.to_string(), bytes.to_vec());
+        Ok(())
+    }
+
+    fn remove(&self, path: &str) -> AppResult<()> {
+        lock(&self.owner.files).remove(path);
+        Ok(())
+    }
+
+    fn files(&self) -> AppResult<Vec<String>> {
+        Ok(lock(&self.owner.files).keys().cloned().collect())
+    }
+
+    fn reset(&self) -> AppResult<()> {
+        lock(&self.owner.resets).push(());
         Ok(())
     }
 }

@@ -11,6 +11,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use swarmux_domain::gate::GateOutcome;
 use swarmux_domain::ledger::{
     ChainBreak, ChainVerifier, Hash, LedgerDraft, LedgerEntry, LedgerKind, Payload,
 };
@@ -583,11 +584,13 @@ impl LedgerService {
             .iter()
             .map(|p| format!("{} {}", p.verb(), p.path()))
             .collect();
-        // A manual run blocks nobody: it passed or failed.
-        let outcome = match (r.event, r.findings.clean()) {
-            (Some(_), _) => r.outcome.as_str(),
-            (None, true) => "pass",
-            (None, false) => "fail",
+        // A manual run blocks nobody: it passed, failed, or found nothing
+        // wrong but could not vouch for the work (escalate): never "pass".
+        let outcome = match (r.event, r.findings.clean(), r.outcome) {
+            (Some(_), _, o) => o.as_str(),
+            (None, true, GateOutcome::Pass) => "pass",
+            (None, true, _) => "escalate",
+            (None, false, _) => "fail",
         };
         let payload = Payload::new()
             .opt_str("event", r.event.map(|e| e.as_str()))
@@ -602,7 +605,56 @@ impl LedgerService {
             .strs("evidence_gaps", &r.findings.gaps)
             .strs("tampering", &r.findings.tampering)
             .text("digest", &r.digest)
-            .opt_str("problem", r.problem.as_deref());
+            .opt_str("problem", r.problem.as_deref())
+            .strs("substrate", &r.findings.substrate)
+            .strs("dependencies", &r.findings.dependencies)
+            .opt_str("ran_in", r.findings.ran_in.map(|x| x.as_str()))
+            .strs("planned", &r.findings.planned)
+            .objects(
+                "left_out",
+                r.findings
+                    .left_out
+                    .iter()
+                    .map(|(name, why)| Payload::new().str("name", name).text("why", why))
+                    .collect(),
+            )
+            .strs("incomplete", &r.findings.incomplete())
+            .strs("warnings", &r.findings.warnings)
+            .bool("unattended", r.findings.unattended)
+            .str("policy_sha256", &r.findings.policy_sha256);
+        // What the verdict could not say about the hidden checks, and how
+        // the base suite and the revert probe went, for the bundle.
+        let payload = match &r.findings.hidden_not_run {
+            Some(h) => payload.json(
+                "hidden_not_run",
+                &Payload::new()
+                    .int("planned", i64::from(h.planned))
+                    .text("reason", &h.reason)
+                    .build(),
+            ),
+            None => payload,
+        };
+        let payload = match &r.findings.base_suite {
+            Some(b) => payload.json(
+                "base_suite",
+                &Payload::new()
+                    .str("outcome", if b.clean() { "pass" } else { "fail" })
+                    .strs("restored", &b.restored)
+                    .text("verdict", &b.text())
+                    .build(),
+            ),
+            None => payload,
+        };
+        let payload = match &r.findings.revert_probe {
+            Some(p) => payload.json(
+                "revert_probe",
+                &Payload::new()
+                    .bool("proved", p.proved)
+                    .text("detail", &p.detail)
+                    .build(),
+            ),
+            None => payload,
+        };
         // Hidden checks are counted, never named.
         let payload = match r.findings.hidden {
             Some(h) => payload.json(
@@ -703,6 +755,67 @@ impl LedgerService {
             .int("created_at", rule.created_at)
             .opt_int("expires_at", rule.expires_at)
             .str("rule_sha256", &hex(&sha256(kept.as_bytes())));
+        self.append(now, LedgerKind::Policy, "operator", None, None, payload)
+    }
+
+    /// The runs of checks in the last `limit` ledger entries: for each
+    /// gate verdict the repository root and each check's name and whether
+    /// it failed and then passed. Oldest first. A ledger that cannot be
+    /// read gives nothing: this seeds a flake history, not a verdict.
+    pub fn recent_gate_runs(&self, limit: usize) -> Vec<(String, Vec<(String, bool)>)> {
+        let Ok(entries) = tail(self.ledger(), limit) else {
+            return Vec::new();
+        };
+        entries
+            .iter()
+            .filter(|e| e.draft.kind == LedgerKind::GateVerdict)
+            .filter_map(|e| swarmux_domain::evidence::check_flakes(&e.draft.payload_json))
+            .collect()
+    }
+
+    /// The gate's canary ran (`swarmux gate selftest`): each known-bad
+    /// change and whether the gate refused it, and the hash of the gate
+    /// configuration that judged.
+    pub fn record_gate_selftest(
+        &self,
+        root: &str,
+        probes: &[(String, bool, String)],
+        skipped: &[(String, String)],
+        policy_sha256: &str,
+        now: Millis,
+    ) -> AppResult<()> {
+        let passed = !probes.is_empty() && probes.iter().all(|p| p.1);
+        let objects = probes
+            .iter()
+            .map(|(name, caught, detail)| {
+                Payload::new()
+                    .text("name", name)
+                    .bool("caught", *caught)
+                    .text("detail", detail)
+            })
+            .collect();
+        let skipped_objects = skipped
+            .iter()
+            .map(|(name, why)| Payload::new().text("name", name).text("why", why))
+            .collect();
+        let payload = Payload::new()
+            .str("event", "gate_selftest")
+            .str("outcome", if passed { "pass" } else { "fail" })
+            .text("root", root)
+            .objects("probes", objects)
+            .objects("skipped", skipped_objects)
+            .str("policy_sha256", policy_sha256);
+        self.append(now, LedgerKind::Policy, "operator", None, None, payload)
+    }
+
+    /// Hidden checks that were kept under a repository's folder name were
+    /// moved under its identity key (see `holdout`): which folder, to which
+    /// key.
+    pub fn record_holdout_migrated(&self, from: &str, to: &str, now: Millis) -> AppResult<()> {
+        let payload = Payload::new()
+            .str("event", "holdout_migrated")
+            .str("from", from)
+            .str("to", to);
         self.append(now, LedgerKind::Policy, "operator", None, None, payload)
     }
 

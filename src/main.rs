@@ -284,6 +284,28 @@ enum GateAction {
         /// or the hidden checks.
         #[arg(long)]
         in_place: bool,
+        /// How far to go: fast, full (the default) or deep. A check runs when
+        /// its level is at or below this one.
+        #[arg(long)]
+        level: Option<String>,
+    },
+    /// Make the changes an agent that wanted its work to count would make
+    /// (a planted harness file, a deleted assertion) in scratch copies of
+    /// the repository, and check that the gate refuses each. Exits with 1
+    /// when it lets one through; the result goes into the ledger.
+    Selftest {
+        /// A folder inside the repository (default: the current one).
+        dir: Option<PathBuf>,
+    },
+    /// Check `.swarmux/gates.toml`: what is wrong with it, and what was read
+    /// with a fallback to a default. Exits with 1 when the file cannot be used.
+    Lint {
+        /// A folder inside the repository (default: the current one).
+        #[arg(long)]
+        dir: Option<PathBuf>,
+        /// Fail on warnings too.
+        #[arg(long)]
+        strict: bool,
     },
     /// Show the gate that applies: checks, protected paths, limits.
     Show {
@@ -458,9 +480,32 @@ fn main() -> anyhow::Result<ExitCode> {
             what: StatsAction::Verification { hours },
         }) => stats::verification(hours),
         Some(Command::Gate {
-            action: GateAction::Run { dir, in_place },
+            action:
+                GateAction::Run {
+                    dir,
+                    in_place,
+                    level,
+                },
         }) => {
-            return Ok(if gate::run(dir, in_place)? {
+            return Ok(if gate::run(dir, in_place, level.as_deref())? {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            });
+        }
+        Some(Command::Gate {
+            action: GateAction::Selftest { dir },
+        }) => {
+            return Ok(if gate::selftest(dir)? {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            });
+        }
+        Some(Command::Gate {
+            action: GateAction::Lint { dir, strict },
+        }) => {
+            return Ok(if gate::lint(dir, strict)? {
                 ExitCode::SUCCESS
             } else {
                 ExitCode::FAILURE
@@ -715,7 +760,8 @@ fn build_app(
         board,
     );
     let gate = GateService::new(gate_records, ledger.clone(), store.clone(), clock.clone())
-        .with_checkpoints(checkpoints.clone());
+        .with_checkpoints(checkpoints.clone())
+        .with_finisher(Rc::new(keeper.clone()));
     // What the sessions report themselves: status lines and loaded instructions.
     let truth = Rc::new(TruthBoard::new(clock.clone()));
     let statuslines: Rc<dyn StatuslineFeed> = Rc::new(CombinedStatusline(vec![

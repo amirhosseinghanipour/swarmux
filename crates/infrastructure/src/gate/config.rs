@@ -10,8 +10,9 @@ use std::time::SystemTime;
 use serde::Deserialize;
 use swarmux_application::{GateSource, LoadedGate};
 use swarmux_domain::gate::{
-    DEFAULT_CHECK_TIMEOUT_SECS, DEFAULT_MAX_BLOCKS, GateCheck, GateOrigin, GateSpec, Pin,
-    RepoFacts, VerifierSpec, detect, protected_glob, search_roots,
+    DEFAULT_CHECK_TIMEOUT_SECS, DEFAULT_MAX_BLOCKS, DependencyChanges, GateCheck, GateLevel,
+    GateOrigin, GateSpec, Pin, RepoFacts, VerifierSpec, WorktreeChecks, detect, env_denied,
+    protected_glob, search_roots,
 };
 use swarmux_domain::ledger::{hex, sha256};
 
@@ -57,7 +58,34 @@ struct RawVerifier {
     /// Globs of tests that may be removed or changed on purpose.
     #[serde(default)]
     allow_test_changes: Vec<String>,
+    // The keys below are read key by key: one with a value that cannot be
+    // used falls back to its (strict) default with a warning, instead of
+    // taking the whole file down.
+    /// Harness files besides the built-in list.
+    substrate: Option<toml::Value>,
+    /// Harness files this repository changes on purpose.
+    allow_substrate: Option<toml::Value>,
+    /// Revert the non-test part of the change and require a test to fail.
+    revert_probe: Option<toml::Value>,
+    /// `"escalate"` (default) or `"allow"`: a mission whose checks ran in
+    /// the worktree.
+    worktree_checks: Option<toml::Value>,
+    /// `"flag"` (default) or `"block"`: new dependencies.
+    dependencies: Option<toml::Value>,
+    /// Environment variables every check may see besides the allowlist.
+    env: Option<toml::Value>,
+    /// A check that flaked this many times...
+    flaky_after: Option<toml::Value>,
+    /// ...in its last this many runs is called flaky. 0 turns it off.
+    flaky_window: Option<toml::Value>,
 }
+
+/// The words of a gate level.
+const LEVELS: [(&str, GateLevel); 3] = [
+    ("full", GateLevel::Full),
+    ("fast", GateLevel::Fast),
+    ("deep", GateLevel::Deep),
+];
 
 fn verifier_spec(raw: &RawVerifier) -> Result<VerifierSpec, String> {
     let mut spec = VerifierSpec::default();
@@ -92,6 +120,8 @@ struct RawGate {
     detect: bool,
     #[serde(default)]
     protected: Vec<String>,
+    /// `"fast"`, `"full"` (default) or `"deep"`: which checks run.
+    level: Option<toml::Value>,
 }
 
 impl Default for RawGate {
@@ -102,6 +132,7 @@ impl Default for RawGate {
             subagent_checks: false,
             detect: true,
             protected: Vec::new(),
+            level: None,
         }
     }
 }
@@ -120,12 +151,127 @@ struct RawCheck {
     name: Option<String>,
     run: toml::Value,
     timeout_secs: Option<u64>,
+    /// `true` (default): a failure blocks. `false`: it is reported only.
+    required: Option<toml::Value>,
+    /// `"fast"`, `"full"` (default) or `"deep"`: from which gate level it runs.
+    level: Option<toml::Value>,
+    /// `"fail"`, the only value: a check that cannot run never passes.
+    on_error: Option<toml::Value>,
+    /// Environment variables this check may see besides the allowlist.
+    env: Option<toml::Value>,
+}
+
+/// A list of strings from a value that should be one; what is not a
+/// string is left out and said.
+fn string_list(key: &str, value: Option<&toml::Value>, warnings: &mut Vec<String>) -> Vec<String> {
+    let Some(value) = value else {
+        return Vec::new();
+    };
+    let Some(items) = value.as_array() else {
+        warnings.push(format!("{key} is a list of strings; it is ignored"));
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for item in items {
+        match item.as_str() {
+            Some(s) if !s.trim().is_empty() => out.push(s.trim().to_string()),
+            _ => warnings.push(format!("{key}: {item} is not a string; it is left out")),
+        }
+    }
+    out
+}
+
+/// A glob list that may not climb out of the repository.
+fn glob_list(key: &str, value: Option<&toml::Value>, warnings: &mut Vec<String>) -> Vec<String> {
+    string_list(key, value, warnings)
+        .into_iter()
+        .filter(|g| {
+            let bad = g.split(['/', '\\']).any(|s| s == "..");
+            if bad {
+                warnings.push(format!("{key}: {g:?} may not contain ..; it is left out"));
+            }
+            !bad
+        })
+        .collect()
+}
+
+/// Environment variable names a check may see, without the ones no list
+/// can allow.
+fn env_list(key: &str, value: Option<&toml::Value>, warnings: &mut Vec<String>) -> Vec<String> {
+    string_list(key, value, warnings)
+        .into_iter()
+        .filter(|n| {
+            let denied = env_denied(n);
+            if denied {
+                warnings.push(format!(
+                    "{key}: {n} is never passed to a check (credentials stay out); it is left out"
+                ));
+            }
+            !denied
+        })
+        .collect()
+}
+
+/// A choice between words, or `default` with a warning.
+fn choice<T: Copy>(
+    key: &str,
+    value: Option<&toml::Value>,
+    options: &[(&str, T)],
+    default: T,
+    warnings: &mut Vec<String>,
+) -> T {
+    let Some(value) = value else {
+        return default;
+    };
+    let words: Vec<&str> = options.iter().map(|(w, _)| *w).collect();
+    match value
+        .as_str()
+        .and_then(|v| options.iter().find(|(w, _)| *w == v.trim()))
+    {
+        Some((_, found)) => *found,
+        None => {
+            warnings.push(format!(
+                "{key} is one of {}, not {value}; the default ({}) is used",
+                words.join(", "),
+                words[0]
+            ));
+            default
+        }
+    }
+}
+
+fn flag(key: &str, value: Option<&toml::Value>, default: bool, warnings: &mut Vec<String>) -> bool {
+    match value {
+        None => default,
+        Some(v) => v.as_bool().unwrap_or_else(|| {
+            warnings.push(format!(
+                "{key} is true or false, not {v}; {default} is used"
+            ));
+            default
+        }),
+    }
+}
+
+fn count(key: &str, value: Option<&toml::Value>, default: u32, warnings: &mut Vec<String>) -> u32 {
+    match value {
+        None => default,
+        Some(v) => v
+            .as_integer()
+            .and_then(|n| u32::try_from(n).ok())
+            .unwrap_or_else(|| {
+                warnings.push(format!(
+                    "{key} is a number from 0 up, not {v}; {default} is used"
+                ));
+                default
+            }),
+    }
 }
 
 /// Parses a `gates.toml`. With no `[[check]]` and `detect` on, the checks
 /// are guessed from `repo`.
 pub fn parse_gates(text: &str, repo: &RepoFacts) -> Result<GateSpec, String> {
     let raw: RawFile = toml::from_str(text).map_err(|e| e.message().to_string())?;
+    let mut warnings = Vec::new();
     let mut checks = Vec::new();
     for (i, c) in raw.check.iter().enumerate() {
         let args: Vec<String> = match &c.run {
@@ -156,10 +302,49 @@ pub fn parse_gates(text: &str, repo: &RepoFacts) -> Result<GateSpec, String> {
             Some(t) => t,
             None => DEFAULT_CHECK_TIMEOUT_SECS,
         };
+        let key = |k: &str| format!("check {} ({}) {k}", i + 1, check.name);
+        check.required = flag(&key("required"), c.required.as_ref(), true, &mut warnings);
+        check.level = choice(
+            &key("level"),
+            c.level.as_ref(),
+            &LEVELS,
+            GateLevel::Full,
+            &mut warnings,
+        );
+        // The only value: a check that cannot run (no program, no folder,
+        // a timeout) never passes. Anything else asks for a fail-open
+        // check, which is refused with a warning.
+        if let Some(v) = &c.on_error
+            && v.as_str().map(str::trim) != Some("fail")
+        {
+            warnings.push(format!(
+                "{} is \"fail\", the only value: a check that cannot run never passes; {v} is ignored",
+                key("on_error")
+            ));
+        }
+        check.env = env_list(&key("env"), c.env.as_ref(), &mut warnings);
         checks.push(check);
     }
     if checks.is_empty() && raw.gate.detect {
         checks = detect(repo);
+    }
+    let v = &raw.verifier;
+    let level = choice(
+        "gate level",
+        raw.gate.level.as_ref(),
+        &LEVELS,
+        GateLevel::Full,
+        &mut warnings,
+    );
+    let mut env = env_list("verifier env", v.env.as_ref(), &mut warnings);
+    env.sort();
+    env.dedup();
+    for c in &mut checks {
+        for name in &env {
+            if !c.env.contains(name) {
+                c.env.push(name.clone());
+            }
+        }
     }
     if let Some(bad) = raw
         .gate
@@ -169,14 +354,65 @@ pub fn parse_gates(text: &str, repo: &RepoFacts) -> Result<GateSpec, String> {
     {
         return Err(format!("protected path {bad:?} may not contain .."));
     }
+    let mut verifier = verifier_spec(&raw.verifier)?;
+    verifier.revert_probe = flag(
+        "verifier revert_probe",
+        v.revert_probe.as_ref(),
+        false,
+        &mut warnings,
+    );
+    verifier.worktree_checks = choice(
+        "verifier worktree_checks",
+        v.worktree_checks.as_ref(),
+        &[
+            ("escalate", WorktreeChecks::Escalate),
+            ("allow", WorktreeChecks::Allow),
+        ],
+        WorktreeChecks::Escalate,
+        &mut warnings,
+    );
+    verifier.dependencies = choice(
+        "verifier dependencies",
+        v.dependencies.as_ref(),
+        &[
+            ("flag", DependencyChanges::Flag),
+            ("block", DependencyChanges::Block),
+        ],
+        DependencyChanges::Flag,
+        &mut warnings,
+    );
+    verifier.flaky_after = count(
+        "verifier flaky_after",
+        v.flaky_after.as_ref(),
+        verifier.flaky_after,
+        &mut warnings,
+    );
+    verifier.flaky_window = count(
+        "verifier flaky_window",
+        v.flaky_window.as_ref(),
+        verifier.flaky_window,
+        &mut warnings,
+    )
+    .max(1);
+    let substrate = glob_list("verifier substrate", v.substrate.as_ref(), &mut warnings);
+    let allow_substrate = glob_list(
+        "verifier allow_substrate",
+        v.allow_substrate.as_ref(),
+        &mut warnings,
+    );
     Ok(GateSpec {
         checks,
         max_blocks: raw.gate.max_blocks,
         protected: raw.gate.protected,
         evidence: raw.gate.evidence,
         subagent_checks: raw.gate.subagent_checks,
-        verifier: verifier_spec(&raw.verifier)?,
+        verifier,
         allow_test_changes: raw.verifier.allow_test_changes,
+        level,
+        substrate,
+        allow_substrate,
+        env,
+        warnings,
     })
 }
 
