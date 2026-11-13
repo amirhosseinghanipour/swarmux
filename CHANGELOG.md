@@ -8,6 +8,26 @@ follows [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- The Deck (`g d`): the task graph in the middle (a card for every job and
+  every task of a plan built as a task graph, left to right from producer to
+  consumer, each with a state shape, its repository, model, spend and one dot
+  per configured check; lines only for recorded relationships: task
+  dependency, cross-repo contract and file claim, each met, pending or
+  blocked), and around it the sessions strip (the Sessions screen's content),
+  what needs you, verification figures with their sample size, limits and
+  budget with the forecast, the Guard's exceptions (routine allows as one
+  number) and a timeline. `Enter` on a card opens its outcome in Work, and
+  `Esc` comes back. At 120x36 the graph becomes a list and some panels fold
+  (`Tab` brings them). Its keys are rebindable under `[keys.deck]`. The
+  `g d` chord goes to it (it was a stand-in for Mission control).
+  See [The Deck](guide/deck.md).
+- `[deck]` in `config.toml`: which panels show and in which order, the
+  graph's direction (`"lr"`) and how many sessions the strip lists.
+  Mistakes are ignored with a line on the Deck, never a failure;
+  `swarmux deck lint` lists them and `swarmux deck show` prints the layout.
+- `swarmux --demo` has a second mission, `Release 2.4`, a plan of three tasks
+  built as a task graph, so the Deck shows a task dependency (its graph state is
+  written in advance: the demo has no worktrees to merge in).
 - Send back with a note (`s` on Work). Work that stopped, was escalated or
   waits for you resumes in its own Claude session and worktree with your note
   as its next instruction, a mission follows the new job, and the gate judges
