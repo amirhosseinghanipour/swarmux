@@ -59,7 +59,9 @@ fn every_screen_draws_the_shared_layout_at_every_size() {
             }
             assert!(found >= 6, "{at}: only {found} tabs show: {}", s.tabs());
             if w >= 120 {
-                assert_eq!(found, 10, "{at}: {}", s.tabs());
+                // From 160 columns every tab fits; at 120 the last one does not.
+                let want = if w >= 160 { screens::all().count() } else { 10 };
+                assert_eq!(found, want, "{at}: {}", s.tabs());
             }
 
             // The active tab is the filled one.

@@ -428,6 +428,10 @@ fn the_overlaps_between_contexts_are_the_ones_meant() {
             "board.ask r: board.answer over mission.rule_take (mission)",
             "focus.reading t: focus.open_terminal over look.next_theme (global)",
             "knowledge t: knowledge.toggle_contracts over look.next_theme (global)",
+            "work 1: work.tab_product over nav.go_mission (global)",
+            "work 2: work.tab_stream over nav.go_missions (global)",
+            "work 3: work.tab_diff over nav.go_prompts (global)",
+            "work 4: work.tab_checks over nav.go_queue (global)",
         ]
         .iter()
         .collect::<Vec<_>>(),
