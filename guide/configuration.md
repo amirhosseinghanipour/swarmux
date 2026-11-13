@@ -20,6 +20,7 @@ The other settings live next to the feature they control:
 | `[verifier]` | clean copies and hidden checks | [Verifier](verifier.md) |
 | `[worktree]` | where worktrees go, port blocks | [Worktrees](worktrees.md) |
 | `[missions]` | plan-first, drift, and `landing` | [Missions](missions.md), [Landing](#landing) below |
+| `[console]` | the Work screen's verification window and suggested notes | [Console](#console) below |
 | `[governor]` | budgets, forecasts, auto-resume | [Usage governor](governor.md) |
 | `[notify]` | toasts, bell and `ntfy` | [Notifications](notifications.md) |
 | `[keys]` | hotkeys | [Keys](#keys) below |
@@ -163,3 +164,27 @@ landing = "auto"      # "auto" (the default) or "manual"
 
 Any other word is refused with the line it is on, and swarmux says which two
 words it understands.
+
+## Console
+
+The `[console]` section sets what the [Work screen](work.md) shows. Every key
+is optional.
+
+```toml
+[console]
+metrics_hours = 24
+send_back_notes = [
+  "Read the first failing line of the failed check and fix that before anything else.",
+  "Keep the change smaller: touch only what the task needs.",
+]
+```
+
+- `metrics_hours` (1 to 720, default 24): how many hours back the verification
+  figures under the queue (and `swarmux stats verification`) look: first-run
+  gate passes, claim to verified, verified an hour, checks run, bundles sealed.
+  A value outside the range is refused with the line it is on.
+- `send_back_notes` (default: three general starting points): the notes the
+  send-back line offers when you press `s` on Work; `Tab` puts the next one on
+  the line, you edit it or send it as it is. Up to 9 notes of at most 400
+  characters each. An empty list (`send_back_notes = []`) turns the
+  suggestions off.

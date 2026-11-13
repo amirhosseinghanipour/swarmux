@@ -3,7 +3,10 @@
 A mission is delivered only with a bundle. When the gate passes, swarmux
 seals `.swarmux/evidence/<mission>.json` (and keeps the same JSON in its
 database): the contract, the commit the work ended at (`head_sha`, with the
-branch point `base_sha`), the diff's size and hash, the checks the passing
+branch point `base_sha`), the diff's size and hash (and, in bundles sealed
+since per-file counts were kept, the files behind them with the lines git
+counted in each: `diff.changes`, written only when there are some, so a
+bundle sealed earlier keeps its digest and shows its totals alone), the checks the passing
 verdict ran (command, exit code, time, the first failing line on a failure),
 every gate verdict with the digest of its ledger entry, the checkpoints, the
 reviewer's verdict, the cost by phase and by model, and the stretch of the
@@ -116,3 +119,12 @@ but show as made by another key.
 Long texts (prompts, answers, tool output) are kept up to 8 KB per field,
 with the SHA-256 and length of the full text.
 
+
+## What you told an agent
+
+When you [send work back with a note](work.md#send-back), or deny a held call
+with one, the note is recorded as an entry of kind `operator` (the actor is
+`operator`): the note, the job, where it stood (`escalated`, `verifying`,
+`failed`, `held`, ...), the job the agent carries on as, and for a call the
+call itself. It is chained like every other entry, so verifying the ledger
+covers it, and a mission's bundle range includes it when it falls inside.

@@ -8,6 +8,36 @@ follows [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Send back with a note (`s` on Work). Work that stopped, was escalated or
+  waits for you resumes in its own Claude session and worktree with your note
+  as its next instruction, a mission follows the new job, and the gate judges
+  the agent's next claim with the checks run again. A held tool call is denied
+  and your note reaches the agent as the denial's reason. You type the note on
+  a line at the bottom, press Enter to send it, Esc to drop it; Tab picks from
+  suggested notes (`send_back_notes` in the new `[console]` section), and
+  nothing is sent until you confirm. Each note is recorded in the ledger (kind
+  `operator`: who, when, the note, the job, where it stood, what happened
+  next). See [Work](guide/work.md#send-back).
+- Per-file counts. The Work diff tab and plan against drift show each changed
+  file with the lines git counted in it (`M src/invoice/round.rs +22 -5`),
+  planned tasks with the files that changed in their areas, files outside the
+  plan with their counts, and planned tasks nothing touched. New evidence
+  bundles keep the list with their totals; a bundle sealed before this shows
+  its totals only, and says so. The console JSON gains `files`, `changed` and
+  `outside_files` (additive: schema version unchanged).
+- Verification figures under the Work queue and in `swarmux stats
+  verification`: first-run gate pass rate, claim to verified (median and 90th
+  percentile), verified an hour, checks run and bundles sealed, worked out from
+  the ledger over the last `metrics_hours` hours (a day by default). A figure
+  with nothing behind it is left out, never shown as zero. The console JSON
+  gains a `metrics` section.
+- An optional `due` on a mission contract (`due = 2026-11-14T16:00:00+03:30`,
+  RFC 3339, also a field in the Missions composer). Work shows `due 16:00` where
+  it shows the cost of waiting, and among decisions of one priority the earlier
+  due time comes first; a due time already past is a lint warning. A mission
+  with no `due` behaves as before. See [Missions](guide/missions.md#due).
+- A check that could not start shows why it could not as its failing line, in
+  the Work checks and claim-against-checks views.
 - The Work screen (`g w`): decide and land in one place. A ranked queue (decide,
   ready to land, running, landed) with the cost of waiting from data that
   exists (the auto-deny countdown, what a plan's task dependencies hold up) and

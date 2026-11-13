@@ -8,6 +8,7 @@ can't write there) and in its database:
 ```toml
 title = "Fast search"
 goal = "make search answer in under 50 ms on the bench corpus"
+due = 2026-11-14T16:00:00+03:30   # optional: when you need it by
 
 [acceptance]
 checks = ["cargo test -p search", "sh scripts/bench.sh --max-ms 50"]
@@ -43,6 +44,40 @@ is refused. Each card shows that path, a chip per check, the budget split by
 phase (plan 10%, implement 60%, verify 20%, review 10%) and the topology
 (one session, or a task graph: see below). Every change of state is in the
 audit ledger.
+
+## Due
+
+`due` is optional: when you need the mission by. It is a top-level key,
+written before the first table, and an RFC 3339 timestamp with an offset or
+`Z`, which is what TOML's own datetime is:
+
+```toml
+due = 2026-11-14T16:00:00+03:30     # a TOML datetime
+due = "2026-11-14T12:30:00Z"        # the same instant, as a string
+```
+
+A date alone (`2026-11-14`) or a time with no offset says nothing about *when*,
+so it is refused, with a message naming what it wants, rather than read as some
+zone. A mission with no `due` behaves exactly as before: nothing is shown,
+ranked or linted about one, and contracts written before the field existed
+read as they always did. swarmux never works out or suggests a due time.
+
+What a due time does, and nothing more:
+
+- the [Work screen](work.md) shows it where it shows the cost of waiting
+  (`due 16:00`, in your clock; with the date when it is not today, and how
+  late once it has passed) and in the outcome's header;
+- among decisions of the same priority the earlier due time comes first, and a
+  mission with none comes after those that have one. It never moves a decision
+  above one of a higher priority;
+- the lint warns when the due time has already passed (it never stops a
+  mission from running). The warning is a finding like the others.
+
+You set it in the composer's `due` field (empty means none; the same RFC 3339
+form, offset included). swarmux writes the contract file as a datetime in UTC
+(the same instant), and the composer shows it the same way when you edit.
+swarmux reads a mission from its own database, not from the file in the
+repository, which is where the contract is versioned for you.
 
 ## Planning first
 
