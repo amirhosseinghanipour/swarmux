@@ -96,6 +96,7 @@ fn gate(t: &mut TestApp, job: JobId, outcome: GateOutcome, checks: &[(&str, bool
             digest: String::new(),
             problem: None,
             at,
+            notes: Default::default(),
         },
     );
 }

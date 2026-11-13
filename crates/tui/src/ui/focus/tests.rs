@@ -41,6 +41,7 @@ fn gate(t: &mut TestApp, outcome: GateOutcome) {
             digest: String::new(),
             problem: None,
             at: 0,
+            notes: Default::default(),
         },
     );
 }

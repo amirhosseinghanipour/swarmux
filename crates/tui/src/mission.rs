@@ -433,10 +433,29 @@ pub(crate) fn gate_chips(g: &GateState) -> Vec<Chip> {
         Some(false) => out.push(chip("base suite failed".into(), Tone::Bad)),
         None => {}
     }
-    // Hidden checks are counted, never named.
+    // Hidden checks are counted, never named; when they exist and did not
+    // run, that is said with why, never left as a missing chip.
     if let Some(h) = g.hidden.filter(|h| h.ran > 0) {
         let tone = if h.clean() { Tone::Good } else { Tone::Bad };
         out.push(chip(format!("hidden {}", h.text()), tone));
+    }
+    if let Some(note) = &g.notes.hidden_not_run {
+        out.push(chip(
+            note.replacen("hidden checks: ", "hidden: ", 1),
+            Tone::Warn,
+        ));
+    }
+    if g.notes.ran_in == Some(swarmux_domain::gate::RanIn::Worktree) {
+        out.push(chip("ran in the worktree".into(), Tone::Warn));
+    }
+    if g.notes.substrate > 0 {
+        out.push(chip("test harness changed".into(), Tone::Bad));
+    }
+    if g.notes.dependencies > 0 {
+        out.push(chip("dependencies changed".into(), Tone::Warn));
+    }
+    for (name, n, of) in &g.notes.flaky {
+        out.push(chip(format!("{name} flaky {n}/{of}"), Tone::Warn));
     }
     out
 }
@@ -797,6 +816,7 @@ mod tests {
             digest: String::new(),
             problem: None,
             at: 0,
+            notes: Default::default(),
         };
         let gates = HashMap::from([(JobId(1), gate.clone())]);
         let tile = &wall_tiles(
@@ -853,6 +873,7 @@ mod tests {
             digest: String::new(),
             problem: None,
             at: 0,
+            notes: Default::default(),
         };
         let chips: Vec<(String, Tone)> = gate_chips(&gate)
             .into_iter()

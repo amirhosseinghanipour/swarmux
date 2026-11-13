@@ -199,8 +199,26 @@ fn confidence(s: &Signals) -> (Confidence, Vec<String>) {
         if g.tampering > 0 {
             low.push(format!("{} way(s) the tests were weakened", g.tampering));
         }
+        if g.notes.substrate > 0 {
+            low.push(format!(
+                "{} file(s) that run the tests were created or changed",
+                g.notes.substrate
+            ));
+        }
         if g.base_suite == Some(false) {
             low.push("the original tests fail against the new code".into());
+        }
+        if let Some(note) = &g.notes.hidden_not_run {
+            mid.push(note.clone());
+        }
+        if g.notes.ran_in == Some(swarmux_domain::gate::RanIn::Worktree) {
+            mid.push("the checks ran in the worktree, not a clean copy".into());
+        }
+        if g.notes.dependencies > 0 {
+            mid.push(format!(
+                "{} manifest(s) gained dependencies",
+                g.notes.dependencies
+            ));
         }
         if let Some(h) = g.hidden.filter(|h| !h.clean()) {
             low.push(format!("{} of {} hidden checks failed", h.failed(), h.ran));
@@ -273,6 +291,7 @@ mod tests {
             digest: String::new(),
             problem: None,
             at: 0,
+            notes: Default::default(),
         }
     }
 

@@ -292,6 +292,7 @@ fn stop(
             digest: String::new(),
             problem: None,
             at,
+            notes: Default::default(),
         },
     );
     let record = GateRecord {
