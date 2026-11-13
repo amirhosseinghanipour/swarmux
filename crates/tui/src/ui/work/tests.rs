@@ -265,7 +265,7 @@ fn work_ready_to_land_in_manual_mode_shows_what_landing_does_and_offers_it() {
             assert!(out.contains(needle), "{w}x{h}: {needle}\n{out}");
         }
         // Nothing is sealed until it lands, and it says so.
-        assert!(out.contains("sealed when the work is delivered"), "{out}");
+        assert!(out.contains("sealed on delivery"), "{out}");
         // The land key is the keymap's, shown on its row.
         let key = app.key_of(crate::screens::work::LAND).unwrap();
         assert!(
@@ -460,4 +460,58 @@ fn the_land_action_says_what_it_does_where_there_is_room() {
         ),
         "{out}"
     );
+}
+
+/// A buffer as `tmux capture-pane -p -e` writes it: SGR colour runs, one
+/// line per row. What the tmux-to-PNG renderer reads.
+fn ansi(buf: &Buffer) -> String {
+    use ratatui::style::{Color, Modifier};
+    let rgb = |c: Color| match c {
+        Color::Rgb(r, g, b) => Some((r, g, b)),
+        _ => None,
+    };
+    let mut out = String::new();
+    for y in 0..buf.area.height {
+        for x in 0..buf.area.width {
+            let cell = &buf[(x, y)];
+            out.push_str("\x1b[0m");
+            if cell.modifier.contains(Modifier::BOLD) {
+                out.push_str("\x1b[1m");
+            }
+            if let Some((r, g, b)) = rgb(cell.fg) {
+                out.push_str(&format!("\x1b[38;2;{r};{g};{b}m"));
+            }
+            if let Some((r, g, b)) = rgb(cell.bg) {
+                out.push_str(&format!("\x1b[48;2;{r};{g};{b}m"));
+            }
+            out.push_str(cell.symbol());
+        }
+        out.push_str("\x1b[0m\n");
+    }
+    out
+}
+
+/// Writes the states the owner reviews, drawn by the real renderer over the
+/// read model's evening snapshot: work ready to land in manual mode, and an
+/// escalated outcome. `SWARMUX_SHOT_DIR=out cargo test -p swarmux-tui
+/// write_review_screens -- --ignored`.
+#[test]
+#[ignore = "writes review screens when SWARMUX_SHOT_DIR is set"]
+fn write_review_screens() {
+    let Ok(dir) = std::env::var("SWARMUX_SHOT_DIR") else {
+        return;
+    };
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut app = app();
+    let manual = ready_in_manual_mode();
+    select(&mut app, &manual, "mission:fix-invoice");
+    for (w, h) in [(180, 47), (120, 33)] {
+        let buf = draw(&app, &manual, w, h);
+        std::fs::write(format!("{dir}/ready_manual_{w}.ans"), ansi(&buf)).unwrap();
+    }
+    let evening = evening();
+    select(&mut app, &evening, "job:3");
+    app.work_screen.show(Tab::Product);
+    let buf = draw(&app, &evening, 180, 47);
+    std::fs::write(format!("{dir}/escalated_180.ans"), ansi(&buf)).unwrap();
 }

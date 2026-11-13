@@ -51,7 +51,10 @@ pub(super) fn render(
     let actions_h = u16::try_from(actions.len())
         .unwrap_or(0)
         .min(area.height.saturating_sub(header_h + 3));
-    let body_h = area.height.saturating_sub(header_h + actions_h + 1);
+    // A row of air under the header, and one above the actions.
+    let body_h = area
+        .height
+        .saturating_sub(header_h + actions_h + 1 + u16::from(actions_h > 0));
 
     frame.render_widget(
         Paragraph::new(header),
@@ -381,10 +384,10 @@ fn actions(app: &App, rows: &[crate::work::ActionRow], w: usize) -> Lines {
         } else {
             Style::new().fg(t.dim)
         };
-        let detail_w = w.saturating_sub(7 + 14);
+        let detail_w = w.saturating_sub(7 + 16);
         out.push(Line::from(vec![
             span(format!(" {key:<3}"), key_style),
-            span(format!(" {:<13}", r.label), label_style),
+            span(format!(" {:<15}", r.label), label_style),
             span(
                 fit(&r.detail, detail_w),
                 Style::new().fg(if r.enabled { t.muted } else { t.dim }),

@@ -400,7 +400,7 @@ pub fn group_title(kind: GroupKind) -> &'static str {
 pub fn group_note(kind: GroupKind) -> &'static str {
     match kind {
         GroupKind::Decide => "only you can",
-        GroupKind::ReadyToLand => "verified · not landed yet",
+        GroupKind::ReadyToLand => "verified · not landed",
         GroupKind::Running => "and queued · no action needed",
         GroupKind::Landed => "delivered, with proof",
     }

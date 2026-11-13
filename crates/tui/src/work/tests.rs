@@ -128,13 +128,15 @@ fn a_selected_outcome_that_leaves_the_queue_gives_way_to_its_neighbour() {
 #[test]
 fn choosing_another_outcome_forgets_what_was_read_for_the_last() {
     let snap = evening();
-    let mut w = WorkScreen::default();
-    w.scroll = 7;
-    w.diff = Some(DiffRead {
-        job: 2,
-        lines: vec!["+x".into()],
-        note: None,
-    });
+    let mut w = WorkScreen {
+        scroll: 7,
+        diff: Some(DiffRead {
+            job: 2,
+            lines: vec!["+x".into()],
+            note: None,
+        }),
+        ..WorkScreen::default()
+    };
     let other = ids(&snap)[1].to_string();
     assert!(w.select(&snap, &other));
     assert_eq!(w.scroll, 0);

@@ -28,23 +28,36 @@ pub(super) fn body(app: &App, snap: &ConsoleSnapshot, o: &OutcomeView, w: usize)
     let now = app.now();
     let mut lines: Lines = Vec::new();
     let holds = holds_of(snap, o);
-    let hold_lines = |w: usize| -> Lines {
-        let mut out = Vec::new();
-        for h in &holds {
-            out.extend(hold(app, h, now, w));
-            out.push(Line::default());
-        }
-        out
-    };
     if w >= TWO_COLUMNS_FROM {
         let lw = (w - 3) / 2;
         let rw = w - 3 - lw;
-        let mut left = hold_lines(lw);
-        left.extend(plan_drift(app, o, lw));
-        let right = claim_checks(app, o, rw);
-        lines.extend(columns(left, lw, 3, right));
+        // Each hold: the call at the left, what the agent said before it
+        // and its last steps at the right.
+        for h in &holds {
+            lines.extend(columns(
+                hold(app, h, now, lw),
+                lw,
+                3,
+                hold_words(app, h, rw),
+            ));
+            lines.push(Line::default());
+        }
+        lines.extend(columns(
+            plan_drift(app, o, lw),
+            lw,
+            3,
+            claim_checks(app, o, rw),
+        ));
     } else {
-        lines.extend(hold_lines(w));
+        for h in &holds {
+            lines.extend(hold(app, h, now, w));
+            let words = hold_words(app, h, w);
+            if !words.is_empty() {
+                lines.push(Line::default());
+                lines.extend(words);
+            }
+            lines.push(Line::default());
+        }
         lines.extend(plan_drift(app, o, w));
         lines.push(Line::default());
         lines.extend(claim_checks(app, o, w));
@@ -105,7 +118,7 @@ fn hold(app: &App, h: &HoldView, now: Millis, w: usize) -> Lines {
         };
         let mut text = format!("{tier} · {:.0}%", r.score * 100.0);
         if h.destructive {
-            text.push_str(" · typed confirm, never batched");
+            text.push_str(" · typed confirm");
         }
         if r.secret {
             text.push_str(" · may be sending a secret out");
@@ -138,12 +151,19 @@ fn hold(app: &App, h: &HoldView, now: Millis, w: usize) -> Lines {
         vec![span(timing, Style::new().fg(t.text))],
     )));
 
+    out
+}
+
+/// The agent's own words before the call, quoted and labelled as its own,
+/// and the last steps up to it.
+fn hold_words(app: &App, h: &HoldView, w: usize) -> Lines {
+    let t = &app.look.theme;
+    let mut out: Lines = Vec::new();
     if let Some(words) = &h.agent_words {
-        out.push(Line::default());
         let since = if words.steps_since == 0 {
-            "just before the call".to_string()
+            "just before".to_string()
         } else {
-            format!("{} steps before the call", words.steps_since)
+            format!("{} steps before", words.steps_since)
         };
         out.push(Line::from(vec![
             span(
@@ -151,7 +171,10 @@ fn hold(app: &App, h: &HoldView, now: Millis, w: usize) -> Lines {
                 Style::new().fg(t.label).add_modifier(Modifier::BOLD),
             ),
             span(
-                format!("  stream {} · {since}", clock(words.at)),
+                fit(
+                    &format!("  stream {} · {since}", clock(words.at)),
+                    w.saturating_sub(17),
+                ),
                 Style::new().fg(t.muted),
             ),
         ]));
@@ -159,7 +182,9 @@ fn hold(app: &App, h: &HoldView, now: Millis, w: usize) -> Lines {
     }
 
     if !h.steps.is_empty() {
-        out.push(Line::default());
+        if !out.is_empty() {
+            out.push(Line::default());
+        }
         out.push(heading(app, "LAST STEPS", "before the call", w, t.label));
         for s in &h.steps {
             let (kind, hue) = match s.kind {
@@ -384,7 +409,25 @@ pub(super) fn check_summary(app: &App, o: &OutcomeView, w: usize, full: bool) ->
             ),
             None => String::new(),
         };
-        head.push(span(format!(" · {word}{blocks}"), Style::new().fg(hue)));
+        let gate = span(format!(" · {word}{blocks}"), Style::new().fg(hue));
+        let mut joined = head.clone();
+        joined.push(gate.clone());
+        if Line::from(joined).width() <= w {
+            head.push(gate);
+        } else {
+            // Not on the same row: the verdict on the row below.
+            out.push(Line::from(head));
+            head = vec![span(
+                format!(
+                    "  {}",
+                    gate.content
+                        .trim_start_matches(' ')
+                        .trim_start_matches('·')
+                        .trim_start()
+                ),
+                Style::new().fg(hue),
+            )];
+        }
     }
     out.push(Line::from(head));
     for r in &c.runs {
@@ -490,13 +533,21 @@ fn evidence(app: &App, o: &OutcomeView, now: Millis, w: usize) -> Lines {
                 SignatureState::Valid => ("signature valid", t.ok),
                 SignatureState::Invalid => ("signature does not match", t.error),
                 SignatureState::Unsigned => ("unsigned", t.warn),
-                SignatureState::Unchecked => ("signature uses an algorithm this version cannot check", t.warn),
+                SignatureState::Unchecked => (
+                    "signature uses an algorithm this version cannot check",
+                    t.warn,
+                ),
             };
             out.push(Line::from(vec![
                 span("  bundle ", Style::new().fg(t.muted)),
                 span(short(&e.bundle_hash).to_string(), Style::new().fg(t.text)),
                 span(
-                    format!(" · sealed {} ago · ledger #{}–#{}", age(now - e.sealed_at), e.seq_from, e.seq_to),
+                    format!(
+                        " · sealed {} ago · ledger #{}–#{}",
+                        age(now - e.sealed_at),
+                        e.seq_from,
+                        e.seq_to
+                    ),
                     Style::new().fg(t.muted),
                 ),
             ]));
@@ -514,7 +565,7 @@ fn evidence(app: &App, o: &OutcomeView, now: Millis, w: usize) -> Lines {
             ]));
         }
         None => out.push(Line::from(span(
-            "  sealed when the work is delivered: the bundle, its ledger range and signature show here",
+            "  sealed on delivery: the bundle, its ledger range and signature show here",
             Style::new().fg(t.muted),
         ))),
     }
