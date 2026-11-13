@@ -26,12 +26,14 @@ mod jev;
 mod jobs;
 pub mod knowledge;
 pub mod ledger;
+pub mod metrics;
 pub mod missions;
 mod notify;
 mod palette;
 pub mod ports;
 mod prompts;
 mod routing;
+mod sendback;
 mod sessions;
 mod settings;
 mod telemetry;
@@ -106,11 +108,12 @@ pub use palette::{
 };
 pub use prompts::{BUILTIN_VARIABLES, PromptService, RenderedPrompt};
 pub use routing::{ROUTE_PROMPT_MAX, RouteReport, Routed, RoutingService};
+pub use sendback::{SentBack, send_back_prompt};
 pub use sessions::SessionService;
 pub use settings::{
-    BoardSettings, GovernorSettings, GuardSettings, JevProvider, JevSettings, LayoutSettings,
-    MotionSetting, ReviewSettings, ReviewWhen, RowSettings, Settings, TelemetrySettings,
-    UiSettings, WorktreeSettings,
+    BoardSettings, ConsoleSettings, GovernorSettings, GuardSettings, JevProvider, JevSettings,
+    LayoutSettings, MAX_SEND_BACK_NOTES, MotionSetting, ReviewSettings, ReviewWhen, RowSettings,
+    Settings, TelemetrySettings, UiSettings, WorktreeSettings,
 };
 pub use telemetry::{
     ActivityView, AgentsPoll, Battery, CacheView, CiRun, Collected, CombinedStatusline, Commit,

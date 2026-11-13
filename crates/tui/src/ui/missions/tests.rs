@@ -41,6 +41,7 @@ fn contract(title: &str, goal: &str, checks: &[&str], protected: &[&str], usd: f
             wall_minutes: Some(90),
             ..Budget::default()
         },
+        due: None,
         clarifications: Vec::new(),
         repos: Vec::new(),
     }
@@ -319,8 +320,9 @@ fn the_composer_writes_lints_asks_and_runs() {
     t.app.update();
     let composer = t.app.missions_screen.composer.as_ref().unwrap();
     assert_eq!(composer.answers.len(), 1);
-    // Past the repos field (for a workspace's missions) to the answer.
-    t.keys([KeyCode::Tab, KeyCode::Tab]);
+    // Past the repos field (for a workspace's missions) and the due field
+    // to the answer.
+    t.keys([KeyCode::Tab, KeyCode::Tab, KeyCode::Tab]);
     typed(&mut t, "the bench corpus");
     ctrl(&mut t, 's');
     assert_eq!(

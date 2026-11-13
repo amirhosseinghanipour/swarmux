@@ -115,3 +115,125 @@ fn work_draws_the_same_in_two_runs() {
     on_work(&mut b);
     assert_eq!(a.render_buffer(180, 50), b.render_buffer(180, 50));
 }
+
+// ---------------------------------------------------------------------
+// C3: per-file counts, the verification figures, send back
+// ---------------------------------------------------------------------
+
+fn press(app: &mut App, name: &str) {
+    app.press_named(name);
+}
+
+fn typed(app: &mut App, text: &str) {
+    for c in text.chars() {
+        app.press_char(c);
+    }
+}
+
+#[test]
+fn the_delivered_missions_diff_tab_lists_each_file_with_its_lines() {
+    let mut app = played();
+    on_work(&mut app);
+    for _ in 0..2 {
+        app.press_char('j');
+    }
+    app.press_char('3');
+    tick(&mut app);
+    let out = app.render_text(180, 50);
+    for needle in [
+        "sealed diff 3 files +41 -9",
+        "FILES",
+        "from the sealed bundle",
+        "M src/invoice/round.rs",
+        "+22 -5",
+        "M src/invoice/total.rs",
+        "+10 -2",
+        "M src/invoice/mod.rs",
+        "+9 -2",
+    ] {
+        assert!(out.contains(needle), "{needle}\n{out}");
+    }
+}
+
+#[test]
+fn work_shows_how_verification_has_gone_from_the_ledger() {
+    let mut app = played();
+    on_work(&mut app);
+    let out = app.render_text(180, 50);
+    assert!(out.contains("last 24h"), "{out}");
+    // The mission's gate blocked a premature claim and then passed: one job
+    // verified, its first claim not a pass, its checks and its bundle counted.
+    for needle in [
+        "first-run 0% (0/1)",
+        "1 verified",
+        "claim→verified",
+        "sealed",
+    ] {
+        assert!(out.contains(needle), "{needle}\n{out}");
+    }
+}
+
+#[test]
+fn a_held_call_is_denied_with_a_note_after_the_user_confirms() {
+    let mut app = played();
+    on_work(&mut app);
+    // The push is held and selected first.
+    app.press_char('s');
+    let out = app.render_text(180, 50);
+    for needle in [
+        "DENY WITH A NOTE",
+        "your note is the reason the agent reads",
+        "deny Bash git push origin HEAD:main with a note",
+        "nothing is sent before you press enter",
+    ] {
+        assert!(out.contains(needle), "{needle}\n{out}");
+    }
+    // A suggestion fills the line; it is not sent.
+    press(&mut app, "tab");
+    let out = app.render_text(180, 50);
+    assert!(out.contains("Read the first failing line"), "{out}");
+    assert!(
+        out.contains("DENY WITH A NOTE"),
+        "still composing, nothing sent\n{out}"
+    );
+    // Clear it and write our own, then confirm.
+    for _ in 0..120 {
+        press(&mut app, "backspace");
+    }
+    typed(&mut app, "open a pull request instead");
+    press(&mut app, "enter");
+    tick(&mut app);
+    let out = app.render_text(180, 50);
+    assert!(
+        out.contains("call denied, your note goes with it · ledger #"),
+        "{out}"
+    );
+    assert!(!out.contains("DENY WITH A NOTE"), "the line closed\n{out}");
+}
+
+#[test]
+fn escape_drops_the_note_and_sends_nothing() {
+    let mut app = played();
+    on_work(&mut app);
+    app.press_char('s');
+    typed(&mut app, "never mind");
+    press(&mut app, "esc");
+    tick(&mut app);
+    let out = app.render_text(180, 50);
+    assert!(out.contains("not sent"), "{out}");
+    assert!(!out.contains("DENY WITH A NOTE"), "{out}");
+    // The call is still held.
+    assert!(out.contains("HELD BY GUARD"), "{out}");
+}
+
+#[test]
+fn an_empty_note_is_refused_and_the_call_stays_held() {
+    let mut app = played();
+    on_work(&mut app);
+    app.press_char('s');
+    press(&mut app, "enter");
+    tick(&mut app);
+    let out = app.render_text(180, 50);
+    assert!(out.contains("a note needs words"), "{out}");
+    assert!(out.contains("HELD BY GUARD"), "{out}");
+}

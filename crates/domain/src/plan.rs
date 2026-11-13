@@ -18,7 +18,10 @@ use crate::ledger::{hex, sha256};
 use crate::mission::Contract;
 use crate::taskgraph::GraphRun;
 
-pub use drift::{DEFAULT_DRIFT_THRESHOLD, DriftReport, area_matches, check_drift, is_incidental};
+pub use drift::{
+    DEFAULT_DRIFT_THRESHOLD, DriftReport, PlanDiff, TaskDiff, area_matches, check_drift,
+    check_drift_counted, diff_by_plan, is_incidental,
+};
 
 /// Most tasks a plan may have.
 pub const MAX_TASKS: usize = 30;

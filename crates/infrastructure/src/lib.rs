@@ -8,6 +8,7 @@ pub mod clean_checkout;
 mod clock;
 pub mod config;
 mod config_board;
+mod config_console;
 pub mod config_edit;
 mod config_followups;
 mod config_governor;

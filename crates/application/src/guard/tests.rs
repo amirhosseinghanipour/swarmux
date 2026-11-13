@@ -114,6 +114,44 @@ fn deny_answers_deny() {
 }
 
 #[test]
+fn a_denial_can_carry_the_users_note_to_the_agent() {
+    let mut f = fixture(&[], &[], Unmatched::Ask);
+    let id = f.inbox.push(Some(JobId(3)), "Bash", "rm -rf build");
+    f.svc.pump();
+    f.svc
+        .deny_with_note(id, "  clean with `cargo clean`, not rm  ")
+        .unwrap();
+    let answer = f.inbox.answer_to(id).unwrap();
+    assert_eq!(answer.verdict, Verdict::Deny);
+    assert_eq!(
+        answer.note.as_deref(),
+        Some("clean with `cargo clean`, not rm")
+    );
+    // It is logged as a denial like any other, and counted.
+    let rows = f.repo.rows();
+    assert_eq!(rows.last().unwrap().outcome, Outcome::Deny);
+    assert_eq!(f.svc.stats().denied, 1);
+    assert!(f.svc.approvals().is_empty());
+    // A call that is not held cannot be answered twice.
+    assert!(matches!(
+        f.svc.deny_with_note(id, "again"),
+        Err(AppError::ApprovalNotFound)
+    ));
+}
+
+#[test]
+fn a_blank_note_is_a_plain_denial_and_a_plain_denial_has_no_note() {
+    let mut f = fixture(&[], &[], Unmatched::Ask);
+    let a = f.inbox.push(None, "Bash", "make");
+    let b = f.inbox.push(None, "Bash", "make all");
+    f.svc.pump();
+    f.svc.deny_with_note(a, "   ").unwrap();
+    f.svc.deny(b).unwrap();
+    assert_eq!(f.inbox.answer_to(a).unwrap().note, None);
+    assert_eq!(f.inbox.answer_to(b).unwrap().note, None);
+}
+
+#[test]
 fn unanswered_approvals_time_out_as_deny() {
     let mut f = fixture(&[], &[], Unmatched::Ask);
     let id = f.inbox.push(None, "Bash", "make");

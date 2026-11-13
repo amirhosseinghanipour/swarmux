@@ -74,11 +74,26 @@ impl Verdict {
 pub struct Decision {
     pub verdict: Verdict,
     pub rule: Option<String>,
+    /// What the user told the agent with the answer (a denial's
+    /// explanation). It reaches the agent as part of the denial's reason.
+    pub note: Option<String>,
 }
 
 impl Decision {
     pub fn new(verdict: Verdict, rule: Option<String>) -> Decision {
-        Decision { verdict, rule }
+        Decision {
+            verdict,
+            rule,
+            note: None,
+        }
+    }
+
+    /// The same decision, with the user's words for the agent. A blank
+    /// note is no note.
+    pub fn with_note(mut self, note: &str) -> Decision {
+        let note = note.trim();
+        self.note = (!note.is_empty()).then(|| note.to_string());
+        self
     }
 }
 

@@ -109,6 +109,12 @@ pub trait PromptRepository {
 pub trait Workspace {
     /// Uncommitted changes as `git diff` prints them; empty outside a git repository.
     fn git_diff(&self, cwd: &Path) -> AppResult<String>;
+    /// The files [`Workspace::git_diff`] shows, with the lines git counted
+    /// in each (`git diff --numstat`), so the counts and the text agree. An
+    /// adapter with no way to count answers none: counts are never guessed.
+    fn git_numstat(&self, _cwd: &Path) -> AppResult<Vec<swarmux_domain::evidence::DiffFile>> {
+        Ok(Vec::new())
+    }
 }
 
 /// What to run: one prompt in one Claude Code session.

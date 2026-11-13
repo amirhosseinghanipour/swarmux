@@ -132,6 +132,7 @@ fn choosing_another_outcome_forgets_what_was_read_for_the_last() {
         scroll: 7,
         diff: Some(DiffRead {
             job: 2,
+            files: Vec::new(),
             lines: vec!["+x".into()],
             note: None,
         }),
@@ -175,6 +176,7 @@ fn a_held_call_offers_the_answers_and_names_what_an_irreversible_one_needs() {
             ("allow once", true),
             ("always allow", false),
             ("deny", true),
+            ("send back", true),
             ("kill", true)
         ]
     );
@@ -188,6 +190,14 @@ fn a_held_call_offers_the_answers_and_names_what_an_irreversible_one_needs() {
     let always = &rows[1];
     assert!(always.detail.contains("never always-allowed"));
     assert_eq!(rows[2].action, DECIDE_NO);
+    // The note that goes with a denial is its own row, on its own key.
+    assert_eq!(rows[3].what, Do::SendBack);
+    assert_eq!(rows[3].action, crate::screens::work::SEND_BACK);
+    assert!(
+        rows[3].detail.contains("deny the held call"),
+        "{}",
+        rows[3].detail
+    );
     assert_eq!(held_request(push), Some(7));
 
     // The same call, not destructive: always allow is on.
@@ -202,7 +212,16 @@ fn a_held_call_offers_the_answers_and_names_what_an_irreversible_one_needs() {
 fn a_failed_job_offers_retry_and_resume_and_no_kill() {
     let snap = evening();
     let rows = rows_for(&snap, outcome(&snap, "job:3"));
-    assert_eq!(labels(&rows), [("resume", true), ("retry", true)]);
+    assert_eq!(
+        labels(&rows),
+        [("send back", true), ("resume", true), ("retry", true)]
+    );
+    let back = rows.iter().find(|r| r.what == Do::SendBack).unwrap();
+    assert!(
+        back.detail.contains("resume job #3 with your note"),
+        "{}",
+        back.detail
+    );
     assert!(
         rows.iter()
             .all(|r| r.what != Do::Kill && r.what != Do::Land)
@@ -234,15 +253,15 @@ fn a_disabled_action_says_why_and_never_runs() {
     let evidence = rows.iter().find(|r| r.what == Do::Evidence).unwrap();
     assert!(evidence.enabled);
     assert!(evidence.detail.contains("bundle"), "{}", evidence.detail);
-    // Nothing the product cannot do is offered: no send back, pause or
-    // merge to main.
+    // Nothing the product cannot do is offered: no pause or merge to main.
+    // (Send back exists since C3; delivered work cannot be sent back, and
+    // the row says so.)
     for r in &rows {
-        assert!(
-            !["send back", "pause", "merge"].contains(&r.label),
-            "{}",
-            r.label
-        );
+        assert!(!["pause", "merge"].contains(&r.label), "{}", r.label);
     }
+    let back = rows.iter().find(|r| r.what == Do::SendBack).unwrap();
+    assert!(!back.enabled);
+    assert!(back.detail.contains("delivered"), "{}", back.detail);
 }
 
 #[test]
@@ -398,4 +417,51 @@ fn until_the_user_chooses_the_top_of_the_queue_is_what_work_opens_on() {
     snap.groups[0].outcomes.reverse();
     w.settle(&snap);
     assert_eq!(w.selected, Some(chosen));
+}
+
+// ---- the note composer ------------------------------------------------
+
+#[test]
+fn the_composer_cycles_through_the_suggestions_it_was_given_and_wraps() {
+    use crate::work::{NoteComposer, NoteTarget};
+    let notes: Vec<String> = ["one", "two", "three"].map(String::from).to_vec();
+    let mut c = NoteComposer::new(NoteTarget::Work(5), "job #5", notes);
+    assert_eq!(c.picked, None);
+    assert_eq!(c.cycle(1), Some("one"));
+    assert_eq!(c.cycle(1), Some("two"));
+    assert_eq!(c.cycle(1), Some("three"));
+    assert_eq!(c.cycle(1), Some("one"), "wraps forward");
+    assert_eq!(c.cycle(-1), Some("three"), "and backward");
+    // Going back first starts at the end.
+    let mut back = NoteComposer::new(NoteTarget::Held(9), "a call", c.suggestions.clone());
+    assert_eq!(back.cycle(-1), Some("three"));
+}
+
+#[test]
+fn a_composer_with_no_suggestions_picks_nothing() {
+    use crate::work::{NoteComposer, NoteTarget};
+    let mut c = NoteComposer::new(NoteTarget::Work(1), "job #1", Vec::new());
+    assert_eq!(c.cycle(1), None);
+    assert_eq!(c.cycle(-1), None);
+    assert_eq!(c.picked, None);
+}
+
+#[test]
+fn send_back_is_offered_dim_with_its_reason_for_work_that_cannot_go_back() {
+    let snap = evening();
+    // A mission that is only a plan to approve has no job to send back.
+    let plan = outcome(&snap, "mission:plan-me");
+    let rows = rows_for(&snap, plan);
+    let back = rows.iter().find(|r| r.what == Do::SendBack).unwrap();
+    assert!(!back.enabled);
+    assert!(back.detail.contains("no job has run"), "{}", back.detail);
+    // Work still running offers no row at all: the reason would be noise.
+    let queued = outcome(&snap, "job:4");
+    assert!(
+        rows_for(&snap, queued)
+            .iter()
+            .all(|r| r.what != Do::SendBack),
+        "{:?}",
+        rows_for(&snap, queued)
+    );
 }

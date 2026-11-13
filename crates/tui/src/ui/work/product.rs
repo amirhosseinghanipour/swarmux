@@ -7,9 +7,9 @@ use ratatui::{
     text::{Line, Span},
 };
 use swarmux_application::console::{
-    CheckRunView, CheckStatus, ChecksSource, ConsoleSnapshot, GateVerdict, HoldState, HoldView,
-    LandState, LandingMode, OutcomeView, PlanStatus, RiskTier, SignatureState, StageKey,
-    StageState, StageView, StepKind, TaskState,
+    ChangeKind, CheckRunView, CheckStatus, ChecksSource, ConsoleSnapshot, DiffFileView,
+    GateVerdict, HoldState, HoldView, LandState, LandingMode, OutcomeView, PlanStatus, RiskTier,
+    SignatureState, StageKey, StageState, StageView, StepKind, TaskState,
 };
 use swarmux_domain::Millis;
 
@@ -25,6 +25,9 @@ const TWO_COLUMNS_FROM: usize = 104;
 
 /// Held or refused calls shown in full for one outcome.
 const MAX_HOLDS: usize = 3;
+
+/// Widest a file row is drawn: the counts sit this far from the path's start.
+const FILE_ROW_MAX: usize = 84;
 
 /// The whole tab, as rows.
 pub(super) fn body(app: &App, snap: &ConsoleSnapshot, o: &OutcomeView, w: usize) -> Lines {
@@ -245,6 +248,94 @@ fn indent(mut line: Line<'static>) -> Line<'static> {
 }
 
 // ---------------------------------------------------------------------
+// Files with their counts
+// ---------------------------------------------------------------------
+
+/// One file of a change: how it changed, its path, the lines git counted.
+/// A binary file says so instead of showing zeros.
+///
+/// `  M src/invoice/round.rs        +22 -5`
+pub(super) fn file_row(app: &App, f: &DiffFileView, w: usize, indent: usize) -> Line<'static> {
+    let t = &app.look.theme;
+    // Counts a few cells after the longest path, not at the far edge of a
+    // wide pane, where the eye cannot follow them back.
+    let w = w.min(FILE_ROW_MAX);
+    let (letter, hue) = match f.change {
+        Some(ChangeKind::Added) => ("A", t.ok),
+        Some(ChangeKind::Deleted) => ("D", t.error),
+        Some(ChangeKind::Modified) => ("M", t.label),
+        None => ("·", t.dim),
+    };
+    let counts = if f.binary {
+        "binary".to_string()
+    } else {
+        format!("+{} -{}", f.insertions, f.deletions)
+    };
+    let counts_w = counts.chars().count();
+    let path_w = w.saturating_sub(indent + 2 + counts_w + 1).max(8);
+    let path = fit(&f.path, path_w);
+    let pad = path_w.saturating_sub(path.chars().count()) + 1;
+    let mut spans = vec![
+        span(" ".repeat(indent), Style::default()),
+        span(format!("{letter} "), Style::new().fg(hue)),
+        span(path, Style::new().fg(t.text)),
+        span(" ".repeat(pad), Style::default()),
+    ];
+    if f.binary {
+        spans.push(span(counts, Style::new().fg(t.muted)));
+    } else {
+        spans.push(span(format!("+{}", f.insertions), Style::new().fg(t.ok)));
+        spans.push(span(" ", Style::default()));
+        spans.push(span(format!("-{}", f.deletions), Style::new().fg(t.error)));
+    }
+    Line::from(spans)
+}
+
+/// `files`, one row each (at most `max`, then how many more), with a
+/// totals row when `totals` says there is more than one file.
+pub(super) fn file_rows(
+    app: &App,
+    files: &[DiffFileView],
+    w: usize,
+    indent: usize,
+    max: usize,
+) -> Lines {
+    let t = &app.look.theme;
+    // The counts line up a few cells after the longest path shown.
+    let longest = files
+        .iter()
+        .take(max)
+        .map(|f| f.path.chars().count())
+        .max()
+        .unwrap_or(0);
+    let row_w = (indent + 2 + longest + 1 + 13).clamp(30, w.max(30));
+    let mut out: Lines = files
+        .iter()
+        .take(max)
+        .map(|f| file_row(app, f, row_w, indent))
+        .collect();
+    if files.len() > max {
+        let rest = &files[max..];
+        let (ins, del) = rest.iter().fold((0u32, 0u32), |(i, d), f| {
+            (
+                i.saturating_add(f.insertions),
+                d.saturating_add(f.deletions),
+            )
+        });
+        out.push(Line::from(vec![
+            span(
+                format!("{}+{} more files ", " ".repeat(indent), rest.len()),
+                Style::new().fg(t.muted),
+            ),
+            span(format!("+{ins}"), Style::new().fg(t.ok)),
+            span(" ", Style::default()),
+            span(format!("-{del}"), Style::new().fg(t.error)),
+        ]));
+    }
+    out
+}
+
+// ---------------------------------------------------------------------
 // Plan against drift
 // ---------------------------------------------------------------------
 
@@ -309,6 +400,20 @@ fn plan_drift(app: &App, o: &OutcomeView, w: usize) -> Lines {
             ));
         }
         out.push(Line::from(spans));
+        // What each task's areas took: the files that changed there, with
+        // the lines git counted, or that nothing did.
+        let untouched = plan
+            .drift
+            .as_ref()
+            .is_some_and(|d| d.untouched.contains(&task.id));
+        if untouched {
+            out.push(Line::from(span(
+                "      untouched: nothing changed in its areas",
+                Style::new().fg(t.muted),
+            )));
+        } else {
+            out.extend(file_rows(app, &task.changed, w, 6, 3));
+        }
     }
     if plan.tasks.len() > 8 {
         out.push(Line::from(span(
@@ -324,26 +429,49 @@ fn plan_drift(app: &App, o: &OutcomeView, w: usize) -> Lines {
                 span("  drift ", Style::new().fg(t.muted)),
                 span(fit(&d.summary, w.saturating_sub(9)), Style::new().fg(hue)),
             ]));
-            for f in d.outside.iter().take(4) {
-                out.push(Line::from(vec![
-                    span(
-                        format!("  {} ", mark(app, Mark::Flag)),
-                        Style::new().fg(t.warn),
-                    ),
-                    span(fit(f, w.saturating_sub(16)), Style::new().fg(t.text)),
-                    span("  outside plan", Style::new().fg(t.warn)),
-                ]));
+            if d.outside_files.is_empty() {
+                for f in d.outside.iter().take(4) {
+                    out.push(Line::from(vec![
+                        span(
+                            format!("  {} ", mark(app, Mark::Flag)),
+                            Style::new().fg(t.warn),
+                        ),
+                        span(fit(f, w.saturating_sub(16)), Style::new().fg(t.text)),
+                        span("  outside plan", Style::new().fg(t.warn)),
+                    ]));
+                }
+            } else {
+                // With the lines git counted in each.
+                for f in d.outside_files.iter().take(4) {
+                    let mut row = file_row(app, f, w.saturating_sub(15), 2);
+                    row.spans
+                        .push(span("  outside plan", Style::new().fg(t.warn)));
+                    out.push(row);
+                }
             }
-            if d.outside_count as usize > d.outside.len().min(4) {
+            let shown = if d.outside_files.is_empty() {
+                d.outside.len()
+            } else {
+                d.outside_files.len()
+            }
+            .min(4);
+            if d.outside_count as usize > shown {
                 out.push(Line::from(span(
                     format!(
                         "    +{} more outside the plan",
-                        d.outside_count as usize - d.outside.len().min(4)
+                        d.outside_count as usize - shown
                     ),
                     Style::new().fg(t.muted),
                 )));
             }
-            for id in d.untouched.iter().take(4) {
+            // The tasks listed above say it under themselves; the ones
+            // past the list are named here.
+            for id in d
+                .untouched
+                .iter()
+                .filter(|id| !plan.tasks.iter().take(8).any(|t| &t.id == *id))
+                .take(4)
+            {
                 out.push(Line::from(span(
                     format!("  planned task {id} untouched"),
                     Style::new().fg(t.muted),

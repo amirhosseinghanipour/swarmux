@@ -432,6 +432,18 @@ impl JobService {
         self.workspace.as_ref().map(|w| w.git_diff(cwd)).transpose()
     }
 
+    /// The files of [`JobService::working_diff`] with their line counts;
+    /// `None` without a workspace.
+    pub fn working_changes(
+        &self,
+        cwd: &std::path::Path,
+    ) -> AppResult<Option<Vec<swarmux_domain::evidence::DiffFile>>> {
+        self.workspace
+            .as_ref()
+            .map(|w| w.git_numstat(cwd))
+            .transpose()
+    }
+
     /// Whether newly dispatched jobs get a review.
     pub fn review_next(&self) -> bool {
         self.review.enabled && self.workspace.is_some()
@@ -721,6 +733,12 @@ impl JobService {
     /// or failed) in its Claude session and its worktree, with a short
     /// instruction to pick up where it left off.
     pub fn resume(&mut self, id: JobId) -> AppResult<JobId> {
+        self.resume_with(id, RESUME_PROMPT)
+    }
+
+    /// Like [`JobService::resume`], with `instruction` as the agent's next
+    /// prompt instead of the short pick-up-where-you-left-off one.
+    pub fn resume_with(&mut self, id: JobId, instruction: &str) -> AppResult<JobId> {
         let job = self.jobs.get(id)?.ok_or(AppError::JobNotFound)?;
         if !matches!(job.status, JobStatus::Interrupted | JobStatus::Failed) {
             return Err(AppError::NotResumable(id));
@@ -738,12 +756,31 @@ impl JobService {
         };
         self.enqueue(
             job.session_id,
-            RESUME_PROMPT,
+            instruction,
             None,
             Some(job.model),
             false,
             lineage,
         )
+    }
+
+    /// Sends the agent of a finished job back with `instruction` as its next
+    /// prompt: the same Claude session in the same worktree. A job that was
+    /// interrupted or failed goes the way [`JobService::resume`] does it
+    /// (the governor forgets it); any other finished job continues as
+    /// [`JobService::continue_with`] does.
+    pub fn send_back(&mut self, id: JobId, instruction: &str) -> AppResult<JobId> {
+        let job = self.jobs.get(id)?.ok_or(AppError::JobNotFound)?;
+        let new = match job.status {
+            JobStatus::Interrupted | JobStatus::Failed => self.resume_with(id, instruction)?,
+            s if s.is_finished() => self.continue_with(id, instruction)?,
+            _ => return Err(AppError::JobNotFinished(id)),
+        };
+        // The gate judges the agent's next claim, checks run again.
+        if let Some(log) = &self.executions {
+            log.rejudge(new);
+        }
+        Ok(new)
     }
 
     /// Queues a finished job's prompt in a branch of its Claude session. Once

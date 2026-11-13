@@ -161,6 +161,7 @@ pub fn build(options: &Options) -> anyhow::Result<App> {
                 wall_minutes: Some(90),
                 ..Budget::default()
             },
+            due: None,
             clarifications: Vec::new(),
             repos: Vec::new(),
         },
@@ -222,6 +223,7 @@ pub fn build(options: &Options) -> anyhow::Result<App> {
     .with_gate(gate)
     .with_missions(missions)
     .with_evidence(evidence, None)
+    .with_ledger(ledger.clone(), &settings.console)
     .with_alarms(store)
     .with_telemetry_feed(telemetry, &settings.telemetry)
     .with_demo(LABEL)

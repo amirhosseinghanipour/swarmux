@@ -5,7 +5,7 @@ use std::sync::{Mutex, PoisonError};
 use swarmux_application::evidence::{HeadFacts, Vcs};
 use swarmux_application::gate::Checker;
 use swarmux_application::{AppResult, GateSource, LoadedGate};
-use swarmux_domain::evidence::DiffSummary;
+use swarmux_domain::evidence::{ChangeKind, DiffFile, DiffSummary};
 use swarmux_domain::gate::{CheckRun, GateCheck, GateOrigin, GateSpec, Pin};
 
 /// Every demo repository has the same gate: its tests are protected and
@@ -100,6 +100,12 @@ impl Vcs for DemoVcs {
             insertions: 41,
             deletions: 9,
             hash: "d3m0d3m0d3m0d3m0d3m0d3m0d3m0d3m0d3m0d3m0d3m0d3m0d3m0d3m0d3m0d3m0".into(),
+            // The scripted change, file by file: they add up to the totals.
+            changes: vec![
+                DiffFile::text("src/invoice/round.rs", 22, 5).with_kind(ChangeKind::Modified),
+                DiffFile::text("src/invoice/total.rs", 10, 2).with_kind(ChangeKind::Modified),
+                DiffFile::text("src/invoice/mod.rs", 9, 2).with_kind(ChangeKind::Modified),
+            ],
         })
     }
 }

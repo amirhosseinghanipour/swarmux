@@ -278,3 +278,31 @@ pub(super) fn rule_column(app: &App) -> Span<'static> {
     };
     Span::styled(c, Style::new().fg(app.look.theme.dim))
 }
+
+/// `due 16:00` in the user's clock (`utc_offset` minutes ahead of UTC), with
+/// the date when it is not today, and how late when it has passed.
+pub(super) fn due_text(
+    due: swarmux_domain::Millis,
+    now: swarmux_domain::Millis,
+    utc_offset: i32,
+) -> String {
+    let local = |ms: swarmux_domain::Millis| ms + swarmux_domain::Millis::from(utc_offset) * 60_000;
+    let (at, today) = (
+        swarmux_domain::iso_minute(local(due)),
+        swarmux_domain::iso_minute(local(now)),
+    );
+    // `YYYY-MM-DD HH:MM`: the day is the first ten characters.
+    let when = if at.get(..10) == today.get(..10) {
+        at.get(11..).unwrap_or(&at).to_string()
+    } else {
+        at
+    };
+    if due < now {
+        format!(
+            "due {when} · overdue {}",
+            crate::ui::mission::age(now - due)
+        )
+    } else {
+        format!("due {when}")
+    }
+}

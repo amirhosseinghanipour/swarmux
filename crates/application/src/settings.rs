@@ -5,6 +5,35 @@ use swarmux_domain::budget::GovernorPolicy;
 use swarmux_domain::telemetry::{MINUTE, PriceTable};
 use swarmux_domain::{DEFAULT_MODEL, GuardPolicy, Limits, Pattern, PortPlan, Unmatched};
 
+/// The `[console]` section: what the Work and Deck screens show.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConsoleSettings {
+    /// How many hours back the verification figures look (first-run gate
+    /// passes, claim to verified, verified an hour), `1..=720`.
+    pub metrics_hours: u32,
+    /// Notes the send-back line offers to start from (Tab picks one; the
+    /// user edits it or sends it as it is). At most [`MAX_SEND_BACK_NOTES`].
+    pub send_back_notes: Vec<String>,
+}
+
+/// Most suggested notes the send-back line keeps.
+pub const MAX_SEND_BACK_NOTES: usize = 9;
+
+impl Default for ConsoleSettings {
+    fn default() -> ConsoleSettings {
+        ConsoleSettings {
+            metrics_hours: crate::metrics::DEFAULT_HOURS,
+            send_back_notes: [
+                "Read the first failing line of the failed check and fix that before anything else.",
+                "Keep the change smaller: touch only what the task needs.",
+                "Add or update a test for what you changed, and run it before you say you are done.",
+            ]
+            .map(String::from)
+            .to_vec(),
+        }
+    }
+}
+
 /// User settings (`config.toml`); every field has a default.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Settings {
@@ -29,6 +58,8 @@ pub struct Settings {
     pub watchdog: crate::WatchdogSettings,
     /// Plan-first missions: the default, the planner and the drift line.
     pub missions: crate::PlanSettings,
+    /// The Work and Deck screens: what the figures cover.
+    pub console: ConsoleSettings,
     /// The Board: typed shared state between the agents of a mission.
     pub board: BoardSettings,
     /// Follow-through: what agents leave behind, standing orders, the brief.
@@ -358,6 +389,7 @@ impl Default for Settings {
             watchdog: crate::WatchdogSettings::default(),
             notify: crate::NotifySettings::default(),
             missions: crate::PlanSettings::default(),
+            console: ConsoleSettings::default(),
             board: BoardSettings::default(),
             followups: crate::FollowSettings::default(),
             keys: swarmux_domain::keys::KeyConfig::default(),

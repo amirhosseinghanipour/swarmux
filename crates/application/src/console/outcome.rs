@@ -7,7 +7,9 @@ use swarmux_domain::console as rules;
 use swarmux_domain::evidence::Bundle;
 use swarmux_domain::gate::GateOutcome;
 use swarmux_domain::mission::{Landing, Mission, MissionState};
-use swarmux_domain::plan::{DriftReport, Plan, PlanRecord, PlanStatus as DomainPlanStatus};
+use swarmux_domain::plan::{
+    DriftReport, Plan, PlanRecord, PlanStatus as DomainPlanStatus, diff_by_plan,
+};
 use swarmux_domain::taskgraph::{GraphRun, TaskState as DomainTaskState, integration_branch};
 use swarmux_domain::{AttentionItem, JobId, JobStatus, ReviewState, ReviewVerdict};
 
@@ -15,11 +17,11 @@ use super::hold::cut;
 use super::service::{Caches, Sources};
 use super::view::{
     ActionKind, ActionView, AskView, BudgetView, CheckProgress, CheckRunView, CheckStatus,
-    ChecksSource, ChecksView, ClaimView, ContractView, DeckNode, DiffView, DriftView, EvidenceView,
-    GateVerdict, GateView, GroupKind, HoldState, HoldView, JobState, JobView, LandState,
-    LandingMode, LandingRepoView, LandingView, Lifecycle, NodeKind, NodeState, OutcomeKind,
-    OutcomeView, PlanStatus, PlanTaskView, PlanView, SignatureState, SpendView, StageKey,
-    StageState, StageView,
+    ChecksSource, ChecksView, ClaimView, ContractView, DeckNode, DiffFileView, DiffView, DriftView,
+    EvidenceView, GateVerdict, GateView, GroupKind, HoldState, HoldView, JobState, JobView,
+    LandState, LandingMode, LandingRepoView, LandingView, Lifecycle, NodeKind, NodeState,
+    OutcomeKind, OutcomeView, PlanStatus, PlanTaskView, PlanView, SignatureState, SpendView,
+    StageKey, StageState, StageView,
 };
 use crate::gate::{GateDetail, GateRun, GateState};
 use crate::jobs::JobFact;
@@ -55,6 +57,9 @@ pub(super) struct TaskGraphFacts {
 pub(super) struct Sealed {
     pub evidence: EvidenceView,
     pub diff: DiffView,
+    /// The files behind the totals; empty for a bundle sealed before they
+    /// were kept.
+    pub files: Vec<DiffFileView>,
     pub runs: Vec<CheckRunView>,
     pub gate: Option<GateView>,
     pub hidden: Option<(u32, u32)>,
@@ -87,6 +92,7 @@ impl Sealed {
                 deletions: b.diff.deletions,
                 hash: b.diff.hash.clone(),
             },
+            files: b.diff.changes.iter().map(DiffFileView::from).collect(),
             runs: b
                 .checks
                 .iter()
@@ -277,11 +283,16 @@ fn claimed(src: &Sources<'_>, jobs: &[JobId]) -> Vec<String> {
     out
 }
 
-fn drift_view(d: &DriftReport) -> DriftView {
+fn drift_view(d: &DriftReport, plan: Option<&Plan>) -> DriftView {
+    // The counted files outside every planned area, when counts were kept.
+    let outside_files = plan
+        .map(|p| diff_by_plan(p, &d.files).outside)
+        .unwrap_or_default();
     DriftView {
         changed: d.changed,
         outside: d.outside.clone(),
         outside_count: d.outside_count,
+        outside_files: outside_files.iter().map(DiffFileView::from).collect(),
         tasks: d.tasks,
         untouched: d.untouched.clone(),
         score: d.score(),
@@ -296,6 +307,12 @@ fn plan_view(record: &PlanRecord) -> Option<PlanView> {
         return None;
     }
     let graph = record.graph.as_ref();
+    // What each task's areas took, from the files counted when the build
+    // was checked against the plan.
+    let counted = match (&record.plan, &record.drift) {
+        (Some(p), Some(d)) if !d.files.is_empty() => Some(diff_by_plan(p, &d.files)),
+        _ => None,
+    };
     let tasks = record
         .plan
         .as_ref()
@@ -312,6 +329,11 @@ fn plan_view(record: &PlanRecord) -> Option<PlanView> {
                         acceptance: t.acceptance.clone(),
                         state: run.map(|r| r.state.into()),
                         job: run.and_then(|r| r.job).map(|j| j.0),
+                        changed: counted
+                            .as_ref()
+                            .and_then(|c| c.tasks.iter().find(|d| d.id == t.id))
+                            .map(|d| d.files.iter().map(DiffFileView::from).collect())
+                            .unwrap_or_default(),
                     }
                 })
                 .collect()
@@ -325,7 +347,10 @@ fn plan_view(record: &PlanRecord) -> Option<PlanView> {
             .map(|p| p.summary.clone())
             .unwrap_or_default(),
         tasks,
-        drift: record.drift.as_ref().map(drift_view),
+        drift: record
+            .drift
+            .as_ref()
+            .map(|d| drift_view(d, record.plan.as_ref())),
         topology: graph.map(|g| g.topology.as_str().to_string()),
         rounds: record.rounds,
         note: Some(record.note.clone()).filter(|n| !n.is_empty()),
@@ -378,7 +403,12 @@ fn checks_view(
                     name: r.name.clone(),
                     status: run_status(r),
                     duration_ms: r.duration_ms,
-                    first_failure: r.first_failure.clone(),
+                    // A check that could not start has no output: why it
+                    // could not is its failing line.
+                    first_failure: r
+                        .first_failure
+                        .clone()
+                        .or_else(|| r.spawn_error.as_ref().map(|e| first_line(e))),
                 })
                 .collect(),
         ),
@@ -857,6 +887,7 @@ fn mission(
             verified: stage == rules::Stage::Verified,
             manual: landing == LandingPolicy::Manual,
         },
+        task_graph: graph.is_some(),
     };
     let first_request = my_holds.first().and_then(|h| h.request);
 
@@ -890,6 +921,7 @@ fn mission(
                 wall_minutes: m.contract.budget.wall_minutes,
                 on_exhaust: m.contract.budget.on_exhaust.into(),
             },
+            due: m.contract.due,
             note: m.note.clone(),
         }),
         jobs: job_views.clone(),
@@ -898,6 +930,13 @@ fn mission(
         claim: claim_view(lead),
         evidence: sealed.as_ref().map(|s| s.evidence.clone()),
         diff: sealed.as_ref().map(|s| s.diff.clone()),
+        // The sealed bundle's files, else the ones counted when the build
+        // was checked against its plan.
+        files: match (&sealed, drift) {
+            (Some(s), _) if !s.files.is_empty() => s.files.clone(),
+            (None, Some(d)) => d.files.iter().map(DiffFileView::from).collect(),
+            _ => Vec::new(),
+        },
         landing: landing_view(m, record),
         spend: SpendView {
             total_usd: total,
@@ -1031,6 +1070,7 @@ fn mission(
             stage,
             since,
             asks: asks.iter().map(|i| rules::Ask::of(i)).collect(),
+            due: m.contract.due,
         },
         view,
         cards,
@@ -1091,6 +1131,7 @@ fn plain(src: &Sources<'_>, caches: &mut Caches, holds: &[HoldView], f: &JobFact
         plan_proposed: false,
         evidence: false,
         landing: rules::LandFacts::default(),
+        task_graph: false,
     };
     let title = title_of(f);
     let view = OutcomeView {
@@ -1120,6 +1161,7 @@ fn plain(src: &Sources<'_>, caches: &mut Caches, holds: &[HoldView], f: &JobFact
         claim: claim_view(Some(f)),
         evidence: None,
         diff: None,
+        files: Vec::new(),
         landing: None,
         spend: SpendView {
             total_usd: usd(f.cost_usd),
@@ -1171,6 +1213,7 @@ fn plain(src: &Sources<'_>, caches: &mut Caches, holds: &[HoldView], f: &JobFact
             stage,
             since,
             asks: asks.iter().map(|i| rules::Ask::of(i)).collect(),
+            due: None,
         },
         view,
         cards: vec![card],

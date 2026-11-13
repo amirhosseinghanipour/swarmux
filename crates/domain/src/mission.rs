@@ -101,6 +101,10 @@ pub struct Contract {
     pub acceptance: Acceptance,
     pub constraints: Constraints,
     pub budget: Budget,
+    /// When the user needs it by, in unix milliseconds (written in the
+    /// contract as an RFC 3339 timestamp). `None` means no due time: nothing
+    /// is shown, ranked or linted about one. Never worked out for the user.
+    pub due: Option<Millis>,
     pub clarifications: Vec<Clarification>,
 }
 
@@ -201,6 +205,8 @@ pub enum Signal {
     Finished { ok: bool },
     /// A gate verdict on the job.
     Gate(GateOutcome),
+    /// The user sent the work back with a note: it carries on as `job`.
+    SentBack(JobId),
     /// The budget ran out.
     Exhausted(String),
     /// It cannot run as written.
@@ -216,6 +222,7 @@ impl Signal {
             Signal::Started => "started",
             Signal::Finished { .. } => "finished",
             Signal::Gate(_) => "gate",
+            Signal::SentBack(_) => "sent back",
             Signal::Exhausted(_) => "exhausted",
             Signal::Refuse(_) => "refuse",
         }
@@ -251,6 +258,9 @@ pub fn step(from: MissionState, signal: &Signal) -> Result<MissionState, BadTran
         (S::Draft | S::Linted, Signal::Refuse(_)) => S::Refused,
         (S::Queued, Signal::Started) => S::Running,
         (S::Running, Signal::Started) => S::Running,
+        // The user read the work and sent it back: the agent carries on in a
+        // new job, and the gate judges it again at its next claim.
+        (S::Escalated | S::Verifying, Signal::SentBack(_)) => S::Queued,
         (S::Queued | S::Running, Signal::Finished { ok: true }) => S::Verifying,
         (S::Queued | S::Running | S::Verifying, Signal::Finished { ok: false }) => S::Escalated,
         (S::Verifying, Signal::Finished { ok: true }) => S::Verifying,
@@ -313,6 +323,8 @@ pub enum FindingKind {
     /// A repository the workspace does not have, or repositories named
     /// outside a workspace.
     UnknownRepo,
+    /// The due time has already passed.
+    PastDue,
 }
 
 impl FindingKind {
@@ -325,6 +337,7 @@ impl FindingKind {
             FindingKind::NoBudget => "no_budget",
             FindingKind::Unscoped => "unscoped",
             FindingKind::UnknownRepo => "unknown_repo",
+            FindingKind::PastDue => "past_due",
         }
     }
 
@@ -337,6 +350,7 @@ impl FindingKind {
             FindingKind::NoBudget,
             FindingKind::Unscoped,
             FindingKind::UnknownRepo,
+            FindingKind::PastDue,
         ]
         .into_iter()
         .find(|k| k.as_str() == s)
@@ -531,6 +545,24 @@ pub fn lint(contract: &Contract) -> Vec<Finding> {
         });
     }
     out
+}
+
+/// The finding for a due time that has already passed, when the contract
+/// has one. The lint takes the time as an argument, since the domain reads
+/// no clock.
+pub fn lint_due(contract: &Contract, now: Millis) -> Vec<Finding> {
+    match contract.due {
+        Some(due) if due <= now => vec![Finding {
+            kind: FindingKind::PastDue,
+            severity: Severity::Warning,
+            detail: format!(
+                "due {} has already passed: say when it is needed, or remove the due time",
+                crate::date::iso_minute(due)
+            ),
+            protect: None,
+        }],
+        _ => Vec::new(),
+    }
 }
 
 /// What a mission names that its workspace does not have: repositories
@@ -861,6 +893,12 @@ impl Mission {
             Signal::Queued(job) => {
                 self.job = Some(job);
                 self.landing = None;
+            }
+            // The note that explained the escalation is answered.
+            Signal::SentBack(job) => {
+                self.job = Some(job);
+                self.landing = None;
+                self.note = None;
             }
             Signal::Exhausted(why) | Signal::Refuse(why) => self.note = Some(why),
             Signal::Finished { ok: false } => {

@@ -46,7 +46,7 @@ pub use attention::{
     AttentionId, AttentionItem, AttentionKind, CallContext, HeldCall, Likelihood, Priority,
     STALL_AFTER_MS, is_destructive, rank,
 };
-pub use date::{iso_date, iso_minute, parse_iso_millis};
+pub use date::{iso_date, iso_minute, iso_utc, parse_iso_millis, parse_rfc3339_millis};
 pub use error::DomainError;
 pub use event::{Actor, AgentEvent, SessionState};
 pub use guard::{

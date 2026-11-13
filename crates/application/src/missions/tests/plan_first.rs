@@ -372,3 +372,37 @@ fn a_build_that_cannot_be_compared_is_reported_not_blocked() {
     assert!(p.f.svc.plan(&slug).unwrap().drift.is_none());
     assert_eq!(p.f.state(&slug), MissionState::Delivered);
 }
+
+#[test]
+fn a_counted_build_keeps_the_lines_of_each_file_in_the_drift_report() {
+    use swarmux_domain::evidence::DiffFile;
+    let mut p = setup(true);
+    *p.changes.counted.borrow_mut() = vec![
+        DiffFile::text("src/search/index.rs", 30, 4),
+        DiffFile::text("src/db/schema.rs", 9, 0),
+        DiffFile::text("Cargo.lock", 80, 80),
+    ];
+    let slug = built(&mut p, &[]);
+    let d = p.f.svc.plan(&slug).unwrap().drift.clone().unwrap();
+    assert_eq!(d.outside, ["src/db/schema.rs"]);
+    assert_eq!(d.changed, 2, "the lockfile is not scope");
+    let counts: Vec<(&str, u32, u32)> = d
+        .files
+        .iter()
+        .map(|f| (f.path.as_str(), f.insertions, f.deletions))
+        .collect();
+    assert_eq!(
+        counts,
+        [("src/db/schema.rs", 9, 0), ("src/search/index.rs", 30, 4)]
+    );
+    // The names alone were not asked for: the counted list was enough.
+    assert!(p.changes.asked.borrow().is_empty());
+}
+
+#[test]
+fn a_build_compared_by_name_keeps_no_counts() {
+    let mut p = setup(true);
+    let slug = built(&mut p, &["src/search/index.rs"]);
+    let d = p.f.svc.plan(&slug).unwrap().drift.clone().unwrap();
+    assert!(d.files.is_empty(), "no count is worked out after the fact");
+}

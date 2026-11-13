@@ -21,9 +21,11 @@
 //! The order inside a group is total and deterministic (the outcome's id
 //! breaks every tie), so two clients never disagree:
 //!
-//! - Decide: priority (P1 first), then the earliest auto-deny deadline
-//!   (an ask without one last), then the oldest ask: the order the
-//!   inbox's own ranking gives its items.
+//! - Decide: priority (P1 first), then the earliest mission due time (an
+//!   outcome with none last: a due time is only a tiebreak after priority,
+//!   and no due time is ever made up), then the earliest auto-deny deadline
+//!   (an ask without one last), then the oldest ask: the order the inbox's
+//!   own ranking gives its items.
 //! - Ready to land: waiting longest first.
 //! - Running: verifying first (nearest to needing the user), then
 //!   running, then queued; oldest first within each.
@@ -128,6 +130,8 @@ pub struct Standing {
     pub since: Millis,
     /// The open asks about the outcome.
     pub asks: Vec<Ask>,
+    /// When the mission is due, if its contract says so.
+    pub due: Option<Millis>,
 }
 
 /// Where an outcome stands.
@@ -176,7 +180,7 @@ pub struct Ranked {
 }
 
 /// What orders outcomes inside their group.
-type Key = (Group, Option<Priority>, i64, i64);
+type Key = (Group, Option<Priority>, i64, i64, i64);
 
 fn key(s: &Standing, p: &Placement) -> Key {
     match p.group {
@@ -187,18 +191,19 @@ fn key(s: &Standing, p: &Placement) -> Key {
                 .min()
                 .unwrap_or(Millis::MAX);
             let age = decisive().map(|a| a.since).min().unwrap_or(s.since);
-            (p.group, p.priority, deadline, age)
+            let due = s.due.unwrap_or(Millis::MAX);
+            (p.group, p.priority, due, deadline, age)
         }
-        Group::ReadyToLand => (p.group, None, s.since, 0),
+        Group::ReadyToLand => (p.group, None, s.since, 0, 0),
         Group::Running => {
             let step = match s.stage {
                 Stage::Verifying => 0,
                 Stage::Running => 1,
                 _ => 2,
             };
-            (p.group, None, step, s.since)
+            (p.group, None, step, s.since, 0)
         }
-        Group::Landed => (p.group, None, s.since.saturating_neg(), 0),
+        Group::Landed => (p.group, None, s.since.saturating_neg(), 0, 0),
     }
 }
 
@@ -244,6 +249,7 @@ mod tests {
             stage,
             since,
             asks,
+            due: None,
         }
     }
 
@@ -383,6 +389,49 @@ mod tests {
         let order: Vec<&str> = ids(&standings).into_iter().map(|(id, _)| id).collect();
         // P1; then P2 by deadline (100, 900), then no deadline by age (2, 2, 5).
         assert_eq!(order, ["a", "b", "c", "a2", "a3", "d", "e"]);
+    }
+
+    #[test]
+    fn a_due_time_only_breaks_ties_after_priority_and_none_goes_last() {
+        let at = |id: &str, p: Priority, due: Option<Millis>, deadline: Option<Millis>| {
+            let mut s = stand(
+                id,
+                Stage::Running,
+                0,
+                vec![ask(AttentionKind::Approval, p, deadline, 1)],
+            );
+            s.due = due;
+            s
+        };
+        let standings = vec![
+            at("p2-no-due", Priority::P2, None, Some(10)),
+            at("p2-late", Priority::P2, Some(9_000), Some(500)),
+            at("p2-soon", Priority::P2, Some(1_000), None),
+            at("p1-no-due", Priority::P1, None, None),
+            at("p3-soonest", Priority::P3, Some(1), None),
+        ];
+        let order: Vec<&str> = ids(&standings).into_iter().map(|(id, _)| id).collect();
+        // Priority first, however soon something else is due; within a
+        // priority the earlier due time first, an outcome with none after
+        // every one that has one (the auto-deny deadline orders those).
+        assert_eq!(
+            order,
+            ["p1-no-due", "p2-soon", "p2-late", "p2-no-due", "p3-soonest"]
+        );
+    }
+
+    #[test]
+    fn the_due_time_does_not_move_outcomes_that_are_not_decisions() {
+        let mut soon = stand("a", Stage::Verified, 50, vec![]);
+        soon.due = Some(1);
+        let later = stand("b", Stage::Verified, 20, vec![]);
+        let standings = vec![soon, later];
+        let order: Vec<&str> = ids(&standings).into_iter().map(|(id, _)| id).collect();
+        assert_eq!(
+            order,
+            ["b", "a"],
+            "ready to land stays by how long it waited"
+        );
     }
 
     #[test]

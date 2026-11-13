@@ -72,6 +72,11 @@ pub trait Checker: Send + Sync {
 /// Where the job runner reports the shell commands agents ran.
 pub trait ExecutionLog {
     fn executed(&self, job: JobId, command: &str, ok: bool);
+
+    /// The user sent `job`'s work back with a note: its next claim is
+    /// judged with the checks run again, whether or not it changed a file
+    /// first. The default says nothing is judged.
+    fn rejudge(&self, _job: JobId) {}
 }
 
 /// Refuses writes for the Guard, before any rule is consulted.
@@ -530,6 +535,15 @@ impl ExecutionLog for GateKeeper {
             ok,
         });
     }
+
+    fn rejudge(&self, job: JobId) {
+        // The checks run at the next stop, changed files or not: the
+        // operator's note may ask for nothing a file shows.
+        lock(&self.watches)
+            .entry(Key::Job(job))
+            .or_default()
+            .touched = true;
+    }
 }
 
 /// Tools that can change files (a shell can do anything).
@@ -543,6 +557,10 @@ fn changes_files(tool: &str) -> bool {
 impl<T: ExecutionLog + ?Sized> ExecutionLog for Arc<T> {
     fn executed(&self, job: JobId, command: &str, ok: bool) {
         (**self).executed(job, command, ok);
+    }
+
+    fn rejudge(&self, job: JobId) {
+        (**self).rejudge(job);
     }
 }
 

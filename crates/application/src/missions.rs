@@ -16,7 +16,7 @@ use swarmux_domain::budget::Reservation;
 use swarmux_domain::gate::GateOutcome;
 use swarmux_domain::mission::{
     BadTransition, Clarification, Contract, Finding, LintReport, Mission, MissionPhase,
-    MissionState, Question, Severity, Signal, apply_fixes, lint_report,
+    MissionState, Question, Severity, Signal, apply_fixes, lint_due, lint_report,
 };
 use swarmux_domain::{JobId, JobStatus, Millis, SessionId, WorkspaceId, slug};
 
@@ -299,6 +299,9 @@ impl MissionService {
         report
             .findings
             .extend(self.repo_findings(&self.missions[i])?);
+        report
+            .findings
+            .extend(lint_due(&self.missions[i].contract, now));
         let report = report.with_questions(asked);
         let m = &mut self.missions[i];
         let from = m
@@ -454,6 +457,78 @@ impl MissionService {
         self.store.save(&self.missions[i])?;
         self.record(slug, from)?;
         Ok(job)
+    }
+
+    /// Sends the mission's work back to its agent: the job it ended with
+    /// carries on, in the same Claude session and worktree, with
+    /// `instruction` as its next prompt, and the gate judges its next claim
+    /// as it judged the first. Only work that was escalated, or that waits
+    /// for the user (verifying), can be sent back; delivered work has
+    /// landed, and a task graph's tasks are not sent back one by one.
+    /// Returns the job the agent carries on as.
+    pub fn send_back(
+        &mut self,
+        slug: &str,
+        jobs: &mut JobService,
+        instruction: &str,
+    ) -> AppResult<JobId> {
+        let i = self.index(slug)?;
+        let m = &self.missions[i];
+        if !matches!(m.state, MissionState::Escalated | MissionState::Verifying) {
+            return Err(AppError::Mission(format!(
+                "{slug} is {}: only escalated work, or work that waits for you, can be sent back",
+                m.state
+            )));
+        }
+        if self.graph(slug).is_some_and(|g| !g.tasks.is_empty()) {
+            return Err(AppError::Mission(format!(
+                "{slug} runs as a task graph: its tasks are not sent back one by one"
+            )));
+        }
+        let Some(job) = m.job else {
+            return Err(AppError::Mission(format!("{slug} has no job to send back")));
+        };
+        // Sending an agent back to work after the budget stopped it would
+        // only stop it again.
+        let budget = &m.contract.budget;
+        if let Some(usd) = budget.usd
+            && budget.on_exhaust == swarmux_domain::mission::OnExhaust::Escalate
+            && m.spend.total() > usd
+        {
+            return Err(AppError::Mission(format!(
+                "{slug} spent ${:.2} of ${usd:.2}: raise the budget in the contract before sending it back",
+                m.spend.total()
+            )));
+        }
+        let compiled = self.compiled(i).map_err(|findings| {
+            AppError::Mission(format!(
+                "{slug} cannot run as written: {}",
+                findings
+                    .iter()
+                    .map(|f| f.detail.clone())
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            ))
+        })?;
+        let now = self.clock.now();
+        let new = jobs.send_back(job, instruction)?;
+        if let Some(board) = &self.board {
+            board.join(new, slug, None);
+        }
+        if let Some(gates) = &self.gates {
+            gates.assign(new, compiled.gate);
+        }
+        if let Some(watch) = &self.watch {
+            watch.launched(new, &self.missions[i]);
+        }
+        let m = &mut self.missions[i];
+        let from = m.apply(Signal::SentBack(new), now).map_err(refused)?;
+        self.verifying.remove(slug);
+        // What was checked against the plan was the work before the note.
+        self.plan_build_started(slug);
+        self.store.save(&self.missions[i])?;
+        self.record(slug, from)?;
+        Ok(new)
     }
 
     /// Takes the linter's replies, follows each mission's job and gate,

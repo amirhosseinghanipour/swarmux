@@ -16,6 +16,7 @@ fn contract(goal: &str, checks: &[&str], protected: &[&str]) -> Contract {
             usd: Some(5.0),
             ..Budget::default()
         },
+        due: None,
         clarifications: Vec::new(),
         repos: Vec::new(),
     }
@@ -431,4 +432,79 @@ fn no_mission_is_delivered_without_a_gate_pass() {
         delivered > 100,
         "the walk reached delivery {delivered} times"
     );
+}
+
+// ---- sending work back -------------------------------------------------
+
+#[test]
+fn work_that_stopped_or_waits_for_the_user_can_be_sent_back() {
+    for from in [MissionState::Escalated, MissionState::Verifying] {
+        let mut m = Mission::new("m", "/repo", Contract::default(), 0);
+        m.state = from;
+        m.job = Some(JobId(1));
+        m.note = Some("the gate gave up: checks still failing".into());
+        m.apply(Signal::SentBack(JobId(9)), 5).unwrap();
+        assert_eq!(m.state, MissionState::Queued, "{from:?}");
+        assert_eq!(m.job, Some(JobId(9)));
+        assert_eq!(m.note, None, "the escalation's reason is answered");
+    }
+    // The carry-on runs the usual way: started, finished, judged.
+    let mut m = Mission::new("m", "/repo", Contract::default(), 0);
+    m.state = MissionState::Escalated;
+    for s in [
+        Signal::SentBack(JobId(2)),
+        Signal::Started,
+        Signal::Finished { ok: true },
+        Signal::Gate(GateOutcome::Pass),
+    ] {
+        m.apply(s, 1).unwrap();
+    }
+    assert_eq!(m.state, MissionState::Delivered);
+}
+
+#[test]
+fn delivered_and_unstarted_work_cannot_be_sent_back() {
+    for from in [
+        MissionState::Draft,
+        MissionState::Linted,
+        MissionState::Queued,
+        MissionState::Running,
+        MissionState::Delivered,
+        MissionState::Refused,
+    ] {
+        let e = step(from, &Signal::SentBack(JobId(1))).unwrap_err();
+        assert!(e.to_string().ends_with("can't be sent back"), "{e}");
+    }
+}
+
+// ---- due ---------------------------------------------------------------
+
+#[test]
+fn a_contract_with_no_due_time_lints_as_it_always_did() {
+    let c = contract(GOAL, &["cargo test"], &["tests/**"]);
+    assert_eq!(c.due, None);
+    assert!(lint_due(&c, 1_000_000).is_empty());
+    assert!(!kinds(&lint(&c)).contains(&FindingKind::PastDue));
+}
+
+#[test]
+fn a_due_time_that_has_passed_is_a_warning_and_a_future_one_is_not() {
+    let mut c = contract(GOAL, &["cargo test"], &["tests/**"]);
+    c.due = Some(1_793_613_600_000);
+    let found = lint_due(&c, c.due.unwrap() + 1);
+    assert_eq!(kinds(&found), [FindingKind::PastDue]);
+    assert_eq!(found[0].severity, Severity::Warning);
+    assert!(
+        found[0].detail.contains("2026-11-02 10:00"),
+        "{}",
+        found[0].detail
+    );
+    assert!(
+        lint_due(&c, c.due.unwrap()).len() == 1,
+        "due at this very moment has passed"
+    );
+    assert!(lint_due(&c, c.due.unwrap() - 1).is_empty());
+    // A warning never stops a mission from running.
+    assert!(!found.iter().any(|f| f.severity == Severity::Blocking));
+    assert_eq!(FindingKind::parse("past_due"), Some(FindingKind::PastDue));
 }

@@ -9,7 +9,9 @@ use std::sync::Arc;
 
 use swarmux_domain::board::{BoardEntry, BoardKind};
 use swarmux_domain::contracts::{Fact, FileFacts, Index, Symbol};
-use swarmux_domain::evidence::{Bundle, CheckResult, DiffSummary, GateRef, LedgerRange, Signature};
+use swarmux_domain::evidence::{
+    Bundle, ChangeKind, CheckResult, DiffFile, DiffSummary, GateRef, LedgerRange, Signature,
+};
 use swarmux_domain::gate::GateOutcome;
 use swarmux_domain::mission::{
     Acceptance, Budget, Constraints, Contract, LandState, Landing, Mission, MissionState, Spend,
@@ -80,6 +82,7 @@ fn contract(title: &str) -> Contract {
             wall_minutes: Some(90),
             ..Budget::default()
         },
+        due: None,
         clarifications: Vec::new(),
     }
 }
@@ -143,6 +146,11 @@ fn stored_bundle() -> Stored {
             insertions: 20,
             deletions: 4,
             hash: "d1ff".into(),
+            changes: vec![
+                DiffFile::text("src/etl.rs", 12, 2).with_kind(ChangeKind::Modified),
+                DiffFile::text("src/etl/counts.rs", 5, 1).with_kind(ChangeKind::Modified),
+                DiffFile::text("docs/etl.md", 3, 1).with_kind(ChangeKind::Modified),
+            ],
         },
         checks: vec![CheckResult {
             name: "cargo test".into(),
@@ -208,6 +216,7 @@ struct Rig {
     sessions: Vec<Session>,
     index: Option<Arc<Index>>,
     evidence_reads: Cell<usize>,
+    metrics: Option<swarmux_domain::console::Metrics>,
 }
 
 impl Rig {
@@ -251,6 +260,7 @@ impl Rig {
             sessions,
             index: None,
             evidence_reads: Cell::new(0),
+            metrics: None,
         }
     }
 
@@ -315,6 +325,7 @@ impl Rig {
             sessions: Box::new(move |id: SessionId| {
                 r.sessions.iter().find(|s| s.id == id).cloned()
             }),
+            metrics: r.metrics.as_ref(),
         }
     }
 
@@ -618,6 +629,7 @@ fn evening() -> Rig {
                 outside_share: 0.25,
                 untouched_share: 0.33,
                 threshold: 0.3,
+                files: Vec::new(),
             }),
             graph: Some(graph),
             ..PlanRecord::default()
@@ -990,7 +1002,7 @@ fn actions_follow_the_state_and_say_why_when_they_do_not() {
     let snap = evening().snapshot();
     // The held push: the call can be answered, the job stopped.
     let push = outcome(&snap, "job:2");
-    assert_eq!(push.actions.len(), 8);
+    assert_eq!(push.actions.len(), 9);
     assert!(action(push, ActionKind::AnswerHeldCall).enabled);
     assert_eq!(action(push, ActionKind::AnswerHeldCall).request, Some(7));
     assert!(action(push, ActionKind::Kill).enabled);
@@ -1013,6 +1025,16 @@ fn actions_follow_the_state_and_say_why_when_they_do_not() {
     let done = outcome(&snap, "mission:fix-invoice");
     assert!(action(done, ActionKind::OpenEvidence).enabled);
     assert!(!action(done, ActionKind::Retry).enabled);
+    // Send back: a held call is denied with the note, work that ended goes
+    // back to its agent; delivered work and an unstarted plan cannot.
+    assert!(action(push, ActionKind::SendBack).enabled);
+    assert_eq!(action(push, ActionKind::SendBack).request, Some(7));
+    assert!(action(failed, ActionKind::SendBack).enabled);
+    assert_eq!(action(failed, ActionKind::SendBack).job, Some(3));
+    let delivered = action(done, ActionKind::SendBack);
+    assert!(!delivered.enabled);
+    assert!(delivered.reason.as_deref().unwrap().contains("delivered"));
+    assert!(!action(plan, ActionKind::SendBack).enabled);
     // Landing on request does not exist: never enabled, always explained.
     for o in snap.groups.iter().flat_map(|g| &g.outcomes) {
         let land = action(o, ActionKind::LandToIntegration);
@@ -1519,3 +1541,5 @@ mod erased {
         }
     }
 }
+
+mod c3;

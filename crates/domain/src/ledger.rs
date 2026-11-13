@@ -79,10 +79,13 @@ pub enum LedgerKind {
     /// A knowledge item changed, was delivered to an agent, or a rule
     /// acted (or would have, in shadow).
     Knowledge,
+    /// The operator told an agent something: a note that sent its work
+    /// back, or explained a refusal. Who, when, the text, the job.
+    Operator,
 }
 
 impl LedgerKind {
-    pub const ALL: [LedgerKind; 18] = [
+    pub const ALL: [LedgerKind; 19] = [
         LedgerKind::Genesis,
         LedgerKind::JobQueued,
         LedgerKind::JobStarted,
@@ -101,6 +104,7 @@ impl LedgerKind {
         LedgerKind::BaseSuite,
         LedgerKind::Followup,
         LedgerKind::Knowledge,
+        LedgerKind::Operator,
     ];
 
     /// The stable name stored and hashed.
@@ -124,6 +128,7 @@ impl LedgerKind {
             LedgerKind::BaseSuite => "base_suite",
             LedgerKind::Followup => "followup",
             LedgerKind::Knowledge => "knowledge",
+            LedgerKind::Operator => "operator",
         }
     }
 
@@ -500,6 +505,7 @@ mod tests {
                 "base_suite",
                 "followup",
                 "knowledge",
+                "operator",
             ]
         );
     }

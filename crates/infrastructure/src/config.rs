@@ -48,6 +48,7 @@ struct RawConfig {
     notify: Option<crate::config_notify::RawNotify>,
     watchdog: Option<crate::config_watchdog::RawWatchdog>,
     missions: Option<crate::config_missions::RawMissions>,
+    console: Option<crate::config_console::RawConsole>,
     board: Option<crate::config_board::RawBoard>,
     followups: Option<crate::config_followups::RawFollowups>,
     theme: Option<String>,
@@ -194,6 +195,9 @@ pub fn parse_settings(text: &str, path: &Path) -> Result<Settings, ConfigError> 
     }
     if let Some(missions) = raw.missions {
         settings.missions = crate::config_missions::parse_missions(missions, text, path)?;
+    }
+    if let Some(console) = raw.console {
+        settings.console = crate::config_console::parse_console(console, text, path)?;
     }
     if let Some(followups) = raw.followups {
         settings.followups = crate::config_followups::parse_followups(followups, text, path)?;
@@ -854,6 +858,74 @@ unknown = 1
             "[missions]\nunknown = 1\n",
         ] {
             assert!(parse(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn the_console_window_is_a_day_unless_the_user_says_otherwise() {
+        assert_eq!(parse("").unwrap().console.metrics_hours, 24);
+        assert_eq!(
+            parse("[console]\nmetrics_hours = 8\n")
+                .unwrap()
+                .console
+                .metrics_hours,
+            8
+        );
+        assert_eq!(
+            parse("[console]\nmetrics_hours = 720\n")
+                .unwrap()
+                .console
+                .metrics_hours,
+            720
+        );
+        for bad in [
+            "[console]\nmetrics_hours = 0\n",
+            "[console]\nmetrics_hours = -3\n",
+            "[console]\nmetrics_hours = 721\n",
+            "[console]\nmetrics_hours = \"day\"\n",
+            "[console]\nmetrics_hours = 1.5\n",
+            "[console]\nunknown = 1\n",
+        ] {
+            assert!(parse(bad).is_err(), "{bad}");
+        }
+        let e = parse("[console]\nmetrics_hours = 0\n")
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("metrics_hours") && e.contains("720"), "{e}");
+    }
+
+    #[test]
+    fn suggested_send_back_notes_are_the_users_to_set() {
+        let default = parse("").unwrap().console.send_back_notes;
+        assert_eq!(default.len(), 3, "a few starting points ship");
+        let own = parse(
+            "[console]\nsend_back_notes = [\" use the staging bucket \", \"run the linter\"]\n",
+        )
+        .unwrap()
+        .console
+        .send_back_notes;
+        assert_eq!(own, ["use the staging bucket", "run the linter"]);
+        // An empty list turns the suggestions off.
+        assert!(
+            parse("[console]\nsend_back_notes = []\n")
+                .unwrap()
+                .console
+                .send_back_notes
+                .is_empty()
+        );
+        let long = "x".repeat(401);
+        let bad = [
+            "[console]\nsend_back_notes = [\"\"]\n".to_string(),
+            "[console]\nsend_back_notes = [\"  \"]\n".to_string(),
+            "[console]\nsend_back_notes = [1]\n".to_string(),
+            format!("[console]\nsend_back_notes = [\"{long}\"]\n"),
+            format!(
+                "[console]\nsend_back_notes = [{}]\n",
+                ["\"a\""; 10].join(", ")
+            ),
+        ];
+        for text in bad {
+            assert!(parse(&text).is_err(), "{text}");
         }
     }
 

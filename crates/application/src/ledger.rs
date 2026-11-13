@@ -109,6 +109,30 @@ pub struct WatchdogEntry<'a> {
     pub next_job: Option<JobId>,
 }
 
+/// One note of the operator to an agent, as [`LedgerService::record_operator_note`]
+/// writes it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OperatorNote<'a> {
+    /// `send_back` or `deny_with_note`.
+    pub action: &'a str,
+    pub note: &'a str,
+    /// The job the note is about: the one sent back, or the one whose call
+    /// was held.
+    pub job: Option<JobId>,
+    pub session: Option<SessionId>,
+    /// Where the job or its mission stood: `escalated`, `verifying`,
+    /// `failed`, `done`, `held` ...
+    pub outcome: &'a str,
+    pub mission: Option<&'a str>,
+    /// The job the agent carries on as.
+    pub resumed_as: Option<JobId>,
+    /// The held call's request, and the call itself in a line.
+    pub request: Option<u64>,
+    pub call: Option<&'a str>,
+    /// The gate judges the agent's next claim, the checks run again.
+    pub gate_reruns: bool,
+}
+
 pub struct LedgerService {
     ledger: Rc<dyn Ledger>,
     clock: Rc<dyn Clock>,
@@ -121,6 +145,11 @@ impl LedgerService {
 
     pub fn ledger(&self) -> &dyn Ledger {
         &*self.ledger
+    }
+
+    /// The time the entries are stamped by.
+    pub fn now(&self) -> Millis {
+        self.clock.now()
     }
 
     fn append(
@@ -319,6 +348,32 @@ impl LedgerService {
             SWARMUX,
             None,
             None,
+            payload,
+        )
+    }
+
+    /// The operator told an agent something: `note` sent a job's work back
+    /// (`action` `send_back`), or went with the denial of a held call
+    /// (`deny_with_note`). Who (the actor is `operator`), when, the text in
+    /// full up to the ledger's cap, the job, what state it was in, and what
+    /// happened next. Returns the entry's `seq`.
+    pub fn record_operator_note(&self, n: &OperatorNote<'_>, now: Millis) -> AppResult<u64> {
+        let payload = Payload::new()
+            .str("action", n.action)
+            .text("note", n.note)
+            .opt_int("job", n.job.map(|j| j.0))
+            .str("outcome", n.outcome)
+            .opt_str("mission", n.mission)
+            .opt_int("resumed_as", n.resumed_as.map(|j| j.0))
+            .opt_int("request", n.request.and_then(|r| i64::try_from(r).ok()))
+            .opt_str("call", n.call)
+            .bool("gate_reruns", n.gate_reruns);
+        self.append_entry(
+            now,
+            LedgerKind::Operator,
+            "operator",
+            n.job,
+            n.session,
             payload,
         )
     }

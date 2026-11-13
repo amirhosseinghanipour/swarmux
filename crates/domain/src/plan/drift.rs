@@ -6,6 +6,7 @@
 //! Each is a share (of the changed files, of the tasks); the larger one is
 //! the drift score, and a score at or above the threshold is drift.
 
+use crate::evidence::{DiffFile, files_from_json, files_json};
 use crate::guard::glob::{glob_match, normalize};
 use crate::json::{Json, quote};
 
@@ -46,6 +47,10 @@ pub struct DriftReport {
     pub outside_share: f64,
     pub untouched_share: f64,
     pub threshold: f64,
+    /// The changed files (not counting incidental ones) with the lines git
+    /// counted in each. Empty when the change was compared by name only:
+    /// no count is worked out after the fact.
+    pub files: Vec<DiffFile>,
 }
 
 impl DriftReport {
@@ -90,8 +95,8 @@ impl DriftReport {
                 items.iter().map(|s| quote(s)).collect::<Vec<_>>().join(",")
             )
         };
-        format!(
-            "{{\"changed\":{},\"outside\":{},\"outside_count\":{},\"tasks\":{},\"untouched\":{},\"outside_share\":{},\"untouched_share\":{},\"threshold\":{}}}",
+        let mut json = format!(
+            "{{\"changed\":{},\"outside\":{},\"outside_count\":{},\"tasks\":{},\"untouched\":{},\"outside_share\":{},\"untouched_share\":{},\"threshold\":{}",
             self.changed,
             list(&self.outside),
             self.outside_count,
@@ -100,7 +105,14 @@ impl DriftReport {
             num(self.outside_share),
             num(self.untouched_share),
             num(self.threshold),
-        )
+        );
+        // Written only when counts were kept, so reports kept before they
+        // were read as they were.
+        if !self.files.is_empty() {
+            json.push_str(&format!(",\"files\":{}", files_json(&self.files)));
+        }
+        json.push('}');
+        json
     }
 
     pub fn from_json(v: &Json) -> Option<DriftReport> {
@@ -127,6 +139,7 @@ impl DriftReport {
             outside_share: share("outside_share")?,
             untouched_share: share("untouched_share")?,
             threshold: share("threshold")?,
+            files: files_from_json(v.get("files")),
         })
     }
 }
@@ -215,5 +228,77 @@ pub fn check_drift(plan: &Plan, changed: &[String], threshold: f64) -> DriftRepo
         } else {
             DEFAULT_DRIFT_THRESHOLD
         },
+        files: Vec::new(),
     }
+}
+
+/// Like [`check_drift`], over files that come with the lines git counted
+/// in each: the report keeps them (the ones that count for scope, once per
+/// path), so the console can show what each planned area and each file
+/// outside the plan took.
+pub fn check_drift_counted(plan: &Plan, changes: &[DiffFile], threshold: f64) -> DriftReport {
+    let names: Vec<String> = changes.iter().map(|f| f.path.clone()).collect();
+    let mut report = check_drift(plan, &names, threshold);
+    let mut files: Vec<DiffFile> = Vec::new();
+    for f in changes {
+        let path = clean(&f.path);
+        if path.is_empty() || incidental(&path) || files.iter().any(|k| k.path == path) {
+            continue;
+        }
+        files.push(DiffFile { path, ..f.clone() });
+    }
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    report.files = files;
+    report
+}
+
+/// What the changed files took, by planned task, and the ones no task
+/// planned.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PlanDiff {
+    /// One entry per task, in the plan's order; a task no change touched
+    /// has an empty list.
+    pub tasks: Vec<TaskDiff>,
+    /// The files outside every planned area.
+    pub outside: Vec<DiffFile>,
+}
+
+/// The changed files inside one task's areas. A file in the areas of
+/// several tasks is listed under each.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TaskDiff {
+    pub id: String,
+    pub files: Vec<DiffFile>,
+}
+
+/// Lays `files` against `plan`'s areas, with the same matching and the same
+/// leave-outs (lockfiles, swarmux's own folder) as [`check_drift`].
+pub fn diff_by_plan(plan: &Plan, files: &[DiffFile]) -> PlanDiff {
+    let kept: Vec<&DiffFile> = files
+        .iter()
+        .filter(|f| !incidental(&clean(&f.path)))
+        .collect();
+    let tasks = plan
+        .tasks
+        .iter()
+        .map(|t| TaskDiff {
+            id: t.id.clone(),
+            files: kept
+                .iter()
+                .filter(|f| t.files.iter().any(|a| area_matches(a, &f.path)))
+                .map(|f| (*f).clone())
+                .collect(),
+        })
+        .collect();
+    let outside = kept
+        .iter()
+        .filter(|f| {
+            !plan
+                .tasks
+                .iter()
+                .any(|t| t.files.iter().any(|a| area_matches(a, &f.path)))
+        })
+        .map(|f| (*f).clone())
+        .collect();
+    PlanDiff { tasks, outside }
 }

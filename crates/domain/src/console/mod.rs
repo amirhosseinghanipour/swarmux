@@ -11,6 +11,7 @@
 
 mod actions;
 mod graph;
+mod metrics;
 mod rank;
 
 pub use actions::{ActionFacts, ActionKind, Allowed, LandFacts, allowed};
@@ -18,4 +19,5 @@ pub use graph::{
     ContractFlow, DepState, Edge, EdgeKind, Node, Progress, claim_edges, contract_edges, depths,
     task_edges,
 };
+pub use metrics::{FirstRun, Metrics, Spread, compute as compute_metrics};
 pub use rank::{Ask, Group, Placement, Ranked, Stage, Standing, place, rank};

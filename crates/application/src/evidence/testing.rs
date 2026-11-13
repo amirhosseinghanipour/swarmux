@@ -125,6 +125,10 @@ impl Vcs for FakeVcs {
             insertions: 30,
             deletions: 4,
             hash: "d1ff".into(),
+            changes: vec![
+                swarmux_domain::evidence::DiffFile::text("src/lib.rs", 22, 3),
+                swarmux_domain::evidence::DiffFile::text("src/util.rs", 8, 1),
+            ],
         })
     }
 }
@@ -347,6 +351,7 @@ impl EvidenceRig {
                 usd: Some(2.0),
                 ..Budget::default()
             },
+            due: None,
             clarifications: Vec::new(),
             repos: Vec::new(),
         }

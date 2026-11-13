@@ -8,6 +8,7 @@
 //! clean copy of that commit and compares.
 
 mod cards;
+mod diff;
 mod verdict;
 mod verify;
 
@@ -15,6 +16,7 @@ pub use cards::{
     Brief, Label, LabelKind, LedgerStats, PrOutcome, PrState, RunCard, RunEvidence, RunOutcome,
     SETTLE_MS, brief, heat_strip, label_of,
 };
+pub use diff::{ChangeKind, DiffFile, files_from_json, files_json, totals as diff_totals};
 pub use verdict::{RunFacts, VerdictFacts, checks_of, parse_verdict, sealed_digest};
 pub use verify::{Rerun, VerifyItem, VerifyReport, compare_checks};
 
@@ -118,6 +120,10 @@ pub struct DiffSummary {
     pub deletions: u32,
     /// SHA-256 of the diff text, hex; empty when there is no diff.
     pub hash: String,
+    /// The files behind the totals, with the lines git counted in each.
+    /// Empty for a bundle sealed before they were kept: its totals stand
+    /// alone, and no per-file count is ever worked out after the fact.
+    pub changes: Vec<DiffFile>,
 }
 
 /// The reviewer's verdict, when a review ran.
@@ -231,6 +237,16 @@ impl Bundle {
             .int("insertions", i64::from(self.diff.insertions))
             .int("deletions", i64::from(self.diff.deletions))
             .str("hash", &self.diff.hash);
+        // Written only when files were kept, so bundles sealed before
+        // they were keep their digest.
+        let diff = if self.diff.changes.is_empty() {
+            diff
+        } else {
+            diff.objects(
+                "changes",
+                self.diff.changes.iter().map(DiffFile::payload).collect(),
+            )
+        };
         let gates = self
             .gates
             .iter()
@@ -416,6 +432,7 @@ impl Bundle {
                 insertions: num(d, "insertions")? as u32,
                 deletions: num(d, "deletions")? as u32,
                 hash: string(d, "hash")?,
+                changes: files_from_json(d.get("changes")),
             },
             checks: items(&j, "checks")
                 .iter()

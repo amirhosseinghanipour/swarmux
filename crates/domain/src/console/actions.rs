@@ -3,7 +3,10 @@
 //! Only actions that exist today are listed. Every kind is always
 //! answered, enabled or not, so a client can show a disabled action with
 //! the reason instead of hiding it. There is no pause, no merge to main,
-//! no per-file accept or revert: they do not exist.
+//! no per-file accept or revert: they do not exist. "Send back" is the
+//! user's note to the agent: for work that stopped, was escalated or
+//! waits for them it resumes the agent's session with the note; for a held
+//! call it denies the call and delivers the note as the denial's reason.
 
 use crate::JobStatus;
 use crate::mission::MissionState;
@@ -28,11 +31,15 @@ pub enum ActionKind {
     ApprovePlan,
     /// Send the proposed plan back with a note.
     RejectPlan,
+    /// Send the work back to the agent with a note: a stopped, escalated
+    /// or verified job resumes its session with the note as its next
+    /// instruction; a held call is denied and the note says why.
+    SendBack,
 }
 
 impl ActionKind {
     /// Every kind, in the order they are answered.
-    pub const ALL: [ActionKind; 8] = [
+    pub const ALL: [ActionKind; 9] = [
         ActionKind::Kill,
         ActionKind::Retry,
         ActionKind::Resume,
@@ -41,6 +48,7 @@ impl ActionKind {
         ActionKind::AnswerHeldCall,
         ActionKind::ApprovePlan,
         ActionKind::RejectPlan,
+        ActionKind::SendBack,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -53,6 +61,7 @@ impl ActionKind {
             ActionKind::AnswerHeldCall => "answer_held_call",
             ActionKind::ApprovePlan => "approve_plan",
             ActionKind::RejectPlan => "reject_plan",
+            ActionKind::SendBack => "send_back",
         }
     }
 }
@@ -74,6 +83,8 @@ pub struct ActionFacts {
     pub evidence: bool,
     /// What decides whether the work can be landed on request.
     pub landing: LandFacts,
+    /// The mission runs as a task graph: its tasks run in jobs of their own.
+    pub task_graph: bool,
 }
 
 /// What the rules need to know to offer landing on request.
@@ -179,8 +190,50 @@ pub fn allowed(f: &ActionFacts) -> Vec<Allowed> {
             ActionKind::ApprovePlan | ActionKind::RejectPlan => {
                 when(kind, f.plan_proposed, "no plan waits for a decision")
             }
+            ActionKind::SendBack => send_back(f),
         })
         .collect()
+}
+
+/// Whether the user can send work back with a note, and why not when they
+/// cannot.
+///
+/// A held call can always be answered with a note (it is denied, and the
+/// note is its reason). Otherwise the job must have ended, and a mission
+/// must be where the user decides: escalated, or verifying (the gate
+/// passed and the work waits for them). Delivered work has landed and a
+/// task graph's tasks are not sent back one by one.
+fn send_back(f: &ActionFacts) -> Allowed {
+    let kind = ActionKind::SendBack;
+    if f.held_calls > 0 {
+        return yes(kind);
+    }
+    if f.live_jobs > 0 {
+        return no(
+            kind,
+            "the job is still running: stop it, or wait for it to end",
+        );
+    }
+    let Some(job) = f.job else {
+        return no(kind, "no job has run");
+    };
+    if !job.is_finished() {
+        return no(kind, "the job has not ended");
+    }
+    match f.mission {
+        Some(MissionState::Delivered) => {
+            no(kind, "the work is delivered: change it with a new mission")
+        }
+        Some(_) if f.task_graph => no(
+            kind,
+            "this mission runs as a task graph: its tasks are not sent back one by one",
+        ),
+        Some(MissionState::Escalated | MissionState::Verifying) | None => yes(kind),
+        Some(_) => no(
+            kind,
+            "only work that was escalated or is verified can be sent back",
+        ),
+    }
 }
 
 #[cfg(test)]
@@ -310,6 +363,87 @@ mod tests {
         let d = land(&delivered);
         assert!(!d.enabled);
         assert!(d.reason.unwrap().contains("delivered"));
+    }
+
+    fn send_back_of(facts: ActionFacts) -> Allowed {
+        get(&allowed(&facts), ActionKind::SendBack).clone()
+    }
+
+    #[test]
+    fn stopped_escalated_and_verified_work_can_be_sent_back() {
+        // A plain job that stopped, or finished.
+        for status in [
+            JobStatus::Failed,
+            JobStatus::Interrupted,
+            JobStatus::Cancelled,
+            JobStatus::Done,
+        ] {
+            let a = send_back_of(ActionFacts {
+                job: Some(status),
+                ..ActionFacts::default()
+            });
+            assert!(a.enabled, "{status:?}: {:?}", a.reason);
+        }
+        // A mission the gate gave up on, or whose work waits for the user.
+        for state in [MissionState::Escalated, MissionState::Verifying] {
+            let a = send_back_of(ActionFacts {
+                mission: Some(state),
+                job: Some(JobStatus::Done),
+                ..ActionFacts::default()
+            });
+            assert!(a.enabled, "{state:?}");
+        }
+    }
+
+    #[test]
+    fn work_that_cannot_be_sent_back_says_why() {
+        let reason = |facts: ActionFacts| {
+            let a = send_back_of(facts);
+            assert!(!a.enabled);
+            a.reason.unwrap()
+        };
+        assert!(reason(ActionFacts::default()).contains("no job"));
+        let running = reason(ActionFacts {
+            mission: Some(MissionState::Running),
+            job: Some(JobStatus::Running),
+            live_jobs: 1,
+            ..ActionFacts::default()
+        });
+        assert!(running.contains("still running"), "{running}");
+        let delivered = reason(ActionFacts {
+            mission: Some(MissionState::Delivered),
+            job: Some(JobStatus::Done),
+            ..ActionFacts::default()
+        });
+        assert!(delivered.contains("delivered"), "{delivered}");
+        let graph = reason(ActionFacts {
+            mission: Some(MissionState::Escalated),
+            job: Some(JobStatus::Failed),
+            task_graph: true,
+            ..ActionFacts::default()
+        });
+        assert!(graph.contains("task graph"), "{graph}");
+        let early = reason(ActionFacts {
+            mission: Some(MissionState::Queued),
+            job: Some(JobStatus::Cancelled),
+            ..ActionFacts::default()
+        });
+        assert!(early.contains("escalated or is verified"), "{early}");
+    }
+
+    #[test]
+    fn a_held_call_can_always_be_answered_with_a_note() {
+        // The call is denied and the note is its reason: no job has to have
+        // ended, and a running job is the normal case.
+        let a = send_back_of(ActionFacts {
+            mission: Some(MissionState::Running),
+            job: Some(JobStatus::Running),
+            live_jobs: 1,
+            held_calls: 1,
+            ..ActionFacts::default()
+        });
+        assert!(a.enabled);
+        assert_eq!(a.reason, None);
     }
 
     #[test]

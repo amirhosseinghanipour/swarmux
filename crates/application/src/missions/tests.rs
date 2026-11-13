@@ -72,6 +72,7 @@ fn contract(checks: &[&str], protected: &[&str]) -> Contract {
             usd: Some(2.0),
             ..Budget::default()
         },
+        due: None,
         clarifications: Vec::new(),
         repos: Vec::new(),
     }
@@ -615,3 +616,79 @@ fn missions_delivered_before_bundles_existed_get_one() {
 mod graph;
 mod plan_first;
 mod workspace;
+
+#[test]
+fn work_sent_back_is_judged_again_and_forgets_the_drift_of_the_first_build() {
+    let mut f = fixture();
+    let slug = f.create(contract(&["cargo test"], &["tests/**"]));
+    let first = f.svc.launch(&slug, &mut f.jobs).unwrap();
+    f.pump();
+    f.finish(0, 0.1, 1);
+    f.pump();
+    assert_eq!(f.state(&slug), MissionState::Escalated);
+
+    let again = f
+        .svc
+        .send_back(&slug, &mut f.jobs, "run the bench with a warm cache")
+        .unwrap();
+    assert_ne!(again, first);
+    let m = f.svc.get(&slug).unwrap();
+    assert_eq!(
+        (m.state, m.job, m.note.clone()),
+        (MissionState::Queued, Some(again), None)
+    );
+    // The agent got the note; the new job has the contract's gate.
+    f.pump();
+    assert!(f.runner.request(1).prompt.contains("warm cache"));
+    assert_eq!(
+        f.gates.assigned.borrow().last().map(|(j, _)| *j),
+        Some(again)
+    );
+    // The mission's story says it: escalated, then queued again.
+    let entries = f.mission_entries();
+    assert!(
+        entries
+            .iter()
+            .any(|e| e.contains(r#""from":"escalated""#) && e.contains(r#""to":"queued""#)),
+        "{entries:?}"
+    );
+    // Only escalated work, or work waiting for the user, goes back.
+    assert!(f.svc.send_back(&slug, &mut f.jobs, "x").is_err());
+}
+
+#[test]
+fn a_due_time_already_past_is_a_warning_in_the_lint_and_never_blocks() {
+    let mut f = fixture();
+    let mut c = contract(&["cargo test"], &["tests/**"]);
+    c.due = Some(5_000); // the clock reads 10_000
+    let slug = f.create(c);
+    let m = f.svc.get(&slug).unwrap();
+    assert_eq!(
+        m.state,
+        MissionState::Linted,
+        "a warning does not refuse it"
+    );
+    let found: Vec<_> = m
+        .lint
+        .as_ref()
+        .unwrap()
+        .findings
+        .iter()
+        .filter(|f| f.kind == FindingKind::PastDue)
+        .collect();
+    assert_eq!(found.len(), 1, "{:?}", m.lint);
+    // A due time ahead, and none, lint clean of it.
+    let mut ahead = contract(&["cargo test"], &["tests/**"]);
+    ahead.title = "Faster search".into();
+    ahead.due = Some(50_000);
+    let slug = f.create(ahead);
+    let m = f.svc.get(&slug).unwrap();
+    assert!(
+        !m.lint
+            .as_ref()
+            .unwrap()
+            .findings
+            .iter()
+            .any(|f| f.kind == FindingKind::PastDue)
+    );
+}

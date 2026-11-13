@@ -15,7 +15,7 @@ use swarmux_domain::{AttentionItem, JobId, Millis, Session, SessionId, Workspace
 
 use super::outcome::Sealed;
 use super::view::{
-    ConsoleSnapshot, Counts, GroupKind, GroupView, Header, LimitWindow, QueueFigures,
+    ConsoleSnapshot, Counts, GroupKind, GroupView, Header, LimitWindow, MetricsView, QueueFigures,
     SCHEMA_VERSION, SpendFigures,
 };
 use super::{deck, hold, outcome};
@@ -68,6 +68,9 @@ pub struct Sources<'a> {
     pub evidence: EvidenceLookup<'a>,
     /// A session, for the folder its jobs work in.
     pub sessions: Box<dyn Fn(SessionId) -> Option<Session> + 'a>,
+    /// The verification figures, worked out from the ledger by whoever
+    /// reads it (`MetricsService`); none where no ledger is read.
+    pub metrics: Option<&'a rules::Metrics>,
 }
 
 /// What is copied out of the engine, since the engine hands it out by
@@ -112,6 +115,7 @@ impl Gathered {
             evidence,
             telemetry,
             stream,
+            metrics,
         } = extra;
         Sources {
             now,
@@ -134,6 +138,7 @@ impl Gathered {
             }),
             evidence: Box::new(move |slug: &str| evidence.and_then(|e| e.get(slug).ok()).flatten()),
             sessions: Box::new(move |id: SessionId| engine.jobs.session(id).ok().flatten()),
+            metrics,
         }
     }
 }
@@ -145,6 +150,7 @@ pub struct Extra<'a> {
     pub evidence: Option<&'a EvidenceService>,
     pub telemetry: Option<&'a TelemetrySnapshot>,
     pub stream: &'a dyn JobRepository,
+    pub metrics: Option<&'a rules::Metrics>,
 }
 
 /// What is kept between snapshots.
@@ -381,6 +387,8 @@ fn stamp(src: &Sources<'_>) -> u64 {
     )
         .hash(&mut h);
     src.telemetry.map(|t| t.taken_at).hash(&mut h);
+    // The figures change when the ledger was read again and found more.
+    src.metrics.map(|m| format!("{m:?}")).hash(&mut h);
     h.finish()
 }
 
@@ -470,6 +478,7 @@ fn build(
         groups,
         holds,
         deck,
+        metrics: src.metrics.map(MetricsView::from),
     }
 }
 

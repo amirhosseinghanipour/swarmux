@@ -144,6 +144,7 @@
           "claim": null,
           "evidence": null,
           "diff": null,
+          "files": [],
           "landing": null,
           "spend": {
             "total_usd": 0.5,
@@ -213,6 +214,14 @@
               "kind": "reject_plan",
               "enabled": false,
               "reason": "no plan waits for a decision",
+              "job": 2,
+              "mission": null,
+              "request": 7
+            },
+            {
+              "kind": "send_back",
+              "enabled": true,
+              "reason": null,
               "job": 2,
               "mission": null,
               "request": 7
@@ -352,6 +361,7 @@
           "claim": null,
           "evidence": null,
           "diff": null,
+          "files": [],
           "landing": null,
           "spend": {
             "total_usd": 0.5,
@@ -424,6 +434,14 @@
               "job": 3,
               "mission": null,
               "request": null
+            },
+            {
+              "kind": "send_back",
+              "enabled": true,
+              "reason": null,
+              "job": 3,
+              "mission": null,
+              "request": null
             }
           ]
         },
@@ -470,6 +488,7 @@
               "wall_minutes": 90,
               "on_exhaust": "escalate"
             },
+            "due": null,
             "note": null
           },
           "jobs": [],
@@ -486,7 +505,8 @@
                 "depends_on": [],
                 "acceptance": "cargo test",
                 "state": null,
-                "job": null
+                "job": null,
+                "changed": []
               }
             ],
             "drift": null,
@@ -563,6 +583,7 @@
           "claim": null,
           "evidence": null,
           "diff": null,
+          "files": [],
           "landing": null,
           "spend": {
             "total_usd": 0.0,
@@ -635,6 +656,14 @@
               "job": null,
               "mission": "plan-me",
               "request": null
+            },
+            {
+              "kind": "send_back",
+              "enabled": false,
+              "reason": "no job has run",
+              "job": null,
+              "mission": "plan-me",
+              "request": null
             }
           ]
         },
@@ -681,6 +710,7 @@
               "wall_minutes": 90,
               "on_exhaust": "escalate"
             },
+            "due": null,
             "note": null
           },
           "jobs": [
@@ -724,7 +754,8 @@
                 "depends_on": [],
                 "acceptance": "cargo test",
                 "state": "merged",
-                "job": 7
+                "job": 7,
+                "changed": []
               },
               {
                 "id": "t2",
@@ -735,7 +766,8 @@
                 "depends_on": [],
                 "acceptance": "cargo test",
                 "state": "failed",
-                "job": 8
+                "job": 8,
+                "changed": []
               },
               {
                 "id": "t3",
@@ -749,7 +781,8 @@
                 ],
                 "acceptance": "cargo test",
                 "state": "waiting",
-                "job": null
+                "job": null,
+                "changed": []
               }
             ],
             "drift": {
@@ -758,6 +791,7 @@
                 "scripts/x.sh"
               ],
               "outside_count": 1,
+              "outside_files": [],
               "tasks": 3,
               "untouched": [
                 "t3"
@@ -843,6 +877,7 @@
           "claim": null,
           "evidence": null,
           "diff": null,
+          "files": [],
           "landing": {
             "mode": "preview",
             "into": "swarmux/split-app/integration",
@@ -920,6 +955,14 @@
               "kind": "reject_plan",
               "enabled": false,
               "reason": "no plan waits for a decision",
+              "job": null,
+              "mission": "split-app",
+              "request": null
+            },
+            {
+              "kind": "send_back",
+              "enabled": false,
+              "reason": "no job has run",
               "job": null,
               "mission": "split-app",
               "request": null
@@ -1043,6 +1086,7 @@
           "claim": null,
           "evidence": null,
           "diff": null,
+          "files": [],
           "landing": null,
           "spend": {
             "total_usd": 0.5,
@@ -1112,6 +1156,14 @@
               "kind": "reject_plan",
               "enabled": false,
               "reason": "no plan waits for a decision",
+              "job": 6,
+              "mission": null,
+              "request": null
+            },
+            {
+              "kind": "send_back",
+              "enabled": true,
+              "reason": null,
               "job": 6,
               "mission": null,
               "request": null
@@ -1223,6 +1275,7 @@
           "claim": null,
           "evidence": null,
           "diff": null,
+          "files": [],
           "landing": null,
           "spend": {
             "total_usd": 0.5,
@@ -1295,6 +1348,14 @@
               "job": 4,
               "mission": null,
               "request": null
+            },
+            {
+              "kind": "send_back",
+              "enabled": false,
+              "reason": "the job is still running: stop it, or wait for it to end",
+              "job": 4,
+              "mission": null,
+              "request": null
             }
           ]
         }
@@ -1347,6 +1408,7 @@
               "wall_minutes": 90,
               "on_exhaust": "escalate"
             },
+            "due": null,
             "note": null
           },
           "jobs": [
@@ -1449,7 +1511,7 @@
             "truncated": false
           },
           "evidence": {
-            "bundle_hash": "df431738cd0c9c175dd34c3a2bfadccb90a4e1fdb8423a4d10c39e141983271d",
+            "bundle_hash": "45f94f219621aef0a5d63e373fbd3e6d4a8ce2cefca0f1bffb0ad524fcad3988",
             "sealed_at": 2100000,
             "seq_from": 10,
             "seq_to": 42,
@@ -1464,6 +1526,29 @@
             "deletions": 4,
             "hash": "d1ff"
           },
+          "files": [
+            {
+              "path": "src/etl.rs",
+              "insertions": 12,
+              "deletions": 2,
+              "binary": false,
+              "change": "modified"
+            },
+            {
+              "path": "src/etl/counts.rs",
+              "insertions": 5,
+              "deletions": 1,
+              "binary": false,
+              "change": "modified"
+            },
+            {
+              "path": "docs/etl.md",
+              "insertions": 3,
+              "deletions": 1,
+              "binary": false,
+              "change": "modified"
+            }
+          ],
           "landing": null,
           "spend": {
             "total_usd": 1.94,
@@ -1533,6 +1618,14 @@
               "kind": "reject_plan",
               "enabled": false,
               "reason": "no plan waits for a decision",
+              "job": 1,
+              "mission": "fix-invoice",
+              "request": null
+            },
+            {
+              "kind": "send_back",
+              "enabled": false,
+              "reason": "the work is delivered: change it with a new mission",
               "job": 1,
               "mission": "fix-invoice",
               "request": null
@@ -1847,5 +1940,6 @@
       }
     ],
     "max_depth": 1
-  }
+  },
+  "metrics": null
 }

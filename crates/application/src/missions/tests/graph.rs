@@ -129,6 +129,7 @@ fn contract() -> Contract {
             usd: Some(20.0),
             ..Budget::default()
         },
+        due: None,
         clarifications: Vec::new(),
         repos: Vec::new(),
     }

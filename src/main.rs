@@ -268,6 +268,13 @@ enum StatsAction {
         #[arg(long, default_value_t = 7)]
         days: i64,
     },
+    /// How verification has gone: first-run gate passes, claim to
+    /// verified, verified an hour, checks run, bundles sealed.
+    Verification {
+        /// How many hours back to look (default: `[console] metrics_hours`).
+        #[arg(long)]
+        hours: Option<u32>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -442,6 +449,9 @@ fn main() -> anyhow::Result<ExitCode> {
         Some(Command::Stats {
             what: StatsAction::Cache { days },
         }) => stats::cache(days.max(1)),
+        Some(Command::Stats {
+            what: StatsAction::Verification { hours },
+        }) => stats::verification(hours),
         Some(Command::Gate {
             action: GateAction::Run { dir, in_place },
         }) => {
@@ -777,7 +787,7 @@ fn build_app(
         HaikuDiagnoser::new(doctor::claude_bin(), rt.handle().clone())
             .with_bare(std::env::var_os("ANTHROPIC_API_KEY").is_some()),
     ));
-    let hook_bus = HookBus::new(server.clone(), ledger, store.clone(), clock.clone())
+    let hook_bus = HookBus::new(server.clone(), ledger.clone(), store.clone(), clock.clone())
         .with_checkpoints(checkpoints.clone())
         .with_truth(truth.clone());
     let hook_bus = match &board_service {
@@ -870,6 +880,8 @@ fn build_app(
     .with_watchdog(watchdog)
     .with_missions(missions)
     .with_evidence(evidence, away_since)
+    .with_ledger(ledger, &settings.console)
+    .with_utc_offset(utc_offset_minutes)
     .with_checkpoints(checkpoints)
     .with_alarms(alarm_store)
     .with_terminal(Rc::new(WindowsTerminal::new(doctor::claude_bin())))

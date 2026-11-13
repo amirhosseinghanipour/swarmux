@@ -522,3 +522,80 @@ fn seeded_drift_is_flagged_and_clean_builds_are_not() {
     assert!(recall >= 0.9, "recall {recall}");
     assert_eq!(false_rate, 0.0);
 }
+
+// ---- per-file counts against the plan ----------------------------------
+
+fn counted(path: &str, ins: u32, del: u32) -> crate::evidence::DiffFile {
+    crate::evidence::DiffFile::text(path, ins, del)
+}
+
+#[test]
+fn counted_drift_keeps_the_files_with_their_lines() {
+    let p = plan(vec![
+        task("t1", &["src/a.rs"], &[]),
+        task("t2", &["src/b/**"], &[]),
+    ]);
+    let r = check_drift_counted(
+        &p,
+        &[
+            counted("src/a.rs", 10, 2),
+            counted("docs/readme.md", 1, 1),
+            counted("Cargo.lock", 40, 40),
+            counted("src/a.rs", 99, 99),
+        ],
+        DEFAULT_DRIFT_THRESHOLD,
+    );
+    // Same verdict as by name, minus the lockfile.
+    assert_eq!((r.changed, r.outside_count), (2, 1));
+    assert_eq!(r.outside, ["docs/readme.md"]);
+    assert_eq!(r.untouched, ["t2"]);
+    // The counts of the first sighting of a path stay; the lockfile is out.
+    let paths: Vec<&str> = r.files.iter().map(|f| f.path.as_str()).collect();
+    assert_eq!(paths, ["docs/readme.md", "src/a.rs"]);
+    assert_eq!(r.files[1].insertions, 10);
+    // And they survive being kept.
+    assert_eq!(
+        DriftReport::from_json(&Json::parse(&r.to_json()).unwrap()),
+        Some(r)
+    );
+}
+
+#[test]
+fn a_report_kept_before_counts_reads_without_files() {
+    let old = r#"{"changed":2,"outside":["x"],"outside_count":1,"tasks":2,"untouched":[],"outside_share":0.5,"untouched_share":0,"threshold":0.3}"#;
+    let r = DriftReport::from_json(&Json::parse(old).unwrap()).unwrap();
+    assert!(r.files.is_empty());
+    // And one without counts is written as it always was.
+    assert_eq!(r.to_json(), old);
+}
+
+#[test]
+fn the_change_is_laid_against_each_task_and_what_no_task_planned() {
+    let p = plan(vec![
+        task("t1", &["src/a.rs", "src/lib/**"], &[]),
+        task("t2", &["web/**"], &[]),
+        task("t3", &["docs/**"], &[]),
+    ]);
+    let d = diff_by_plan(
+        &p,
+        &[
+            counted("src/a.rs", 5, 1),
+            counted("src/lib/x.rs", 2, 0),
+            counted("web/app.ts", 7, 7),
+            counted("scripts/build.sh", 3, 0),
+            counted("Cargo.lock", 100, 100),
+        ],
+    );
+    let of = |id: &str| {
+        d.tasks
+            .iter()
+            .find(|t| t.id == id)
+            .map(|t| t.files.iter().map(|f| f.path.as_str()).collect::<Vec<_>>())
+            .unwrap()
+    };
+    assert_eq!(of("t1"), ["src/a.rs", "src/lib/x.rs"]);
+    assert_eq!(of("t2"), ["web/app.ts"]);
+    assert!(of("t3").is_empty(), "a planned area nothing touched");
+    let outside: Vec<&str> = d.outside.iter().map(|f| f.path.as_str()).collect();
+    assert_eq!(outside, ["scripts/build.sh"], "lockfiles are not scope");
+}

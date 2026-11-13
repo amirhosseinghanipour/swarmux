@@ -26,6 +26,7 @@ pub const KILL: Action = Action::new("work.kill");
 pub const RETRY: Action = Action::new("work.retry");
 pub const RESUME: Action = Action::new("work.resume");
 pub const EVIDENCE: Action = Action::new("work.evidence");
+pub const SEND_BACK: Action = Action::new("work.send_back");
 
 const SECTIONS: &[Section] = &[Section {
     context: CTX,
@@ -96,6 +97,11 @@ const SECTIONS: &[Section] = &[Section {
             help: "open the evidence in the ledger",
         },
         Bind {
+            action: SEND_BACK,
+            keys: &["s"],
+            help: "send the work back to the agent with a note, or deny a held call with one",
+        },
+        Bind {
             action: actions::LIST_OPEN,
             keys: &["enter"],
             help: "open the job in focus",
@@ -108,6 +114,7 @@ const HINTS: &[Hint] = &[
     Hint::symbols(&[actions::LIST_PREV, actions::LIST_NEXT], "select"),
     Hint::keys(&[DECIDE_YES, DECIDE_NO, DECIDE_ALWAYS], "answer"),
     Hint::keys(&[LAND], "land"),
+    Hint::keys(&[SEND_BACK], "send back"),
     Hint::keys(&[EVIDENCE], "evidence"),
     Hint::keys(&[TAB_PRODUCT, TAB_STREAM, TAB_DIFF, TAB_CHECKS], "tabs"),
     Hint::keys(&[KILL], "kill"),
@@ -179,6 +186,7 @@ impl ScreenDef for Def {
             RETRY => app.work_do(Do::Retry),
             RESUME => app.work_do(Do::Resume),
             EVIDENCE => app.work_do(Do::Evidence),
+            SEND_BACK => app.work_do(Do::SendBack),
             actions::LIST_OPEN => app.work_open_focus(),
             _ => return Handled::No,
         }

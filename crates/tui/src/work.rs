@@ -16,7 +16,7 @@ use swarmux_domain::Millis;
 use swarmux_domain::keys::Action;
 
 use crate::keys::{DECIDE_ALWAYS, DECIDE_NO, DECIDE_YES};
-use crate::screens::work::{EVIDENCE, KILL, LAND, RESUME, RETRY};
+use crate::screens::work::{EVIDENCE, KILL, LAND, RESUME, RETRY, SEND_BACK};
 
 /// The tabs of the right pane.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -52,14 +52,70 @@ impl Tab {
 pub struct DiffRead {
     /// The job it was read for.
     pub job: i64,
+    /// The files of the diff with the lines git counted in each, from the
+    /// same read as the text; empty when git counted none.
+    pub files: Vec<swarmux_application::console::DiffFileView>,
     pub lines: Vec<String>,
     /// Why there are no lines.
     pub note: Option<String>,
 }
 
+/// What a note is for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NoteTarget {
+    /// The work of this job goes back to its agent.
+    Work(i64),
+    /// This held call is denied, with the note as the reason.
+    Held(u64),
+}
+
+/// A note being written to the agent: where it goes, and the suggested
+/// notes the user can start from. The suggestions are handed in by whoever
+/// opens the composer (the user's own list from `config.toml`, later the
+/// saved notes of the Prompts library); picking one only fills the line,
+/// and nothing is sent until the user confirms with Enter.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NoteComposer {
+    pub target: NoteTarget,
+    /// What the note is about, for the heading: `job #12`, `Bash rm -rf build`.
+    pub about: String,
+    pub suggestions: Vec<String>,
+    /// The suggestion the line was last filled from.
+    pub picked: Option<usize>,
+}
+
+impl NoteComposer {
+    pub fn new(target: NoteTarget, about: &str, suggestions: Vec<String>) -> NoteComposer {
+        NoteComposer {
+            target,
+            about: about.to_string(),
+            suggestions,
+            picked: None,
+        }
+    }
+
+    /// Moves the pick by `delta` (wrapping) and returns the suggestion now
+    /// picked; none when there are none.
+    pub fn cycle(&mut self, delta: isize) -> Option<&str> {
+        let n = self.suggestions.len();
+        if n == 0 {
+            return None;
+        }
+        let next = match self.picked {
+            None if delta >= 0 => 0,
+            None => n - 1,
+            Some(i) => (i as isize + delta).rem_euclid(n as isize) as usize,
+        };
+        self.picked = Some(next);
+        self.suggestions.get(next).map(String::as_str)
+    }
+}
+
 /// What the Work screen remembers between frames.
 #[derive(Default)]
 pub struct WorkScreen {
+    /// The note being written, while its line is open.
+    pub note: Option<NoteComposer>,
     /// The selected outcome, by id: the list re-ranks as work moves, so
     /// the selection follows the outcome and not the row.
     pub selected: Option<String>,
@@ -216,6 +272,7 @@ pub enum Do {
     Retry,
     Resume,
     Evidence,
+    SendBack,
 }
 
 /// One line of the ACTIONS panel.
@@ -236,8 +293,8 @@ fn find(o: &OutcomeView, kind: ActionKind) -> Option<&ActionView> {
 
 /// The actions the selected outcome offers, from the read model's allowed
 /// actions: the ones that apply, enabled; and the ones the user would look
-/// for (land, evidence) shown disabled with the reason. Nothing else is
-/// offered: there is no send back, pause or merge to main.
+/// for (land, send back, evidence) shown disabled with the reason. Nothing
+/// else is offered: there is no pause or merge to main.
 pub fn action_rows(o: &OutcomeView, hold: Option<&HoldView>) -> Vec<ActionRow> {
     let mut rows = Vec::new();
     let row = |what, action, label, detail: String, enabled| ActionRow {
@@ -315,6 +372,25 @@ pub fn action_rows(o: &OutcomeView, hold: Option<&HoldView>) -> Vec<ActionRow> {
             (None, None) => "land the work in the integration branch".into(),
         };
         rows.push(row(Do::Land, LAND, "land", detail, a.enabled));
+    }
+    if let Some(a) = find(o, ActionKind::SendBack) {
+        // Offered where the user decides about work that ended; for work
+        // still running the reason would only be noise.
+        let ended = !matches!(o.group, GroupKind::Running) || a.enabled;
+        if ended {
+            let held = a.enabled && find(o, ActionKind::AnswerHeldCall).is_some_and(|h| h.enabled);
+            let detail = match (&a.reason, held) {
+                (Some(why), _) => why.clone(),
+                (None, true) => {
+                    "deny the held call; your note is the reason the agent reads".into()
+                }
+                (None, false) => format!(
+                    "resume job #{} with your note; the checks run again on its next claim",
+                    a.job.unwrap_or_default()
+                ),
+            };
+            rows.push(row(Do::SendBack, SEND_BACK, "send back", detail, a.enabled));
+        }
     }
     if let Some(a) = find(o, ActionKind::Resume).filter(|a| a.enabled) {
         rows.push(row(

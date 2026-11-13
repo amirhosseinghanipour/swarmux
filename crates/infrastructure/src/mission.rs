@@ -5,6 +5,7 @@
 //! ```toml
 //! title = "Fast search"
 //! goal = "make search answer in under 50 ms on the bench corpus"
+//! due = 2026-11-14T16:00:00+03:30   # optional: when you need it by
 //!
 //! [acceptance]
 //! checks = ["cargo test -p search", "sh scripts/bench.sh --max-ms 50"]
@@ -52,6 +53,7 @@ use swarmux_domain::mission::{
     Acceptance, Budget, Clarification, Constraints, Contract, MISSIONS_DIR, Mission, MissionState,
     OnExhaust,
 };
+use swarmux_domain::{Millis, iso_utc, parse_rfc3339_millis};
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -67,6 +69,9 @@ struct RawContract {
     constraints: RawConstraints,
     #[serde(default)]
     budget: RawBudget,
+    /// When it is needed by: a TOML datetime with an offset
+    /// (`2026-11-14T16:00:00+03:30`, or `Z`), or the same as a string.
+    due: Option<toml::Value>,
     #[serde(default)]
     clarifications: Vec<RawClarification>,
 }
@@ -108,9 +113,30 @@ struct RawClarification {
     answer: String,
 }
 
+/// The due time of a contract: RFC 3339 with an offset (a TOML offset
+/// datetime, or a string holding one), as unix milliseconds. A date alone
+/// or a time with no offset says nothing about when, so it is refused
+/// rather than read as some zone.
+fn parse_due(value: &toml::Value) -> Result<Millis, String> {
+    let text = match value {
+        toml::Value::Datetime(d) => d.to_string(),
+        toml::Value::String(s) => s.trim().to_string(),
+        other => {
+            return Err(format!(
+                "due must be a timestamp like 2026-11-14T16:00:00+03:30 (RFC 3339), not {}",
+                other.type_str()
+            ));
+        }
+    };
+    parse_rfc3339_millis(&text).ok_or_else(|| {
+        format!("due must be an RFC 3339 timestamp with an offset or Z, like 2026-11-14T16:00:00+03:30, not {text:?}")
+    })
+}
+
 /// Reads a contract; the error says what is wrong and where.
 pub fn parse_contract(text: &str) -> Result<Contract, String> {
     let raw: RawContract = toml::from_str(text).map_err(|e| e.to_string())?;
+    let due = raw.due.as_ref().map(parse_due).transpose()?;
     let on_exhaust = match raw.budget.on_exhaust.as_deref() {
         None => OnExhaust::default(),
         Some(s) => OnExhaust::parse(s).ok_or_else(|| {
@@ -154,6 +180,7 @@ pub fn parse_contract(text: &str) -> Result<Contract, String> {
             wall_minutes: raw.budget.wall_minutes,
             on_exhaust,
         },
+        due,
         clarifications: raw
             .clarifications
             .into_iter()
@@ -198,6 +225,11 @@ pub fn render_contract(c: &Contract) -> String {
     out.push_str(&format!("goal = {}\n", quote(&c.goal)));
     if !c.repos.is_empty() {
         out.push_str(&format!("repos = {}\n", list(&c.repos)));
+    }
+    // A TOML datetime, in UTC: the same instant whatever offset it was
+    // written with. Before the first table, where top-level keys belong.
+    if let Some(due) = c.due {
+        out.push_str(&format!("due = {}\n", iso_utc(due)));
     }
     out.push_str("\n[acceptance]\n");
     out.push_str(&format!("checks = {}\n", list(&c.acceptance.checks)));
@@ -322,6 +354,7 @@ mod tests {
                 question: "Which corpus?".into(),
                 answer: String::new(),
             }],
+            due: Some(1_793_613_600_000),
             repos: vec!["backend".into(), "app".into()],
         }
     }
@@ -336,6 +369,49 @@ mod tests {
             ..Contract::default()
         };
         assert_eq!(parse_contract(&render_contract(&bare)).unwrap(), bare);
+    }
+
+    #[test]
+    fn due_is_an_optional_rfc3339_timestamp() {
+        // Absent: no due time, and an old contract reads as it always did.
+        let old = parse_contract("goal = \"g\"\n[budget]\nusd = 1.0\n").unwrap();
+        assert_eq!(old.due, None);
+        assert!(!render_contract(&old).contains("due"));
+        // A native TOML datetime with Z, with an offset, or a string.
+        let at = 1_793_613_600_000; // 2026-11-02T10:00:00Z
+        for text in [
+            "due = 2026-11-02T10:00:00Z\ngoal = \"g\"",
+            "due = 2026-11-02T13:30:00+03:30\ngoal = \"g\"",
+            "due = \"2026-11-02T10:00:00Z\"\ngoal = \"g\"",
+            "goal = \"g\"\ndue = 2026-11-02T10:00:00.000Z",
+        ] {
+            assert_eq!(parse_contract(text).unwrap().due, Some(at), "{text}");
+        }
+        // It is written before the first table, as a datetime, in UTC, and
+        // reads back as the same instant.
+        let mut c = parse_contract("goal = \"g\"\ndue = 2026-11-02T13:30:00+03:30").unwrap();
+        let text = render_contract(&c);
+        assert!(text.contains("due = 2026-11-02T10:00:00Z\n"), "{text}");
+        assert!(text.find("due =").unwrap() < text.find("[acceptance]").unwrap());
+        assert_eq!(parse_contract(&text).unwrap().due, Some(at));
+        c.due = None;
+        assert_eq!(parse_contract(&render_contract(&c)).unwrap().due, None);
+    }
+
+    #[test]
+    fn a_bad_due_says_what_it_wants() {
+        for (text, needle) in [
+            ("goal = \"g\"\ndue = 2026-11-02", "RFC 3339"),
+            ("goal = \"g\"\ndue = 2026-11-02T10:00:00", "RFC 3339"),
+            ("goal = \"g\"\ndue = \"tomorrow\"", "RFC 3339"),
+            ("goal = \"g\"\ndue = \"\"", "RFC 3339"),
+            ("goal = \"g\"\ndue = 5", "not integer"),
+            ("goal = \"g\"\ndue = true", "not boolean"),
+        ] {
+            let e = parse_contract(text).unwrap_err();
+            assert!(e.contains(needle), "{text}: {e}");
+            assert!(e.contains("due"), "{text}: {e}");
+        }
     }
 
     #[test]

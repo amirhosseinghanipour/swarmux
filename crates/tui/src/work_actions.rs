@@ -10,8 +10,13 @@ use swarmux_application::LandReport;
 use swarmux_application::console::OutcomeView;
 use swarmux_domain::JobId;
 
-use crate::app::{App, Screen};
-use crate::work::{ActionRow, DiffRead, Do, Tab, rows_for};
+use crossterm::event::{KeyCode, KeyEvent};
+
+use crate::app::{App, InputPurpose, Mode, Screen};
+use crate::ui::input::Input;
+use crate::work::{
+    ActionRow, DiffRead, Do, NoteComposer, NoteTarget, Tab, held_request, holds_of, rows_for,
+};
 
 /// Lines of a diff read.
 const DIFF_LINES: usize = 400;
@@ -114,9 +119,110 @@ impl App {
             }
             Do::Land => self.work_land(o)?,
             Do::Evidence => self.work_open_evidence(o)?,
+            Do::SendBack => self.work_begin_note(o),
             // The decision keys carry these; the rows only show them.
             Do::AllowOnce | Do::AlwaysAllow | Do::Deny | Do::ApprovePlan | Do::ChangePlan => {}
         }
+        Ok(())
+    }
+
+    /// Opens the note line for the selected outcome: to the held call when
+    /// one waits (it is denied with the note as the reason), else to the
+    /// agent of the job that ended (it resumes with the note). Nothing is
+    /// sent until the user confirms with Enter.
+    fn work_begin_note(&mut self, o: &OutcomeView) {
+        let held = held_request(o);
+        let (target, about) = match (held, self.console.current()) {
+            (Some(request), Some(snap)) => {
+                let about = holds_of(snap, o)
+                    .into_iter()
+                    .find(|h| h.request == Some(request))
+                    .map_or_else(
+                        || "a held call".to_string(),
+                        |h| format!("{} {}", h.tool, h.target),
+                    );
+                (NoteTarget::Held(request), about)
+            }
+            _ => {
+                let job = o
+                    .actions
+                    .iter()
+                    .find(|a| a.kind == swarmux_application::console::ActionKind::SendBack)
+                    .and_then(|a| a.job);
+                match job {
+                    Some(job) => (NoteTarget::Work(job), format!("job #{job}")),
+                    None => {
+                        self.notice = Some("send back: no job to send back".into());
+                        return;
+                    }
+                }
+            }
+        };
+        self.work_screen.note = Some(NoteComposer::new(target, &about, self.send_back_notes()));
+        self.mode = Mode::Input(InputPurpose::SendBackNote, Input::default());
+    }
+
+    /// The keys of the note line beyond typing: Tab and Down pick the next
+    /// suggested note, Shift-Tab and Up the previous one. A pick fills the
+    /// line (the user edits it, or sends it as it is). Whether the key was
+    /// one of them.
+    pub(crate) fn work_note_key(&mut self, key: KeyEvent) -> bool {
+        let delta = match key.code {
+            KeyCode::Tab | KeyCode::Down => 1,
+            KeyCode::BackTab | KeyCode::Up => -1,
+            _ => return false,
+        };
+        let Some(composer) = &mut self.work_screen.note else {
+            return false;
+        };
+        if let Some(text) = composer.cycle(delta).map(str::to_string) {
+            self.mode = Mode::Input(InputPurpose::SendBackNote, Input::with_text(&text));
+        }
+        true
+    }
+
+    /// The user closed the note line without sending.
+    pub(crate) fn work_note_cancelled(&mut self) {
+        self.work_screen.note = None;
+        self.notice = Some("not sent".into());
+    }
+
+    /// The user confirmed: the note goes to the agent. The note is the
+    /// user's own words; nothing is added to it but the framing the agent
+    /// is told it came from.
+    pub(crate) fn submit_send_back(&mut self, note: &str) -> swarmux_application::AppResult<()> {
+        let Some(composer) = self.work_screen.note.take() else {
+            return Ok(());
+        };
+        let now = self.now();
+        match composer.target {
+            NoteTarget::Work(job) => {
+                let sent = self.engine.send_back(JobId(job), note)?;
+                self.notice = Some(match sent.seq {
+                    Some(seq) => format!(
+                        "job #{job} sent back as #{}: the gate judges its next claim · ledger #{seq}",
+                        sent.job
+                    ),
+                    None => format!(
+                        "job #{job} sent back as #{}: the gate judges its next claim",
+                        sent.job
+                    ),
+                });
+            }
+            NoteTarget::Held(request) => {
+                if let Some(item) = self.mission.alarms().find_request(request).cloned() {
+                    self.mission.alarms_mut().attend(&item, now);
+                }
+                let seq = self.engine.send_back_held(request, note)?;
+                self.mission.alarms_mut().answered_request(request, false);
+                self.notice = Some(match seq {
+                    Some(seq) => format!("call denied, your note goes with it · ledger #{seq}"),
+                    None => "call denied, your note goes with it".to_string(),
+                });
+            }
+        }
+        // The new state shows at once.
+        self.work_refresh();
         Ok(())
     }
 
@@ -195,6 +301,7 @@ impl App {
         let Some(job) = o.jobs.first() else {
             self.work_screen.diff = Some(DiffRead {
                 job: 0,
+                files: Vec::new(),
                 lines: Vec::new(),
                 note: Some("no job has run yet".into()),
             });
@@ -206,6 +313,7 @@ impl App {
             .iter()
             .find(|s| s.name == session)
             .map(|s| s.cwd.clone());
+        let cwd_for_counts = cwd.clone();
         let read = match cwd {
             None => Err("its session is not known here".to_string()),
             Some(cwd) => match self.engine.jobs.working_diff(&cwd) {
@@ -215,14 +323,23 @@ impl App {
                 Err(e) => Err(e.to_string()),
             },
         };
+        // The same basis as the text, counted by git itself.
+        let files: Vec<swarmux_application::console::DiffFileView> = cwd_for_counts
+            .and_then(|cwd| self.engine.jobs.working_changes(&cwd).ok().flatten())
+            .unwrap_or_default()
+            .iter()
+            .map(Into::into)
+            .collect();
         self.work_screen.diff = Some(match read {
             Ok(lines) => DiffRead {
                 job: id,
+                files,
                 lines,
                 note: None,
             },
             Err(note) => DiffRead {
                 job: id,
+                files,
                 lines: Vec::new(),
                 note: Some(note),
             },

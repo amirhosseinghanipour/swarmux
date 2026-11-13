@@ -15,13 +15,13 @@ use swarmux_domain::JobId;
 
 use super::util::{Lines, fit, heading, lifecycle_word, span, usd};
 use super::{product, queue};
-use crate::app::App;
+use crate::app::{App, InputPurpose, Mode};
 use crate::focus::stream::diff_lines;
 use crate::focus::stream::{RowKind, rows};
 use crate::ui::focus::parts::diff_style;
 use crate::ui::focus::stream::row_line_of;
 use crate::ui::mission::age;
-use crate::work::{Tab, edge_label, holds_of, relations};
+use crate::work::{NoteComposer, NoteTarget, Tab, edge_label, holds_of, relations};
 
 pub(super) fn render(
     frame: &mut Frame,
@@ -46,7 +46,11 @@ pub(super) fn render(
     };
     let w = usize::from(area.width);
     let header = header(app, snap, o, w);
-    let actions = actions(app, &crate::work::rows_for(snap, o), w);
+    // While a note is being written its panel takes the actions' place.
+    let actions = match &app.work_screen.note {
+        Some(composer) => note_panel(app, composer, w),
+        None => actions(app, &crate::work::rows_for(snap, o), w),
+    };
     let header_h = u16::try_from(header.len()).unwrap_or(0).min(area.height);
     let actions_h = u16::try_from(actions.len())
         .unwrap_or(0)
@@ -161,6 +165,9 @@ fn header(app: &App, snap: &ConsoleSnapshot, o: &OutcomeView, w: usize) -> Lines
     }
     facts.push(usd(o.spend.total_usd));
     facts.push(format!("{} in state", age(now - o.since_at)));
+    if let Some(due) = o.contract.as_ref().and_then(|c| c.due) {
+        facts.push(super::util::due_text(due, now, (app.utc_offset)()));
+    }
     lines.push(Line::from(span(
         fit(&facts.join(" · "), w),
         Style::new().fg(t.muted),
@@ -313,6 +320,25 @@ fn diff(app: &App, o: &OutcomeView, w: usize) -> Lines {
         ))),
     }
     out.push(Line::default());
+    // The files of the change with the lines git counted in each: from the
+    // sealed bundle, else from the check against the plan. A bundle sealed
+    // before they were kept has only the totals above, and says so.
+    if !o.files.is_empty() {
+        let source = if o.diff.is_some() {
+            "from the sealed bundle"
+        } else {
+            "counted when the build was checked against its plan"
+        };
+        out.push(heading(app, "FILES", source, w, t.label));
+        out.extend(product::file_rows(app, &o.files, w, 2, 40));
+        out.push(Line::default());
+    } else if o.diff.is_some() {
+        out.push(Line::from(span(
+            "no per-file counts in this bundle: it was sealed before they were kept, the totals are all it has",
+            Style::new().fg(t.muted),
+        )));
+        out.push(Line::default());
+    }
     match &app.work_screen.diff {
         Some(read) if !read.lines.is_empty() => {
             out.push(heading(
@@ -322,6 +348,10 @@ fn diff(app: &App, o: &OutcomeView, w: usize) -> Lines {
                 w,
                 t.label,
             ));
+            out.extend(product::file_rows(app, &read.files, w, 2, 40));
+            if !read.files.is_empty() {
+                out.push(Line::default());
+            }
             let text = read.lines.join("\n");
             for (kind, line) in diff_lines(&text) {
                 let line = fit(line, w);
@@ -391,6 +421,93 @@ fn actions(app: &App, rows: &[crate::work::ActionRow], w: usize) -> Lines {
             span(
                 fit(&r.detail, detail_w),
                 Style::new().fg(if r.enabled { t.muted } else { t.dim }),
+            ),
+        ]));
+    }
+    out
+}
+
+// ---------------------------------------------------------------------
+// The note panel
+// ---------------------------------------------------------------------
+
+/// What the user is writing to the agent, and the suggested notes they can
+/// start from. The line itself is the status bar's, as for every other
+/// text input; this says where the note goes and what happens after.
+fn note_panel(app: &App, composer: &NoteComposer, w: usize) -> Lines {
+    let t = &app.look.theme;
+    let held = matches!(composer.target, NoteTarget::Held(_));
+    let (title, goes) = if held {
+        (
+            "DENY WITH A NOTE",
+            format!(
+                "{} is denied; your note is the reason the agent reads",
+                composer.about
+            ),
+        )
+    } else {
+        (
+            "SEND BACK",
+            format!(
+                "{} resumes in its own session with your note as its next instruction; the checks run again on its next claim",
+                composer.about
+            ),
+        )
+    };
+    let mut out = vec![heading(app, title, "", w, t.warn)];
+    for line in super::util::wrap_text(&goes, w.saturating_sub(2)) {
+        out.push(Line::from(span(
+            format!(" {line}"),
+            Style::new().fg(t.text),
+        )));
+    }
+    // What has been typed so far, whole: the line at the bottom of the
+    // screen shares its row with the status, and a long note would run
+    // under it.
+    let typed = match &app.mode {
+        Mode::Input(InputPurpose::SendBackNote, input) => input.text.as_str(),
+        _ => "",
+    };
+    let mut note = super::util::wrap_text(typed, w.saturating_sub(9));
+    if typed.is_empty() {
+        note = vec!["type below".to_string()];
+    }
+    for (i, line) in note.iter().take(3).enumerate() {
+        out.push(Line::from(vec![
+            span(
+                if i == 0 { " note   " } else { "        " },
+                Style::new().fg(t.muted),
+            ),
+            span(
+                line.clone(),
+                Style::new().fg(if typed.is_empty() { t.dim } else { t.title }),
+            ),
+        ]));
+    }
+    out.push(Line::from(span(
+        if composer.suggestions.is_empty() {
+            " enter sends it · esc drops it · nothing is sent before you press enter"
+        } else {
+            " enter sends it · esc drops it · tab picks a suggestion · nothing is sent before you press enter"
+        },
+        Style::new().fg(t.muted),
+    )));
+    for (i, s) in composer.suggestions.iter().enumerate() {
+        // Marked while the line still holds it.
+        let picked = composer.picked == Some(i) && s == typed;
+        let key = if picked {
+            Style::new()
+                .fg(t.on_accent)
+                .bg(t.warn)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::new().fg(t.dim)
+        };
+        out.push(Line::from(vec![
+            span(format!(" {} ", i + 1), key),
+            span(
+                format!(" {}", fit(s, w.saturating_sub(5))),
+                Style::new().fg(if picked { t.title } else { t.text }),
             ),
         ]));
     }

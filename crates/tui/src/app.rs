@@ -66,6 +66,9 @@ pub enum InputPurpose {
     Variable,
     /// The note that sends a proposed plan back for a new one.
     PlanNote,
+    /// The note that sends a job's work back to its agent, or goes with
+    /// the denial of a held call.
+    SendBackNote,
     /// The answer to a question an agent put on the board.
     BoardAnswer,
     /// The ledger search; applied as it is typed.
@@ -152,6 +155,14 @@ pub struct App {
     pub(crate) engine: Engine,
     /// The console read model: what the Work and Deck screens read.
     pub(crate) console: ConsoleService,
+    /// The verification figures of the last hours, read from the ledger.
+    metrics: Option<swarmux_application::metrics::MetricsService>,
+    /// The notes the send-back line offers to start from (`[console]
+    /// send_back_notes`).
+    send_back_notes: Vec<String>,
+    /// Minutes the local time is ahead of UTC, for the times the screens
+    /// write in the user's own clock.
+    pub(crate) utc_offset: fn() -> i32,
     /// Bundles, their verification and outcome labels.
     evidence: Option<Rc<EvidenceService>>,
     /// When the user was last here: what happened since is the digest.
@@ -334,6 +345,9 @@ impl App {
             work_screen: Default::default(),
             engine: Engine::new(jobs, guard),
             console: ConsoleService::new(),
+            metrics: None,
+            send_back_notes: Vec::new(),
+            utc_offset: || 0,
             evidence: None,
             away_since: None,
             clock: None,
@@ -585,6 +599,36 @@ impl App {
         self
     }
 
+    /// Lets the Work screen record the operator's notes in the ledger and
+    /// show the verification figures worked out from it (over the window
+    /// `[console] metrics_hours` sets), and offers `[console]
+    /// send_back_notes` as starting points for a note.
+    pub fn with_ledger(
+        mut self,
+        ledger: Rc<swarmux_application::ledger::LedgerService>,
+        console: &swarmux_application::ConsoleSettings,
+    ) -> App {
+        self.metrics = Some(swarmux_application::metrics::MetricsService::new(
+            ledger.clone(),
+            console.metrics_hours,
+        ));
+        self.send_back_notes = console.send_back_notes.clone();
+        self.engine.ledger = Some(ledger);
+        self
+    }
+
+    /// Writes the times the screens show (a mission's due time) in the
+    /// user's clock: `offset` gives the minutes local time is ahead of UTC.
+    pub fn with_utc_offset(mut self, offset: fn() -> i32) -> App {
+        self.utc_offset = offset;
+        self
+    }
+
+    /// The notes the send-back line offers.
+    pub(crate) fn send_back_notes(&self) -> Vec<String> {
+        self.send_back_notes.clone()
+    }
+
     /// Shows evidence on the Ledger screen. `away_since` is when the
     /// user was last here (the ledger's newest entry before this run).
     pub fn with_evidence(
@@ -769,6 +813,7 @@ impl App {
                 evidence: self.evidence.as_deref(),
                 telemetry: Some(&self.mission.snapshot),
                 stream: self.history_service.repository(),
+                metrics: self.metrics.as_mut().and_then(|m| m.current(now)),
             },
         );
         self.console.snapshot(&src)
@@ -968,6 +1013,19 @@ impl App {
     /// Presses a character key, as the user would.
     pub fn press_char(&mut self, c: char) {
         self.on_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+
+    /// Presses a named key, as the user would: `enter`, `esc`, `tab` or
+    /// `backspace`. Any other name is ignored.
+    pub fn press_named(&mut self, name: &str) {
+        let code = match name {
+            "enter" => KeyCode::Enter,
+            "esc" => KeyCode::Esc,
+            "tab" => KeyCode::Tab,
+            "backspace" => KeyCode::Backspace,
+            _ => return,
+        };
+        self.on_key(KeyEvent::new(code, KeyModifiers::NONE));
     }
 
     /// The screen as text (one line per row) at the given size, for
@@ -1218,6 +1276,12 @@ impl App {
             self.show(result);
             return;
         }
+        // The note line also takes keys that pick a suggested note.
+        if matches!(self.mode, Mode::Input(InputPurpose::SendBackNote, _))
+            && self.work_note_key(key)
+        {
+            return;
+        }
         if let Mode::Input(purpose, input) = &mut self.mode {
             let purpose = *purpose;
             match input.handle(key) {
@@ -1234,6 +1298,9 @@ impl App {
                         self.ledger.query.clear();
                         self.refresh_ledger();
                     }
+                    if purpose == InputPurpose::SendBackNote {
+                        self.work_note_cancelled();
+                    }
                 }
                 InputAction::Submit(text) => {
                     self.mode = Mode::Normal;
@@ -1243,6 +1310,7 @@ impl App {
                         InputPurpose::RoutedPrompt => self.route_prompt(&text),
                         InputPurpose::Variable => self.answer_variable(text),
                         InputPurpose::PlanNote => self.submit_plan_note(&text),
+                        InputPurpose::SendBackNote => self.submit_send_back(&text),
                         InputPurpose::BoardAnswer => self.submit_board_answer(&text),
                         InputPurpose::Search => Ok(()),
                         InputPurpose::WorkspaceSession => self.create_workspace_session(&text),

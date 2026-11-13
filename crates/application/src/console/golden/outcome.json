@@ -41,6 +41,7 @@
       "wall_minutes": 90,
       "on_exhaust": "escalate"
     },
+    "due": null,
     "note": null
   },
   "jobs": [
@@ -143,7 +144,7 @@
     "truncated": false
   },
   "evidence": {
-    "bundle_hash": "df431738cd0c9c175dd34c3a2bfadccb90a4e1fdb8423a4d10c39e141983271d",
+    "bundle_hash": "45f94f219621aef0a5d63e373fbd3e6d4a8ce2cefca0f1bffb0ad524fcad3988",
     "sealed_at": 2100000,
     "seq_from": 10,
     "seq_to": 42,
@@ -158,6 +159,29 @@
     "deletions": 4,
     "hash": "d1ff"
   },
+  "files": [
+    {
+      "path": "src/etl.rs",
+      "insertions": 12,
+      "deletions": 2,
+      "binary": false,
+      "change": "modified"
+    },
+    {
+      "path": "src/etl/counts.rs",
+      "insertions": 5,
+      "deletions": 1,
+      "binary": false,
+      "change": "modified"
+    },
+    {
+      "path": "docs/etl.md",
+      "insertions": 3,
+      "deletions": 1,
+      "binary": false,
+      "change": "modified"
+    }
+  ],
   "landing": null,
   "spend": {
     "total_usd": 1.94,
@@ -227,6 +251,14 @@
       "kind": "reject_plan",
       "enabled": false,
       "reason": "no plan waits for a decision",
+      "job": 1,
+      "mission": "fix-invoice",
+      "request": null
+    },
+    {
+      "kind": "send_back",
+      "enabled": false,
+      "reason": "the work is delivered: change it with a new mission",
       "job": 1,
       "mission": "fix-invoice",
       "request": null

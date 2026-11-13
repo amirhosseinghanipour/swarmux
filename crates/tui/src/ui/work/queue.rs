@@ -14,7 +14,8 @@ use swarmux_application::console::{
 use swarmux_domain::Millis;
 
 use super::util::{
-    Lines, Mark, fit, heading, lifecycle_word, mark, priority_color, priority_text, span,
+    Lines, Mark, due_text, duration, fit, heading, lifecycle_word, mark, priority_color,
+    priority_text, span,
 };
 use crate::app::App;
 use crate::theme::Theme;
@@ -265,7 +266,7 @@ fn item(
         ]));
     }
     if g.kind == GroupKind::Decide
-        && let Some(cost) = cost_line(snap, o, now)
+        && let Some(cost) = cost_line(snap, o, now, (app.utc_offset)())
     {
         rows.push(Line::from(vec![
             Span::raw("    "),
@@ -336,8 +337,18 @@ fn detail(
 /// The cost of waiting: only what the data says. The countdown of the
 /// auto-deny of a held call, and what this holds up through the task
 /// dependencies of its plan.
-fn cost_line(snap: &ConsoleSnapshot, o: &OutcomeView, now: Millis) -> Option<String> {
+fn cost_line(
+    snap: &ConsoleSnapshot,
+    o: &OutcomeView,
+    now: Millis,
+    utc_offset: i32,
+) -> Option<String> {
     let mut parts: Vec<String> = Vec::new();
+    // Only a contract that says when it is needed has a due time to show:
+    // none is ever made up.
+    if let Some(due) = o.contract.as_ref().and_then(|c| c.due) {
+        parts.push(due_text(due, now, utc_offset));
+    }
     let deadline = o
         .asks
         .iter()
@@ -463,5 +474,80 @@ fn capacity(app: &App, snap: &ConsoleSnapshot, w: usize) -> Lines {
         sched.push_str(&format!(" · awaiting reset {}", q.awaiting_reset));
     }
     lines.push(Line::from(span(sched, Style::new().fg(t.dim))));
+    lines.extend(metrics(app, snap, w));
     lines
+}
+
+/// How verification has gone over the metrics window, from the ledger:
+/// what the gate passed at the first claim, how long a claim took to be
+/// verified, how much was verified an hour, the checks that ran and the
+/// bundles sealed. A figure with nothing behind it is left out, not shown
+/// as zero.
+fn metrics(app: &App, snap: &ConsoleSnapshot, w: usize) -> Lines {
+    let t = &app.look.theme;
+    let Some(m) = &snap.metrics else {
+        return Vec::new();
+    };
+    let hours = (m.window_ms / 3_600_000).max(1);
+    let mut head: Vec<String> = Vec::new();
+    if let Some(f) = &m.first_run {
+        head.push(format!(
+            "first-run {:.0}% ({}/{})",
+            f.rate * 100.0,
+            f.passed,
+            f.judged
+        ));
+    }
+    if m.verified > 0 {
+        head.push(format!("{} verified", m.verified));
+    }
+    if let Some(rate) = m.verified_per_hour {
+        head.push(if rate < 0.1 {
+            format!("{rate:.2}/h")
+        } else {
+            format!("{rate:.1}/h")
+        });
+    }
+    // One figure group per row: the passes, how long a claim took, what ran.
+    let mut groups: Vec<String> = Vec::new();
+    if !head.is_empty() {
+        groups.push(head.join(" · "));
+    }
+    if let Some(s) = &m.claim_to_verified {
+        groups.push(format!(
+            "claim→verified {} med · {} p90",
+            duration(s.median_ms),
+            duration(s.p90_ms)
+        ));
+    }
+    let mut ran: Vec<String> = Vec::new();
+    if m.checks_run > 0 {
+        ran.push(format!("{} checks", m.checks_run));
+    }
+    if m.bundles_sealed > 0 {
+        ran.push(format!("{} sealed", m.bundles_sealed));
+    }
+    if !m.complete {
+        ran.push("newest only".to_string());
+    }
+    if !ran.is_empty() {
+        groups.push(ran.join(" · "));
+    }
+    if groups.is_empty() {
+        groups.push("nothing judged yet".to_string());
+    }
+    let label = format!("last {hours}h ");
+    let pad = " ".repeat(label.chars().count());
+    groups
+        .into_iter()
+        .enumerate()
+        .map(|(i, text)| {
+            let lead = if i == 0 { label.clone() } else { pad.clone() };
+            let room = w.saturating_sub(lead.chars().count());
+            Line::from(vec![
+                span(lead, Style::new().fg(t.dim)),
+                span(fit(&text, room), Style::new().fg(t.muted)),
+            ])
+        })
+        .collect()
 }

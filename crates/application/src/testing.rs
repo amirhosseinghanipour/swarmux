@@ -1515,6 +1515,8 @@ pub struct FakeChanges {
     pub broken: RefCell<Option<String>>,
     /// The folders asked about.
     pub asked: RefCell<Vec<PathBuf>>,
+    /// The files with their counted lines, when a test wants counts.
+    pub counted: RefCell<Vec<swarmux_domain::evidence::DiffFile>>,
 }
 
 impl crate::missions::ChangedFiles for FakeChanges {
@@ -1524,6 +1526,10 @@ impl crate::missions::ChangedFiles for FakeChanges {
             Some(why) => Err(AppError::Workspace(why)),
             None => Ok(self.files.borrow().clone()),
         }
+    }
+
+    fn changed_stats(&self, _dir: &Path) -> AppResult<Vec<swarmux_domain::evidence::DiffFile>> {
+        Ok(self.counted.borrow().clone())
     }
 }
 

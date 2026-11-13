@@ -111,6 +111,7 @@
   "claim": null,
   "evidence": null,
   "diff": null,
+  "files": [],
   "landing": null,
   "spend": {
     "total_usd": 0.5,
@@ -180,6 +181,14 @@
       "kind": "reject_plan",
       "enabled": false,
       "reason": "no plan waits for a decision",
+      "job": 2,
+      "mission": null,
+      "request": 7
+    },
+    {
+      "kind": "send_back",
+      "enabled": true,
+      "reason": null,
       "job": 2,
       "mission": null,
       "request": 7

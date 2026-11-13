@@ -48,6 +48,7 @@ fn bundle() -> Bundle {
             insertions: 40,
             deletions: 5,
             hash: "dd".into(),
+            changes: Vec::new(),
         },
         checks: vec![check("test", true)],
         hidden: None,
@@ -109,6 +110,45 @@ fn a_bundle_round_trips_through_json() {
     assert_eq!(back, b, "{text}");
     assert_eq!(back.digest(), b.digest());
     assert_eq!(back.signature_ok(), Ok(true));
+}
+
+#[test]
+fn per_file_counts_are_kept_in_the_bundle_and_read_back() {
+    let mut b = bundle();
+    b.diff.changes = vec![
+        DiffFile::text("src/search.rs", 30, 5).with_kind(ChangeKind::Modified),
+        DiffFile::text("src/index.rs", 10, 0).with_kind(ChangeKind::Added),
+    ];
+    b.signature = Some(Signature {
+        alg: "sha256".into(),
+        value: b.digest_hex(),
+    });
+    let text = b.to_json();
+    assert!(
+        text.contains("\"changes\":[{\"path\":\"src/search.rs\""),
+        "{text}"
+    );
+    let back = Bundle::from_json(&text).unwrap();
+    assert_eq!(back, b);
+    assert_eq!(back.signature_ok(), Ok(true));
+    // The list is part of what the digest covers.
+    let mut other = b.clone();
+    other.diff.changes[0].insertions = 31;
+    assert_ne!(other.digest(), b.digest());
+}
+
+#[test]
+fn a_bundle_without_per_file_counts_keeps_its_old_bytes_and_digest() {
+    // A bundle sealed before the counts were kept has no "changes" key; one
+    // sealed now with no files writes none either, so old digests hold.
+    let b = bundle();
+    assert!(!b.body_json().contains("changes"), "{}", b.body_json());
+    let old = r#"{"files":3,"insertions":40,"deletions":5,"hash":"dd"}"#;
+    assert!(b.body_json().contains(old), "{}", b.body_json());
+    let back = Bundle::from_json(&b.to_json()).unwrap();
+    assert!(back.diff.changes.is_empty());
+    assert_eq!(back.diff.files, 3, "the totals stand alone");
+    assert_eq!(back.digest(), b.digest());
 }
 
 #[test]

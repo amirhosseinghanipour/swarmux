@@ -20,10 +20,28 @@
 //! - The enums mirror the domain's, one by one (see the `From` impls), so
 //!   the words on the wire are chosen here and not by a refactor there.
 //!
-//! What is deliberately not here, because nothing backs it today: a
-//! mission due date, the cost of delay, intent inference, per-file
-//! accept or revert, pause, merge to main. Per-file diff counts are
-//! omitted (only totals exist; C3 adds `files` to [`DiffView`]).
+//! What is deliberately not here, because nothing backs it today: the
+//! cost of delay, intent inference, per-file accept or revert, pause,
+//! merge to main.
+//!
+//! # Added since the first shape (still schema 1)
+//!
+//! These were added as optional or empty-by-default fields, which the
+//! rules above say do not change [`SCHEMA_VERSION`]: a client written
+//! before them ignores what it does not know, and the golden fixtures were
+//! updated on purpose.
+//!
+//! - [`OutcomeView::files`], [`DriftView::outside_files`] and
+//!   [`PlanTaskView::changed`]: the files of a change with the lines git
+//!   counted in each. Empty when no count was kept (a bundle sealed
+//!   before they were, a change compared by name only): then only the
+//!   totals ([`DiffView`]) exist, and no count is worked out after the
+//!   fact.
+//! - [`ContractView::due`]: the mission's due time, `null` when the
+//!   contract has none.
+//! - [`ActionKind::SendBack`]: send the work back to the agent with a note,
+//!   or deny a held call with one.
+//! - [`ConsoleSnapshot::metrics`]: the verification figures.
 
 use serde::{Deserialize, Serialize};
 use swarmux_domain::console as rules;
@@ -62,6 +80,78 @@ pub struct ConsoleSnapshot {
     /// Calls held for the user (and recent denials), most urgent first.
     pub holds: Vec<HoldView>,
     pub deck: DeckGraph,
+    /// The verification figures of the last hours, from the ledger; `null`
+    /// where no ledger is read.
+    pub metrics: Option<MetricsView>,
+}
+
+/// How verification has gone: the gate's passes and how long claims took
+/// to be verified, from the ledger's entries. A figure there is nothing to
+/// derive from is `null`, never zero. The definitions are those of
+/// `swarmux_domain::console::compute_metrics`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MetricsView {
+    /// The window's end.
+    pub at: Millis,
+    /// The window asked for, and how much of it the ledger covers.
+    pub window_ms: u64,
+    pub covered_ms: u64,
+    /// The whole window was read; false when the read was cut short and
+    /// the figures describe only its newest part.
+    pub complete: bool,
+    /// Gate passes at the first claim.
+    pub first_run: Option<FirstRunView>,
+    /// From the first claim to the pass.
+    pub claim_to_verified: Option<SpreadView>,
+    /// Jobs the gate passed in the window.
+    pub verified: u32,
+    pub verified_per_hour: Option<f64>,
+    pub checks_run: u32,
+    pub bundles_sealed: u32,
+}
+
+/// First-run gate passes.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct FirstRunView {
+    pub passed: u32,
+    /// Jobs whose first judged claim the window saw.
+    pub judged: u32,
+    /// `passed / judged`, `0.0..=1.0`.
+    pub rate: f64,
+}
+
+/// Median and 90th percentile of how long claims took to be verified.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SpreadView {
+    pub median_ms: u64,
+    pub p90_ms: u64,
+    pub samples: u32,
+}
+
+impl From<&swarmux_domain::console::Metrics> for MetricsView {
+    fn from(m: &swarmux_domain::console::Metrics) -> MetricsView {
+        let ms = |x: Millis| u64::try_from(x).unwrap_or(0);
+        MetricsView {
+            at: m.at,
+            window_ms: ms(m.window_ms),
+            covered_ms: ms(m.covered_ms),
+            complete: m.complete,
+            first_run: m.first_run.map(|f| FirstRunView {
+                passed: f.passed,
+                judged: f.judged,
+                rate: f.rate(),
+            }),
+            claim_to_verified: m.claim_to_verified.map(|s| SpreadView {
+                median_ms: s.median_ms,
+                p90_ms: s.p90_ms,
+                samples: s.samples,
+            }),
+            verified: m.verified,
+            verified_per_hour: m.verified_per_hour,
+            checks_run: m.checks_run,
+            bundles_sealed: m.bundles_sealed,
+        }
+    }
 }
 
 /// The Work queue's groups.
@@ -237,6 +327,11 @@ pub struct OutcomeView {
     pub evidence: Option<EvidenceView>,
     /// Totals of the change; `None` until the evidence is sealed.
     pub diff: Option<DiffView>,
+    /// The files of the change with the lines git counted in each: from
+    /// the sealed bundle, else from what was changed when the build was
+    /// checked against its plan. Empty when neither kept them; the totals
+    /// of [`OutcomeView::diff`] then stand alone.
+    pub files: Vec<DiffFileView>,
     /// What landing does or did; `None` where nothing lands (a plain job,
     /// or a mission worked in one folder).
     pub landing: Option<LandingView>,
@@ -317,6 +412,8 @@ pub struct ContractView {
     /// Globs the agent is meant to work in; empty is anywhere.
     pub work_in: Vec<String>,
     pub budget: BudgetView,
+    /// When it is needed by, if the contract says so. Never made up.
+    pub due: Option<Millis>,
     /// Why it was escalated or refused.
     pub note: Option<String>,
 }
@@ -428,6 +525,9 @@ pub struct PlanTaskView {
     /// Where it stands, once the plan runs as a task graph.
     pub state: Option<TaskState>,
     pub job: Option<i64>,
+    /// The changed files inside the task's areas, with their lines; empty
+    /// when no count was kept or nothing changed there.
+    pub changed: Vec<DiffFileView>,
 }
 
 /// A task of a task graph.
@@ -463,6 +563,9 @@ pub struct DriftView {
     /// Changed files outside every planned area (the first few).
     pub outside: Vec<String>,
     pub outside_count: u32,
+    /// The files outside every planned area with their lines; empty when no
+    /// count was kept.
+    pub outside_files: Vec<DiffFileView>,
     pub tasks: u32,
     /// Ids of the planned tasks no change touched.
     pub untouched: Vec<String>,
@@ -508,7 +611,8 @@ pub struct CheckRunView {
     pub name: String,
     pub status: CheckStatus,
     pub duration_ms: u64,
-    /// The first failing line, verbatim; only for a check that failed.
+    /// The first failing line, verbatim; only for a check that failed (for
+    /// one that could not start, why it could not).
     pub first_failure: Option<String>,
 }
 
@@ -637,7 +741,8 @@ pub enum SignatureState {
     Unchecked,
 }
 
-/// What changed, in totals. Per-file counts are not kept yet.
+/// What changed, in totals. The files behind them are
+/// [`OutcomeView::files`].
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DiffView {
     pub files: u32,
@@ -645,6 +750,48 @@ pub struct DiffView {
     pub deletions: u32,
     /// The digest of the diff.
     pub hash: String,
+}
+
+/// One file of a change, with the lines git counted in it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiffFileView {
+    /// Relative to the repository, with `/`.
+    pub path: String,
+    pub insertions: u32,
+    pub deletions: u32,
+    /// git counts no lines of a binary file: 0 and 0 there do not mean
+    /// nothing changed.
+    pub binary: bool,
+    /// How it changed, when git said.
+    pub change: Option<ChangeKind>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChangeKind {
+    Added,
+    Modified,
+    Deleted,
+}
+mirror!(
+    ChangeKind
+        <= swarmux_domain::evidence::ChangeKind {
+            Added,
+            Modified,
+            Deleted
+        }
+);
+
+impl From<&swarmux_domain::evidence::DiffFile> for DiffFileView {
+    fn from(f: &swarmux_domain::evidence::DiffFile) -> DiffFileView {
+        DiffFileView {
+            path: f.path.clone(),
+            insertions: f.insertions,
+            deletions: f.deletions,
+            binary: f.binary,
+            change: f.kind.map(ChangeKind::from),
+        }
+    }
 }
 
 /// What landing does, or did: each repository's branch merged into the
@@ -747,6 +894,7 @@ pub enum ActionKind {
     AnswerHeldCall,
     ApprovePlan,
     RejectPlan,
+    SendBack,
 }
 mirror!(
     ActionKind
@@ -759,6 +907,7 @@ mirror!(
             AnswerHeldCall,
             ApprovePlan,
             RejectPlan,
+            SendBack,
         }
 );
 

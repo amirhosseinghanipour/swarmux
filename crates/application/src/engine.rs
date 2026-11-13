@@ -19,6 +19,7 @@ use crate::guard::GuardService;
 use crate::hookbus::HookBus;
 use crate::jobs::{JobFact, JobService};
 use crate::knowledge::KnowledgeService;
+use crate::ledger::LedgerService;
 use crate::missions::MissionService;
 use crate::watchdog::Watchdog;
 use crate::{AppError, AppResult};
@@ -44,6 +45,8 @@ pub struct Engine {
     pub followups: Option<Rc<crate::followup::FollowUpService>>,
     /// What the repositories of a workspace provide and consume.
     pub contracts: Option<Rc<ContractService>>,
+    /// Where the operator's notes to agents are recorded.
+    pub ledger: Option<Rc<LedgerService>>,
 }
 
 /// What one [`Engine::pump`] did.
@@ -78,6 +81,7 @@ impl Engine {
             knowledge: None,
             followups: None,
             contracts: None,
+            ledger: None,
         }
     }
 

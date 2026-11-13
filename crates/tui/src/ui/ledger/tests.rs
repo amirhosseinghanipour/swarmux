@@ -211,6 +211,7 @@ fn contract(title: &str, goal: &str, checks: &[&str], usd: f64) -> Contract {
             wall_minutes: Some(90),
             ..Budget::default()
         },
+        due: None,
         clarifications: Vec::new(),
         repos: Vec::new(),
     }

@@ -634,7 +634,7 @@ fn render_composer(frame: &mut Frame, area: Rect, app: &App, c: &Composer) {
     }
     lines.push(Line::from(dim(
         t,
-        "checks split by ;   paths by ,   budget like $2 90m",
+        "checks split by ;   paths by ,   budget like $2 90m   due like 2026-11-14T16:00:00+03:30",
     )));
     lines.push(Line::default());
     let saved = c

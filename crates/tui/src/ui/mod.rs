@@ -339,6 +339,13 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App, t: &Theme) {
                         .unwrap_or("?")
                 ),
                 InputPurpose::PlanNote => "what should the plan change?".to_string(),
+                InputPurpose::SendBackNote => match &app.work_screen.note {
+                    Some(n) if matches!(n.target, crate::work::NoteTarget::Held(_)) => {
+                        format!("deny {} with a note", n.about)
+                    }
+                    Some(n) => format!("send {} back with a note", n.about),
+                    None => "note".to_string(),
+                },
                 InputPurpose::BoardAnswer => format!(
                     "answer · {}",
                     app.answering_question().unwrap_or_else(|| "—".into())
@@ -353,8 +360,15 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App, t: &Theme) {
                         .map_or_else(|| "—".to_string(), ToString::to_string)
                 ),
             };
+            let picks = app
+                .work_screen
+                .note
+                .as_ref()
+                .is_some_and(|n| !n.suggestions.is_empty());
             let keys = if *purpose == InputPurpose::Search {
                 "   enter keep · esc clear"
+            } else if *purpose == InputPurpose::SendBackNote && picks {
+                "   enter send · tab suggestions · esc cancel"
             } else {
                 "   enter send · esc cancel"
             };

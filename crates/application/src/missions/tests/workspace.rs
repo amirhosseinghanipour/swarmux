@@ -93,6 +93,7 @@ fn contract(repos: &[&str], checks: &[&str]) -> Contract {
             usd: Some(3.0),
             ..Budget::default()
         },
+        due: None,
         clarifications: Vec::new(),
     }
 }

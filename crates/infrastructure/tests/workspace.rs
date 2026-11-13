@@ -175,6 +175,7 @@ fn rig() -> Option<Rig> {
             usd: Some(1.0),
             ..Budget::default()
         },
+        due: None,
         clarifications: Vec::new(),
     };
     let slug = missions

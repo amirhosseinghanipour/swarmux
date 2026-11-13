@@ -8,10 +8,10 @@ use std::process::Output;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use swarmux_application::{AppError, AppResult, ChangedFiles, Checkout, Checkouts, HeadFacts, Vcs};
-use swarmux_domain::evidence::DiffSummary;
+use swarmux_domain::evidence::{ChangeKind, DiffFile, DiffSummary, diff_totals};
 use swarmux_domain::ledger::{hex, sha256};
 
-use crate::git::git_command;
+use crate::git::{NUMSTAT_ARGS, git_command, parse_changes};
 use crate::worktree::remove_dir_retrying;
 
 /// The empty tree of a SHA-1 repository: what a root commit changes from.
@@ -102,19 +102,15 @@ impl Vcs for GitVcs {
                 .unwrap_or_else(|| EMPTY_TREE.to_string()),
         };
         let stat = self
-            .ok(dir, &["diff", "--numstat", &from, head])
+            .ok(
+                dir,
+                &["diff", "--raw", "--numstat", "--no-renames", &from, head],
+            )
             .unwrap_or_default();
-        let (mut files, mut insertions, mut deletions) = (0u32, 0u32, 0u32);
-        for line in stat.lines() {
-            let mut cols = line.split('\t');
-            let (Some(ins), Some(del)) = (cols.next(), cols.next()) else {
-                continue;
-            };
-            files += 1;
-            // Binary files show "-": no lines to count.
-            insertions = insertions.saturating_add(ins.parse().unwrap_or(0));
-            deletions = deletions.saturating_add(del.parse().unwrap_or(0));
-        }
+        // Binary files show "-": no lines to count, marked as binary.
+        let changes = parse_changes(&stat);
+        let files = u32::try_from(changes.len()).unwrap_or(u32::MAX);
+        let (insertions, deletions) = diff_totals(&changes);
         let text = self.output(dir, &["diff", "--no-color", "--no-ext-diff", &from, head])?;
         let hash = if text.status.success() && !text.stdout.is_empty() {
             hex(&sha256(&text.stdout))
@@ -126,6 +122,7 @@ impl Vcs for GitVcs {
             insertions,
             deletions,
             hash,
+            changes,
         })
     }
 }
@@ -164,6 +161,71 @@ impl ChangedFiles for GitVcs {
         files.sort();
         files.dedup();
         Ok(files)
+    }
+
+    /// What `changed` lists, with the lines git counted in each file:
+    /// everything that differs from where the branch left the main line
+    /// (committed or not), and new files, whose lines are counted by
+    /// reading them (git has no diff for a file it does not track yet).
+    fn changed_stats(&self, dir: &Path) -> AppResult<Vec<DiffFile>> {
+        let Some(facts) = self.head(dir)? else {
+            return Err(AppError::Workspace(format!(
+                "{} is not in a git repository",
+                dir.display()
+            )));
+        };
+        let from = facts.base.unwrap_or(facts.head);
+        let mut args = vec!["diff"];
+        args.extend(NUMSTAT_ARGS);
+        args.push(&from);
+        let out = self.output(dir, &args)?;
+        if !out.status.success() {
+            return Err(AppError::Workspace("git diff failed".into()));
+        }
+        let mut files = parse_changes(&String::from_utf8_lossy(&out.stdout));
+        let others = self.output(dir, &["ls-files", "--others", "--exclude-standard"])?;
+        if !others.status.success() {
+            return Err(AppError::Workspace("git ls-files failed".into()));
+        }
+        for name in String::from_utf8_lossy(&others.stdout)
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+        {
+            if files.iter().any(|f| f.path == name) {
+                continue;
+            }
+            files.push(new_file(dir, name));
+        }
+        files.sort_by(|a, b| a.path.cmp(&b.path));
+        Ok(files)
+    }
+}
+
+/// The most of a new file read to count its lines.
+const COUNT_CAP: u64 = 4 * 1024 * 1024;
+
+/// An untracked file as an addition: its lines counted by reading it, or a
+/// binary file (a NUL byte in its first kilobytes) with none.
+fn new_file(dir: &Path, name: &str) -> DiffFile {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    let read = std::fs::File::open(dir.join(name))
+        .and_then(|f| f.take(COUNT_CAP).read_to_end(&mut bytes))
+        .is_ok();
+    let binary = read && bytes.iter().take(8000).any(|b| *b == 0);
+    let lines = if !read || binary || bytes.is_empty() {
+        0
+    } else {
+        let newlines = bytes.iter().filter(|b| **b == b'\n').count();
+        newlines + usize::from(bytes.last() != Some(&b'\n'))
+    };
+    DiffFile {
+        path: name.to_string(),
+        insertions: u32::try_from(lines).unwrap_or(u32::MAX),
+        deletions: 0,
+        binary,
+        kind: Some(ChangeKind::Added),
     }
 }
 
@@ -324,6 +386,59 @@ mod tests {
         // Without a base the change is the head commit's own.
         let alone = vcs.diff(dir.path(), None, &facts.head).unwrap();
         assert_eq!(alone, d);
+    }
+
+    #[test]
+    fn the_diff_keeps_each_file_with_its_lines_and_kind() {
+        let Some(dir) = repo() else { return };
+        let vcs = GitVcs::default();
+        let facts = vcs.head(dir.path()).unwrap().unwrap();
+        let d = vcs
+            .diff(dir.path(), facts.base.as_deref(), &facts.head)
+            .unwrap();
+        assert_eq!(
+            d.changes,
+            vec![
+                DiffFile::text("a.txt", 2, 0).with_kind(ChangeKind::Modified),
+                DiffFile::text("b.txt", 1, 0).with_kind(ChangeKind::Added),
+            ]
+        );
+        // The totals are the list's totals.
+        assert_eq!(d.files as usize, d.changes.len());
+        assert_eq!((d.insertions, d.deletions), diff_totals(&d.changes));
+    }
+
+    #[test]
+    fn changed_stats_count_committed_uncommitted_and_new_files() {
+        let Some(dir) = repo() else { return };
+        let p = dir.path();
+        std::fs::write(p.join("b.txt"), "b2\nb3\n").unwrap();
+        std::fs::write(p.join("new.txt"), "n1\nn2\nn3").unwrap();
+        std::fs::write(p.join("blob.bin"), [0u8, 1, 2, 3]).unwrap();
+        let files = GitVcs::default().changed_stats(p).unwrap();
+        let find = |name: &str| files.iter().find(|f| f.path == name).unwrap().clone();
+        // Committed on the branch.
+        assert_eq!(
+            find("a.txt"),
+            DiffFile::text("a.txt", 2, 0).with_kind(ChangeKind::Modified)
+        );
+        // Committed, then changed again: counted against where the branch began.
+        assert_eq!(
+            find("b.txt"),
+            DiffFile::text("b.txt", 2, 0).with_kind(ChangeKind::Added)
+        );
+        // New: lines counted by reading, the last line having no newline.
+        assert_eq!(
+            find("new.txt"),
+            DiffFile::text("new.txt", 3, 0).with_kind(ChangeKind::Added)
+        );
+        let blob = find("blob.bin");
+        assert!(blob.binary && blob.insertions == 0, "{blob:?}");
+        // The names are the ones `changed` lists.
+        let names: Vec<String> = files.iter().map(|f| f.path.clone()).collect();
+        assert_eq!(names, GitVcs::default().changed(p).unwrap());
+        let outside = tempfile::tempdir().unwrap();
+        assert!(GitVcs::default().changed_stats(outside.path()).is_err());
     }
 
     #[test]

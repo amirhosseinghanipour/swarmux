@@ -12,9 +12,11 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
+use swarmux_domain::evidence::DiffFile;
 use swarmux_domain::mission::{MissionState, compile};
 use swarmux_domain::plan::{
-    DEFAULT_DRIFT_THRESHOLD, Plan, PlanRecord, PlanStatus, check_drift, plan_brief, plan_prompt,
+    DEFAULT_DRIFT_THRESHOLD, Plan, PlanRecord, PlanStatus, check_drift, check_drift_counted,
+    plan_brief, plan_prompt,
 };
 use swarmux_domain::{AttentionItem, JobId, Millis};
 
@@ -90,6 +92,13 @@ pub trait PlanStore {
 /// The files a folder's work changed, relative to the repository.
 pub trait ChangedFiles {
     fn changed(&self, dir: &Path) -> AppResult<Vec<String>>;
+
+    /// The same files with the lines git counted in each. An adapter that
+    /// cannot count answers none, and the change is compared by name only:
+    /// a count is never worked out after the fact.
+    fn changed_stats(&self, _dir: &Path) -> AppResult<Vec<DiffFile>> {
+        Ok(Vec::new())
+    }
 }
 
 /// Where a job's work is: its worktree, else the mission's folder.
@@ -506,16 +515,20 @@ impl MissionService {
             Some(dirs) => dirs(job, &root),
             None => root,
         };
-        let files = match diffs.changed(&dir) {
-            Ok(files) => files,
-            Err(e) => {
-                self.plans.problems.push(AppError::Mission(format!(
-                    "{slug}: could not compare with the plan: {e}"
-                )));
-                return false;
-            }
+        let threshold = self.plans.settings.drift_threshold;
+        let report = match diffs.changed_stats(&dir) {
+            // With the lines git counted in each file: the report keeps them.
+            Ok(counted) if !counted.is_empty() => check_drift_counted(&plan, &counted, threshold),
+            _ => match diffs.changed(&dir) {
+                Ok(files) => check_drift(&plan, &files, threshold),
+                Err(e) => {
+                    self.plans.problems.push(AppError::Mission(format!(
+                        "{slug}: could not compare with the plan: {e}"
+                    )));
+                    return false;
+                }
+            },
         };
-        let report = check_drift(&plan, &files, self.plans.settings.drift_threshold);
         let summary = report.summary();
         let drifted = report.drifted();
         if let Some(r) = self.plans.records.get_mut(&slug) {

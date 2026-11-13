@@ -16,6 +16,45 @@ pub fn iso_minute(ms: Millis) -> String {
     format!("{} {:02}:{:02}", iso_date(ms), minutes / 60, minutes % 60)
 }
 
+/// UTC date and time of `ms` as an RFC 3339 timestamp, `YYYY-MM-DDTHH:MM:SSZ`
+/// (milliseconds are dropped).
+pub fn iso_utc(ms: Millis) -> String {
+    let secs = ms.rem_euclid(MS_PER_DAY) / 1000;
+    format!(
+        "{}T{:02}:{:02}:{:02}Z",
+        iso_date(ms),
+        secs / 3600,
+        secs % 3600 / 60,
+        secs % 60
+    )
+}
+
+/// Parses an RFC 3339 timestamp that says where it is: after the seconds
+/// (and a fraction) it must have `Z` or `+hh:mm` / `-hh:mm`. Unlike
+/// [`parse_iso_millis`] a timestamp with no offset is refused, not read as
+/// UTC: a time with no zone says nothing about when.
+pub fn parse_rfc3339_millis(s: &str) -> Option<Millis> {
+    let s = s.trim();
+    let b = s.as_bytes();
+    let mut i = 19;
+    if b.get(i) == Some(&b'.') {
+        i += 1;
+        while b.get(i).is_some_and(u8::is_ascii_digit) {
+            i += 1;
+        }
+    }
+    let has_offset = match b.get(i) {
+        Some(b'Z' | b'z') => i + 1 == b.len(),
+        Some(b'+' | b'-') => b.len() == i + 6 && b[i + 3] == b':',
+        _ => false,
+    };
+    if has_offset {
+        parse_iso_millis(s)
+    } else {
+        None
+    }
+}
+
 /// Parses an RFC 3339 UTC or offset timestamp (`2026-11-01T21:51:00.454Z`,
 /// `2026-11-01T21:51:00+03:30`) into unix milliseconds.
 pub fn parse_iso_millis(s: &str) -> Option<Millis> {
@@ -105,6 +144,43 @@ mod tests {
         assert_eq!(iso_minute(0), "1970-01-01 00:00");
         assert_eq!(iso_minute(1_793_613_600_000 + 61_000), "2026-11-02 10:01");
         assert_eq!(iso_minute(-60_000), "1969-12-31 23:59");
+    }
+
+    #[test]
+    fn utc_timestamps_round_trip() {
+        assert_eq!(iso_utc(0), "1970-01-01T00:00:00Z");
+        let ms = 1_793_613_600_000 + 61_000;
+        assert_eq!(iso_utc(ms), "2026-11-02T10:01:01Z");
+        assert_eq!(parse_iso_millis(&iso_utc(ms)), Some(ms));
+        assert_eq!(parse_iso_millis(&iso_utc(-1000)), Some(-1000));
+    }
+
+    #[test]
+    fn rfc3339_needs_an_offset() {
+        let at = 1_793_613_600_000; // 2026-11-02T10:00:00Z
+        for ok in [
+            "2026-11-02T10:00:00Z",
+            "2026-11-02T10:00:00z",
+            "2026-11-02T13:30:00+03:30",
+            "2026-11-02T10:00:00.250Z",
+            " 2026-11-02T10:00:00Z ",
+        ] {
+            assert!(parse_rfc3339_millis(ok).is_some(), "{ok}");
+        }
+        assert_eq!(parse_rfc3339_millis("2026-11-02T10:00:00Z"), Some(at));
+        assert_eq!(parse_rfc3339_millis("2026-11-02T13:30:00+03:30"), Some(at));
+        for bad in [
+            "",
+            "2026-11-02",
+            "2026-11-02T10:00:00",
+            "2026-11-02T10:00:00.5",
+            "2026-11-02T10:00:00+0330",
+            "2026-11-02T10:00:00Zx",
+            "2026-11-02 10:00",
+            "tomorrow",
+        ] {
+            assert_eq!(parse_rfc3339_millis(bad), None, "{bad}");
+        }
     }
 
     #[test]

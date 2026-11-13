@@ -286,12 +286,17 @@ impl WireReply {
             // The app never forwards "ask": in `claude -p` it would mean deny.
             Verdict::Ask | Verdict::Pass => "pass",
         };
-        let reason = match (&d.rule, d.verdict) {
+        let mut reason = match (&d.rule, d.verdict) {
             (Some(rule), Verdict::Allow) => format!("swarmux guard allowed it: {rule}"),
             (Some(rule), Verdict::Deny) => format!("swarmux guard denied it: {rule}"),
             (None, Verdict::Deny) => "swarmux guard denied it".to_string(),
             _ => String::new(),
         };
+        // The user's words ride along with a denial: Claude Code shows the
+        // reason to the agent, which can then change what it does.
+        if let (Some(note), Verdict::Deny) = (&d.note, d.verdict) {
+            reason.push_str(&format!(". The operator's note: {note}"));
+        }
         WireReply {
             decision: decision.into(),
             reason,
@@ -498,5 +503,29 @@ mod tests {
         assert_eq!(WireReply::pass().hook_output(), None);
         let ask = WireReply::from_decision(&Decision::new(Verdict::Ask, None));
         assert_eq!(ask.hook_output(), None);
+    }
+
+    #[test]
+    fn a_denial_carries_the_operators_note_to_the_agent() {
+        let note = "use the staging bucket, not prod";
+        let deny = WireReply::from_decision(
+            &Decision::new(Verdict::Deny, Some("denied in swarmux".into())).with_note(note),
+        );
+        let v: Value = serde_json::from_str(&deny.hook_output().unwrap()).unwrap();
+        assert_eq!(v["hookSpecificOutput"]["permissionDecision"], "deny");
+        assert_eq!(
+            v["hookSpecificOutput"]["permissionDecisionReason"],
+            "swarmux guard denied it: denied in swarmux. The operator's note: use the staging bucket, not prod"
+        );
+        // With no rule the note still arrives.
+        let bare = WireReply::from_decision(&Decision::new(Verdict::Deny, None).with_note(note));
+        assert!(bare.reason.ends_with(note), "{}", bare.reason);
+        // A blank note is no note; an allow has none to carry.
+        let blank = WireReply::from_decision(&Decision::new(Verdict::Deny, None).with_note("  "));
+        assert_eq!(blank.reason, "swarmux guard denied it");
+        let allow = WireReply::from_decision(
+            &Decision::new(Verdict::Allow, Some("ok".into())).with_note(note),
+        );
+        assert_eq!(allow.reason, "swarmux guard allowed it: ok");
     }
 }

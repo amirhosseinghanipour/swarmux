@@ -180,10 +180,12 @@ fn a_decision_selected_shows_the_queue_the_hold_and_the_actions_at_180x50() {
     assert!(out.contains("“Pushing the branch"), "{out}");
     // The selected row of the queue is marked.
     assert!(out.contains("▌ ◆ job 2: web-checkout"), "{out}");
-    // Nothing the product cannot do.
-    for banned in ["send back", "pause", "merge to main", "mission due"] {
+    // Nothing the product cannot do. (A held call can be denied with a
+    // note since C3, so the row is there.)
+    for banned in ["pause", "merge to main", "mission due"] {
         assert!(!out.contains(banned), "{banned}");
     }
+    assert!(out.contains("send back"), "{out}");
 }
 
 #[test]
@@ -335,6 +337,7 @@ fn the_tabs_show_the_stream_the_diff_and_every_check() {
     assert!(out.contains("the sealed diff totals appear when"), "{out}");
     app.work_screen.diff = Some(crate::work::DiffRead {
         job: 3,
+        files: Vec::new(),
         lines: vec!["@@ -1 +1 @@".into(), "-old".into(), "+new".into()],
         note: None,
     });
@@ -537,3 +540,5 @@ fn a_run_of_held_calls_shows_the_first_few_and_the_agents_words_once() {
     // The words the agent said once, however many calls share them.
     assert_eq!(out.matches("“Pushing the branch").count(), 1, "{out}");
 }
+
+mod c3;

@@ -96,6 +96,8 @@ struct Resolution {
     confidence: Option<f64>,
     /// `None`: the time the call was held.
     latency_us: Option<u64>,
+    /// The user's words for the agent, delivered with a denial.
+    note: Option<String>,
 }
 
 impl Resolution {
@@ -106,6 +108,7 @@ impl Resolution {
             source: Source::Guard,
             confidence: None,
             latency_us: None,
+            note: None,
         }
     }
 }
@@ -289,6 +292,19 @@ impl GuardService {
         self.resolve(request_id, Resolution::by_guard(Verdict::Deny, rule))
     }
 
+    /// Denies the held call and tells the agent why: `note` is delivered with
+    /// the denial, as part of the reason Claude Code shows the agent. The
+    /// decision log records the denial as any other. A blank note is a plain
+    /// denial.
+    pub fn deny_with_note(&mut self, request_id: u64, note: &str) -> AppResult<()> {
+        let rule = "denied in swarmux, with a note".to_string();
+        let how = Resolution {
+            note: Some(note.trim().to_string()).filter(|n| !n.is_empty()),
+            ..Resolution::by_guard(Verdict::Deny, rule)
+        };
+        self.resolve(request_id, how)
+    }
+
     /// Approves the call and allows calls exactly like it from now on.
     /// Other held calls the new rule covers are approved too.
     pub fn always_allow(&mut self, request_id: u64) -> AppResult<AlwaysAllowed> {
@@ -420,6 +436,7 @@ impl GuardService {
                     source: Source::Jev,
                     confidence: Some(confidence),
                     latency_us: Some(latency_us),
+                    note: None,
                 },
             );
         }
@@ -451,7 +468,10 @@ impl GuardService {
             .position(|h| h.request.request_id == request_id)
             .ok_or(AppError::ApprovalNotFound)?;
         let held = self.held.remove(i);
-        let decision = Decision::new(how.verdict, Some(how.rule));
+        let mut decision = Decision::new(how.verdict, Some(how.rule));
+        if let Some(note) = &how.note {
+            decision = decision.with_note(note);
+        }
         self.inbox.respond(request_id, &decision);
         let waited = u64::try_from(self.clock.now() - held.asked_at).unwrap_or(0);
         let latency = how.latency_us.unwrap_or(waited.saturating_mul(1000));

@@ -3,6 +3,7 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use swarmux_domain::mission::{Budget, Clarification, Contract, Mission};
+use swarmux_domain::{iso_utc, parse_rfc3339_millis};
 
 use crate::ui::input::Input;
 
@@ -25,8 +26,8 @@ impl MissionsScreen {
 }
 
 /// The composer's fields, top to bottom; answers follow them.
-pub const FIELDS: [&str; 7] = [
-    "title", "goal", "checks", "work in", "protect", "budget", "repos",
+pub const FIELDS: [&str; 8] = [
+    "title", "goal", "checks", "work in", "protect", "budget", "repos", "due",
 ];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -45,7 +46,7 @@ pub enum ComposerAction {
 pub struct Composer {
     /// The mission once saved.
     pub slug: Option<String>,
-    pub inputs: [Input; 7],
+    pub inputs: [Input; 8],
     /// One per question of the lint, in order.
     pub answers: Vec<Input>,
     /// Index into the fields, then into the answers.
@@ -74,6 +75,7 @@ impl Composer {
                 Input::with_text(&c.constraints.protected.join(", ")),
                 Input::with_text(&budget_text(&c.budget)),
                 Input::with_text(&c.repos.join(", ")),
+                Input::with_text(&c.due.map(iso_utc).unwrap_or_default()),
             ],
             answers: Vec::new(),
             focus: 1,
@@ -131,7 +133,7 @@ impl Composer {
     /// The contract the fields describe, with `asked`'s questions answered
     /// from the answer fields.
     pub fn contract(&self, asked: &[Clarification]) -> Result<Contract, String> {
-        let [title, goal, checks, rw, protect, budget, repos] = &self.inputs;
+        let [title, goal, checks, rw, protect, budget, repos, due] = &self.inputs;
         let goal = goal.text.trim();
         if goal.is_empty() {
             return Err("a mission needs a goal".into());
@@ -148,6 +150,7 @@ impl Composer {
                 protected: split(&protect.text, ','),
             },
             budget: parse_budget(&budget.text)?,
+            due: parse_due(&due.text)?,
             repos: split(&repos.text, ','),
             clarifications: asked
                 .iter()
@@ -162,6 +165,18 @@ impl Composer {
                 .collect(),
         })
     }
+}
+
+/// The due field: empty is no due time, else an RFC 3339 timestamp that
+/// says its offset (`2026-11-14T16:00:00+03:30`, or `Z`).
+fn parse_due(text: &str) -> Result<Option<swarmux_domain::Millis>, String> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Ok(None);
+    }
+    parse_rfc3339_millis(text).map(Some).ok_or_else(|| {
+        format!("due must be an RFC 3339 timestamp with an offset or Z, like 2026-11-14T16:00:00+03:30, not {text:?}")
+    })
 }
 
 fn split(text: &str, sep: char) -> Vec<String> {
@@ -272,6 +287,36 @@ mod tests {
             ComposerAction::Save
         );
         assert!(Composer::blank().contract(&[]).is_err(), "a goal is needed");
+    }
+
+    #[test]
+    fn the_due_field_is_empty_for_none_and_rfc3339_for_a_time() {
+        let at = 1_793_613_600_000; // 2026-11-02T10:00:00Z
+        // Editing a mission shows its due time (in UTC) and keeps it.
+        let mut m = Mission::new("m", "/r", Contract::default(), 0);
+        m.contract.goal = "make search fast".into();
+        m.contract.due = Some(at);
+        let mut c = Composer::edit(&m);
+        assert_eq!(c.inputs[7].text, "2026-11-02T10:00:00Z");
+        typed(&mut c, " enough");
+        assert_eq!(c.contract(&[]).unwrap().due, Some(at));
+        // A mission with none has an empty field, and stays without.
+        m.contract.due = None;
+        let c = Composer::edit(&m);
+        assert_eq!(c.inputs[7].text, "");
+        assert_eq!(c.contract(&[]).unwrap().due, None);
+        // Typed: an offset is needed, and the answer says what is wanted.
+        let mut c = Composer::edit(&m);
+        c.inputs[7] = Input::with_text("2026-11-02T13:30:00+03:30");
+        assert_eq!(c.contract(&[]).unwrap().due, Some(at));
+        c.inputs[7] = Input::with_text("2026-11-02T13:30:00");
+        let e = c.contract(&[]).unwrap_err();
+        assert!(e.contains("RFC 3339") && e.contains("offset"), "{e}");
+        c.inputs[7] = Input::with_text("tomorrow");
+        assert!(c.contract(&[]).is_err());
+        // Cleared: no due time.
+        c.inputs[7] = Input::default();
+        assert_eq!(c.contract(&[]).unwrap().due, None);
     }
 
     #[test]
