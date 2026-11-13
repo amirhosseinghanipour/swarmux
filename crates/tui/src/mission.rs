@@ -448,6 +448,17 @@ pub(crate) fn gate_chips(g: &GateState) -> Vec<Chip> {
     if g.notes.ran_in == Some(swarmux_domain::gate::RanIn::Worktree) {
         out.push(chip("ran in the worktree".into(), Tone::Warn));
     }
+    // A job that ended and could not be verified says so; any other verdict
+    // that could not vouch for work with nothing wrong in it says that.
+    if g.notes
+        .incomplete
+        .iter()
+        .any(|s| s.starts_with("unverified"))
+    {
+        out.push(chip("unverified".into(), Tone::Bad));
+    } else if !g.notes.incomplete.is_empty() && g.outcome == GateOutcome::Escalate {
+        out.push(chip("cannot vouch".into(), Tone::Bad));
+    }
     if g.notes.substrate > 0 {
         out.push(chip("test harness changed".into(), Tone::Bad));
     }
@@ -955,6 +966,27 @@ mod verifier_chips {
                 .all(|(t, _)| !t.contains("hidden")),
             "nothing planned, nothing said"
         );
+    }
+
+    #[test]
+    fn a_job_that_could_not_be_verified_and_a_gate_that_could_not_vouch_say_so() {
+        let shown = chips(GateNotes {
+            incomplete: vec!["unverified: no clean copy: git is gone".into()],
+            ..GateNotes::default()
+        });
+        assert!(
+            shown.contains(&("unverified".to_string(), Tone::Bad)),
+            "{shown:?}"
+        );
+        let shown = chips(GateNotes {
+            incomplete: vec!["gates.toml could not be used: bad".into()],
+            ..GateNotes::default()
+        });
+        assert!(
+            shown.contains(&("cannot vouch".to_string(), Tone::Bad)),
+            "{shown:?}"
+        );
+        assert!(shown.iter().all(|(t, _)| t != "unverified"));
     }
 
     #[test]
