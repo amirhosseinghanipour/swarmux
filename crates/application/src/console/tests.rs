@@ -359,6 +359,7 @@ fn ask_call(
             input: String::new(),
             cwd: "/work/web-checkout".into(),
             content: String::new(),
+            ..HookRequest::default()
         },
         rule: None,
         secs_left: 3_000,
@@ -384,6 +385,7 @@ fn decision(
         ts,
         source: Source::Guard,
         confidence: None,
+        extra: crate::DecisionExtra::default(),
     }
 }
 

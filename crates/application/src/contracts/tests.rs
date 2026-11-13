@@ -319,6 +319,7 @@ fn request(job: JobId, tool: &str, path: &str) -> HookRequest {
         input: String::new(),
         cwd: String::new(),
         content: String::new(),
+        ..HookRequest::default()
     }
 }
 

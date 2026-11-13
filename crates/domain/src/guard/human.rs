@@ -95,7 +95,11 @@ mod tests {
     #[test]
     fn irreversible_calls_are_the_ones_that_need_it() {
         assert!(needs_typed_confirmation("Bash", "rm -rf build", "/w"));
-        assert!(needs_typed_confirmation("Bash", "git push --force origin x", "/w"));
+        assert!(needs_typed_confirmation(
+            "Bash",
+            "git push --force origin x",
+            "/w"
+        ));
         assert!(!needs_typed_confirmation("Bash", "cargo test", "/w"));
         assert!(!needs_typed_confirmation("Read", "/w/a.rs", "/w"));
     }

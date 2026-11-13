@@ -59,7 +59,7 @@ pub use contracts::{
     ContractService, ContractStore, FileRecord, PullContext, Rescanned, ScanStats, SourceFile,
     SourceTree, StartFan, WatchFan,
 };
-pub use decision::{DecisionRecord, Outcome, Source};
+pub use decision::{DecisionExtra, DecisionRecord, JevTrace, Outcome, Source};
 pub use engine::{Engine, EngineReport, MissionsPump};
 pub use error::{AppError, AppResult};
 pub use evidence::{
@@ -77,7 +77,9 @@ pub use gate::{
 };
 pub use governor::{Governor, PendingResume, ResumeBook, UsageProbe};
 pub use guard::{
-    AlwaysAllowed, GuardReport, GuardService, GuardStats, PendingApproval, SharedPolicy,
+    AlwaysAllowed, AlwaysSettings, Confirmation, GuardReport, GuardService, GuardStats,
+    IRREVERSIBLE_REASON, PROTECTED_REASON, PendingApproval, Protection, SharedPolicy,
+    UnattendedJobs,
 };
 pub use history::{HISTORY_LIMIT, HistoryService, JobDetail, JobSummary};
 pub use hookbus::{
@@ -111,9 +113,9 @@ pub use routing::{ROUTE_PROMPT_MAX, RouteReport, Routed, RoutingService};
 pub use sendback::{SentBack, send_back_prompt};
 pub use sessions::SessionService;
 pub use settings::{
-    BoardSettings, ConsoleSettings, GovernorSettings, GuardSettings, JevProvider, JevSettings,
-    LayoutSettings, MAX_SEND_BACK_NOTES, MotionSetting, ReviewSettings, ReviewWhen, RowSettings,
-    Settings, TelemetrySettings, UiSettings, WorktreeSettings,
+    BoardSettings, ConsoleSettings, FailMode, GovernorSettings, GuardSettings, JevProvider,
+    JevSettings, LayoutSettings, MAX_SEND_BACK_NOTES, MotionSetting, OnUnreachable, ReviewSettings,
+    ReviewWhen, RowSettings, Settings, TelemetrySettings, UiSettings, WorktreeSettings,
 };
 pub use telemetry::{
     ActivityView, AgentsPoll, Battery, CacheView, CiRun, Collected, CombinedStatusline, Commit,

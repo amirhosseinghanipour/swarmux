@@ -99,6 +99,31 @@ impl Source {
     }
 }
 
+/// How a model's answer came about: enough to tell, later, which model said
+/// what about which exact question.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct JevTrace {
+    pub provider: String,
+    pub model: String,
+    /// SHA-256 (hex) of what was sent.
+    pub prompt_sha256: String,
+    /// The summary of the call was cut before it was sent.
+    pub truncated: bool,
+}
+
+/// What a decision record carries beyond the call and its outcome.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DecisionExtra {
+    /// The subagent that made the call, when it was one.
+    pub agent_id: Option<String>,
+    pub agent_type: Option<String>,
+    /// Set on records of a model's answer.
+    pub jev: Option<JevTrace>,
+    /// What resolved the call: `human-typed`, `human-key`, `rule`, `model`
+    /// or `timeout`; unset for calls decided at once.
+    pub resolver: Option<String>,
+}
+
 /// One line of the decision log.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DecisionRecord {
@@ -112,6 +137,7 @@ pub struct DecisionRecord {
     pub source: Source,
     /// Only for model answers that came with one; never made up.
     pub confidence: Option<f64>,
+    pub extra: DecisionExtra,
 }
 
 #[cfg(test)]

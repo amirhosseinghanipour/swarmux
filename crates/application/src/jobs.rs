@@ -25,7 +25,9 @@ use crate::ports::{
 };
 use crate::workspace::WorkspaceStore;
 use crate::worktree::WorktreeService;
-use crate::{AppError, AppResult, RenderedPrompt, ReviewSettings, Settings};
+use crate::{
+    AppError, AppResult, OnUnreachable, RenderedPrompt, ReviewSettings, Settings, UnattendedJobs,
+};
 
 /// Finished jobs kept in memory for the queue and dashboard.
 const KEEP_FINISHED: usize = 50;
@@ -224,6 +226,10 @@ pub struct JobService {
     workspaces: Option<Rc<dyn WorkspaceStore>>,
     /// The repositories each workspace job touches (all when absent).
     scopes: HashMap<JobId, Vec<String>>,
+    /// The jobs nobody is watching, and what their hook does when swarmux
+    /// can't be reached.
+    unattended: UnattendedJobs,
+    on_unreachable: OnUnreachable,
     /// Told about each job as it starts (knowledge).
     starts: Option<Rc<dyn JobStarts>>,
 }
@@ -267,6 +273,8 @@ struct Lineage {
     base: Option<String>,
     /// The repositories of its workspace the job touches.
     repos: Option<Vec<String>>,
+    /// Nobody watches it: a mission's job, or one continuing such a job.
+    unattended: bool,
 }
 
 /// How often stale worktrees are looked for.
@@ -319,6 +327,8 @@ impl JobService {
             draining: false,
             workspaces: None,
             scopes: HashMap::new(),
+            unattended: UnattendedJobs::new(),
+            on_unreachable: OnUnreachable::default(),
             starts: None,
         }
     }
@@ -353,6 +363,20 @@ impl JobService {
     /// Gives the jobs on `board` its MCP server.
     pub fn with_board(mut self, board: Arc<crate::Board>) -> JobService {
         self.board = Some(board);
+        self
+    }
+
+    /// Tells the jobs nobody is watching (missions, reviewers and what
+    /// continues them) apart: `unattended` is shared with the Guard, and
+    /// `on_unreachable` sets what each job's hook does when swarmux can't be
+    /// reached (`SWARMUX_GUARD_FAIL`).
+    pub fn with_unattended(
+        mut self,
+        unattended: UnattendedJobs,
+        on_unreachable: OnUnreachable,
+    ) -> JobService {
+        self.unattended = unattended;
+        self.on_unreachable = on_unreachable;
         self
     }
 
@@ -595,7 +619,11 @@ impl JobService {
 
     /// Queues `prompt` for the session; it starts as soon as it is allowed to.
     pub fn dispatch(&mut self, session_id: SessionId, prompt: &str) -> AppResult<JobId> {
-        self.dispatch_capped(session_id, prompt, None)
+        let lineage = Lineage {
+            wants_review: self.review_next(),
+            ..Lineage::default()
+        };
+        self.enqueue(session_id, prompt, None, None, false, lineage)
     }
 
     /// Like [`JobService::dispatch`], spending at most `cap` dollars
@@ -609,6 +637,7 @@ impl JobService {
         let lineage = Lineage {
             wants_review: self.review_next(),
             cap,
+            unattended: true,
             ..Lineage::default()
         };
         self.enqueue(session_id, prompt, None, None, false, lineage)
@@ -627,6 +656,7 @@ impl JobService {
             wants_review: self.review_next(),
             cap,
             base: Some(base.to_string()),
+            unattended: true,
             ..Lineage::default()
         };
         self.enqueue(session_id, prompt, None, None, false, lineage)
@@ -646,6 +676,7 @@ impl JobService {
             wants_review: self.review_next(),
             cap,
             repos: Some(repos.to_vec()),
+            unattended: true,
             ..Lineage::default()
         };
         self.enqueue(session_id, prompt, None, None, false, lineage)
@@ -691,6 +722,7 @@ impl JobService {
         let lineage = Lineage {
             inherits: Some(id),
             cap: self.caps.get(&id).copied(),
+            unattended: self.unattended.contains(id),
             ..Lineage::default()
         };
         self.enqueue(
@@ -753,6 +785,7 @@ impl JobService {
             cap: self.caps.get(&id).copied(),
             base: None,
             repos: None,
+            unattended: self.unattended.contains(id),
         };
         self.enqueue(
             job.session_id,
@@ -850,6 +883,7 @@ impl JobService {
             cap: self.caps.get(&id).copied(),
             base: None,
             repos: None,
+            unattended: self.unattended.contains(id),
         };
         let model = restart.model.unwrap_or(job.model);
         let new = self.enqueue(
@@ -1198,6 +1232,7 @@ impl JobService {
             cap: self.caps.get(&id).copied(),
             base: None,
             repos: self.scopes.get(&id).cloned(),
+            unattended: self.unattended.contains(id),
         };
         self.enqueue(
             job.session_id,
@@ -1225,6 +1260,7 @@ impl JobService {
             cap,
             base,
             repos,
+            unattended,
         } = lineage;
         let prompt = prompt.trim();
         if prompt.is_empty() {
@@ -1246,6 +1282,9 @@ impl JobService {
             review_of,
         };
         let id = self.jobs.insert(&new, now)?;
+        if unattended || review_of.is_some() {
+            self.unattended.mark(id);
+        }
         if let Some(cap) = cap.filter(|c| c.is_finite() && *c > 0.0) {
             self.caps.insert(id, cap);
         }
@@ -1545,6 +1584,19 @@ impl JobService {
         if t.job.review_of.is_some() {
             t.progress.as_reviewer(offset);
         }
+        // What the job's hook does when it can't reach swarmux. A reviewer is
+        // started by swarmux, not by a person: nobody watches it either.
+        if t.job.review_of.is_some() {
+            self.unattended.mark(id);
+        }
+        let mut env = env;
+        env.push((
+            "SWARMUX_GUARD_FAIL".to_string(),
+            self.on_unreachable
+                .mode(self.unattended.contains(id))
+                .as_str()
+                .to_string(),
+        ));
         let request = RunRequest {
             job_id: id,
             cwd,

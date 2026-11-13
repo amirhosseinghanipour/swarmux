@@ -88,6 +88,11 @@ impl Challenge {
         }
     }
 
+    /// When the prompt opened.
+    pub fn opened_at(&self) -> Millis {
+        self.opened_at
+    }
+
     /// The choices in the order shown.
     pub fn options(&self) -> &[String] {
         &self.options

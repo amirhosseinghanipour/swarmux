@@ -247,6 +247,7 @@ impl G {
             input: String::new(),
             cwd,
             content: String::new(),
+            ..HookRequest::default()
         });
         let refused = d.verdict == Verdict::Deny;
         if refused {

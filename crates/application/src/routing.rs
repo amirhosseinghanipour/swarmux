@@ -331,6 +331,7 @@ impl RoutingService {
             ts: self.clock.now(),
             source: Source::Guard,
             confidence: None,
+            extra: crate::DecisionExtra::default(),
         }
     }
 

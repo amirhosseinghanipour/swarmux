@@ -673,3 +673,86 @@ fn shell_commands_are_reported_with_their_results() {
         ]
     );
 }
+
+// --- X1: what a job's hook does when swarmux can't be reached ---------------
+
+fn guard_fail(f: &Fixture, i: usize) -> String {
+    f.runner
+        .request(i)
+        .env
+        .iter()
+        .find(|(k, _)| k == "SWARMUX_GUARD_FAIL")
+        .map(|(_, v)| v.clone())
+        .unwrap_or_default()
+}
+
+fn fixture_with(on_unreachable: crate::OnUnreachable) -> (Fixture, crate::UnattendedJobs) {
+    let store = Rc::new(InMemoryStore::default());
+    let runner = Rc::new(FakeRunner::default());
+    let clock = Rc::new(FixedClock::new(10_000));
+    let monitor = Rc::new(FakeMonitor::default());
+    let session = add_session(&store, "demo");
+    let unattended = crate::UnattendedJobs::new();
+    let svc = JobService::new(store.clone(), store.clone(), runner.clone(), clock.clone())
+        .with_monitor(monitor.clone())
+        .with_limits(Limits {
+            max_concurrent: 4,
+            min_free_ram: GB,
+        })
+        .with_unattended(unattended.clone(), on_unreachable);
+    (
+        Fixture {
+            svc,
+            store,
+            runner,
+            clock,
+            monitor,
+            session,
+        },
+        unattended,
+    )
+}
+
+#[test]
+fn a_hook_fails_closed_for_unattended_jobs_and_open_for_the_rest_by_default() {
+    let (mut f, unattended) = fixture_with(crate::OnUnreachable::Auto);
+    let other = add_session(&f.store, "other");
+    let mine = f.svc.dispatch(f.session.id, "by hand").unwrap();
+    let mission = f
+        .svc
+        .dispatch_capped(other.id, "a mission's task", Some(2.0))
+        .unwrap();
+    assert_eq!(guard_fail(&f, 0), "open");
+    assert_eq!(guard_fail(&f, 1), "closed");
+    assert!(!unattended.contains(mine));
+    assert!(unattended.contains(mission));
+}
+
+#[test]
+fn what_continues_an_unattended_job_is_unattended_too() {
+    let (mut f, unattended) = fixture_with(crate::OnUnreachable::Auto);
+    let mission = f.svc.dispatch_capped(f.session.id, "task", None).unwrap();
+    f.finish(0);
+    f.svc.pump();
+    let again = f.svc.continue_with(mission, "send it back").unwrap();
+    assert!(unattended.contains(again));
+    assert_eq!(guard_fail(&f, 1), "closed");
+    let retried = f.svc.retry(mission).unwrap();
+    assert!(unattended.contains(retried));
+}
+
+#[test]
+fn the_setting_overrides_both_kinds_of_job() {
+    for (setting, plain, mission) in [
+        (crate::OnUnreachable::Deny, "closed", "closed"),
+        (crate::OnUnreachable::Ask, "ask", "ask"),
+        (crate::OnUnreachable::Pass, "open", "open"),
+    ] {
+        let (mut f, _) = fixture_with(setting);
+        let other = add_session(&f.store, "other");
+        f.svc.dispatch(f.session.id, "by hand").unwrap();
+        f.svc.dispatch_capped(other.id, "task", None).unwrap();
+        assert_eq!(guard_fail(&f, 0), plain, "{setting:?}");
+        assert_eq!(guard_fail(&f, 1), mission, "{setting:?}");
+    }
+}

@@ -1,25 +1,29 @@
 use super::*;
-use crate::testing::{FakeDecisionRepo, FakeHookInbox, FakeRuleWriter, FixedClock};
-use swarmux_domain::{GuardPolicy, Unmatched};
+use std::sync::Arc;
+
+use crate::testing::{FakeDecisionRepo, FakeHookInbox, FakeRuleStore, FixedClock, FixedRoots};
+use swarmux_domain::{DAY_MS, GuardPolicy, Unmatched};
 
 struct Fixture {
     svc: GuardService,
     inbox: Rc<FakeHookInbox>,
     repo: Rc<FakeDecisionRepo>,
-    rules: Rc<FakeRuleWriter>,
+    rules: Rc<FakeRuleStore>,
     clock: Rc<FixedClock>,
 }
 
 fn fixture(allow: &[&str], deny: &[&str], unmatched: Unmatched) -> Fixture {
     let parse = |l: &[&str]| l.iter().map(|r| Pattern::parse(r).unwrap()).collect();
-    let policy = SharedPolicy::new(GuardPolicy::new(parse(allow), parse(deny), unmatched));
+    let clock = Rc::new(FixedClock::new(1_000_000));
+    let policy = SharedPolicy::new(GuardPolicy::new(parse(allow), parse(deny), unmatched))
+        .with_roots(Arc::new(FixedRoots::repo("/w")))
+        .with_now(Arc::new(|| 1_000_000));
     let inbox = Rc::new(FakeHookInbox::default());
     let repo = Rc::new(FakeDecisionRepo::default());
-    let rules = Rc::new(FakeRuleWriter::default());
-    let clock = Rc::new(FixedClock::new(1_000_000));
+    let rules = Rc::new(FakeRuleStore::default());
     let svc = GuardService::new(policy, inbox.clone(), repo.clone(), clock.clone())
         .with_timeout_secs(120)
-        .with_rule_writer(rules.clone());
+        .with_rule_store(rules.clone());
     Fixture {
         svc,
         inbox,
@@ -178,7 +182,14 @@ fn always_allow_adds_and_saves_an_exact_rule() {
     let done = f.svc.always_allow(first).unwrap();
     assert_eq!(done.rule, "Bash(make all)");
     assert_eq!(done.not_saved, None);
-    assert_eq!(f.rules.rules(), ["Bash(make all)"]);
+    let kept = f.rules.rules();
+    assert_eq!(kept.len(), 1);
+    assert_eq!(kept[0].text, "Bash(make all)");
+    assert_eq!(
+        (kept[0].scope, kept[0].root.as_deref(), kept[0].source),
+        (RuleScope::Repo, Some("/w"), RuleSource::AlwaysAllow)
+    );
+    assert_eq!(kept[0].expires_at, Some(1_000_000 + 30 * DAY_MS));
     assert_eq!(verdict_of(&f, first), Some(Verdict::Allow));
     assert_eq!(
         verdict_of(&f, twin),
@@ -200,13 +211,14 @@ fn an_accepted_rule_covers_the_held_calls_it_matches() {
     let two = f.inbox.push(None, "Bash", "cargo test b");
     let other = f.inbox.push(None, "Bash", "cargo publish");
     f.svc.pump();
-    let done = f.svc.allow_rule("Bash(cargo test:*)").unwrap();
+    let done = f.svc.allow_rule("Bash(cargo test:*)", one).unwrap();
     assert_eq!(done.rule, "Bash(cargo test:*)");
-    assert_eq!(f.rules.rules(), ["Bash(cargo test:*)"]);
+    assert_eq!(f.rules.rules()[0].text, "Bash(cargo test:*)");
+    assert_eq!(f.rules.rules()[0].source, RuleSource::Suggestion);
     assert_eq!(verdict_of(&f, one), Some(Verdict::Allow));
     assert_eq!(verdict_of(&f, two), Some(Verdict::Allow));
     assert_eq!(verdict_of(&f, other), None);
-    assert!(f.svc.allow_rule("Bash(").is_err(), "not a rule");
+    assert!(f.svc.allow_rule("Bash(", other).is_err(), "not a rule");
 }
 
 #[test]
@@ -216,7 +228,7 @@ fn always_allow_still_works_when_saving_fails() {
     let id = f.inbox.push(None, "Bash", "make");
     f.svc.pump();
     let done = f.svc.always_allow(id).unwrap();
-    assert!(done.not_saved.unwrap().contains("too complex"));
+    assert!(done.not_saved.unwrap().contains("read-only"));
     assert_eq!(verdict_of(&f, id), Some(Verdict::Allow));
 }
 
@@ -436,4 +448,500 @@ fn shares_and_p95_cover_instant_decisions() {
     assert_eq!(s.share(s.allowed), Some(20.0 / 22.0));
     // The fake transport reports 7 µs; the policy itself takes at most a few.
     assert!(f.svc.p95_latency_us().unwrap() <= 1_000);
+}
+
+// --- X1: irreversible calls, scoped and expiring rules, protections -------
+
+use swarmux_domain::alarm::ARMING_MS;
+
+/// A held `rm -rf build` and the challenge a client would have shown for it.
+fn held_irreversible(f: &mut Fixture, job: Option<JobId>) -> (u64, Challenge) {
+    let id = f.inbox.push(job, "Bash", "rm -rf build");
+    f.svc.pump();
+    let call = f
+        .svc
+        .approvals()
+        .into_iter()
+        .find(|p| p.request.request_id == id);
+    let call = call.expect("an irreversible call is held for the owner");
+    let challenge = Challenge::new(id, "Bash", &call.request.subject, f.clock.now());
+    (id, challenge)
+}
+
+#[test]
+fn an_irreversible_call_is_never_allowed_by_a_rule() {
+    // Every kind of allow rule the owner can have, built-in or learned.
+    let mut f = fixture(
+        &["Bash", "Bash(rm:*)", "Bash(rm -rf build)"],
+        &[],
+        Unmatched::Ask,
+    );
+    let id = f.inbox.push(None, "Bash", "rm -rf build");
+    f.svc.pump();
+    assert_eq!(verdict_of(&f, id), None, "held, not allowed");
+    let row = f.repo.rows().pop().unwrap();
+    assert_eq!(row.outcome, Outcome::Ask);
+    assert!(
+        row.rule
+            .as_deref()
+            .unwrap()
+            .starts_with(IRREVERSIBLE_REASON)
+    );
+    // With unmatched = pass the call isn't left to Claude Code either.
+    let mut g = fixture(&[], &[], Unmatched::Pass);
+    let id = g.inbox.push(None, "Bash", "git reset --hard HEAD~3");
+    g.svc.pump();
+    assert_eq!(verdict_of(&g, id), None);
+    assert_eq!(g.svc.pending_count(), 1);
+}
+
+#[test]
+fn only_the_typed_confirmation_allows_an_irreversible_call() {
+    let mut f = fixture(&[], &[], Unmatched::Ask);
+    let (id, challenge) = held_irreversible(&mut f, Some(JobId(1)));
+
+    // A key press, "always", an accepted suggestion are refused or don't allow it.
+    assert!(matches!(
+        f.svc.approve(id),
+        Err(AppError::NeedsTypedConfirmation)
+    ));
+    assert!(matches!(f.svc.always_allow(id), Err(AppError::Guard(_))));
+    let rule = f.svc.allow_rule("Bash(rm:*)", id).unwrap();
+    assert_eq!(rule.rule, "Bash(rm:*)");
+    assert_eq!(
+        verdict_of(&f, id),
+        None,
+        "a rule made from it still doesn't allow it"
+    );
+    assert_eq!(f.svc.pending_count(), 1);
+
+    // Typed, but before the prompt armed.
+    let typed = Confirmation::Typed("build".into());
+    assert!(f.svc.confirm_irreversible(&challenge, &typed).is_err());
+    f.clock.advance(ARMING_MS);
+    // The wrong target, a challenge for another call.
+    let wrong = Confirmation::Typed("src".into());
+    assert!(f.svc.confirm_irreversible(&challenge, &wrong).is_err());
+    let forged = Challenge::new(id, "Bash", "rm -rf src", challenge.opened_at());
+    assert!(f.svc.confirm_irreversible(&forged, &typed).is_err());
+    let elsewhere = Challenge::new(id + 7, "Bash", "rm -rf build", challenge.opened_at());
+    assert!(matches!(
+        f.svc.confirm_irreversible(&elsewhere, &typed),
+        Err(AppError::ApprovalNotFound)
+    ));
+    assert_eq!(verdict_of(&f, id), None);
+
+    f.svc.confirm_irreversible(&challenge, &typed).unwrap();
+    let answer = f.inbox.answer_to(id).unwrap();
+    assert_eq!(answer.verdict, Verdict::Allow);
+    assert_eq!(answer.rule.as_deref(), Some("confirmed by naming build"));
+    let row = f.repo.rows().pop().unwrap();
+    assert_eq!(row.extra.resolver.as_deref(), Some("human-typed"));
+}
+
+#[test]
+fn a_picked_choice_confirms_too_and_other_calls_need_no_confirmation() {
+    let mut f = fixture(&[], &[], Unmatched::Ask);
+    let (id, challenge) = held_irreversible(&mut f, None);
+    f.clock.advance(ARMING_MS);
+    let right = (1..=4)
+        .find(|n| challenge.accepts_choice(*n, f.clock.now()))
+        .unwrap();
+    f.svc
+        .confirm_irreversible(&challenge, &Confirmation::Choice(right))
+        .unwrap();
+    assert_eq!(verdict_of(&f, id), Some(Verdict::Allow));
+    // An ordinary call can't be put through the confirmation.
+    let plain = f.inbox.push(None, "Bash", "make");
+    f.svc.pump();
+    let c = Challenge::new(plain, "Bash", "make", 0);
+    assert!(matches!(
+        f.svc
+            .confirm_irreversible(&c, &Confirmation::Typed("make".into())),
+        Err(AppError::Guard(_))
+    ));
+}
+
+#[test]
+fn an_unanswered_irreversible_call_times_out_as_a_denial() {
+    let mut f = fixture(&[], &[], Unmatched::Ask);
+    let (id, _) = held_irreversible(&mut f, None);
+    f.clock.advance(120_000);
+    f.svc.pump();
+    assert_eq!(verdict_of(&f, id), Some(Verdict::Deny));
+}
+
+mod jev_limits {
+    use super::*;
+    use crate::ports::AdviceAnswer;
+    use crate::testing::{FakeAdvisor, FakeConsents, advice};
+
+    fn with_jev() -> (Fixture, Rc<FakeAdvisor>) {
+        let mut f = fixture(&[], &[], Unmatched::Ask);
+        let advisor = Rc::new(FakeAdvisor::default());
+        let jev = Rc::new(
+            Jev::new(
+                advisor.clone(),
+                Rc::new(FakeConsents::default()),
+                f.clock.clone(),
+                0.85,
+            )
+            .unwrap(),
+        );
+        jev.grant().unwrap();
+        let svc = GuardService::new(
+            SharedPolicy::default().with_roots(Arc::new(FixedRoots::repo("/w"))),
+            f.inbox.clone(),
+            f.repo.clone(),
+            f.clock.clone(),
+        )
+        .with_jev(jev);
+        f.svc = svc;
+        (f, advisor)
+    }
+
+    #[test]
+    fn jev_answering_allow_with_full_confidence_cannot_allow_an_irreversible_call() {
+        let (mut f, advisor) = with_jev();
+        advisor.answer_with(advice(AdviceAnswer::Allow, 1.0));
+        let id = f.inbox.push(Some(JobId(2)), "Bash", "rm -rf build");
+        f.svc.pump();
+        f.svc.pump();
+        assert!(advisor.requests().is_empty(), "JEV is never asked about it");
+        assert_eq!(verdict_of(&f, id), None);
+        assert_eq!(f.svc.pending_count(), 1, "the owner is asked");
+        assert_eq!(f.svc.stats().jev, 0);
+    }
+
+    #[test]
+    fn a_confident_allow_above_the_risk_limit_goes_to_the_owner() {
+        let (mut f, advisor) = with_jev();
+        advisor.answer_with(advice(AdviceAnswer::Allow, 0.99));
+        // A network write is R3; the default limit is R1.
+        let id = f
+            .inbox
+            .push(Some(JobId(2)), "Bash", "curl -X POST https://x.test/y");
+        f.svc.pump();
+        f.svc.pump();
+        assert_eq!(advisor.requests().len(), 1, "it may still be asked");
+        assert_eq!(verdict_of(&f, id), None);
+        assert_eq!(f.svc.pending_count(), 1);
+        let rule = f.repo.rows().pop().unwrap().rule.unwrap();
+        assert!(rule.contains("above what it may allow (R1)"), "{rule}");
+    }
+
+    #[test]
+    fn a_confident_allow_up_to_the_limit_decides_and_is_traced() {
+        let (mut f, advisor) = with_jev();
+        advisor.answer_with(advice(AdviceAnswer::Allow, 0.99));
+        let id = f.inbox.push(Some(JobId(2)), "Bash", "make deploy");
+        f.svc.pump();
+        f.svc.pump();
+        assert_eq!(verdict_of(&f, id), Some(Verdict::Allow));
+        let row = f.repo.rows().pop().unwrap();
+        let trace = row.extra.jev.expect("the model's answer carries its trace");
+        assert_eq!(trace.provider, "typesafe");
+        assert_eq!(trace.prompt_sha256.len(), 64);
+        assert!(!trace.truncated);
+        assert_eq!(row.extra.resolver.as_deref(), Some("model"));
+    }
+
+    #[test]
+    fn a_long_subject_is_marked_cut_and_jev_may_always_deny() {
+        let (mut f, advisor) = with_jev();
+        advisor.answer_with(advice(AdviceAnswer::Deny, 0.99));
+        let long = format!("curl https://x.test/{}", "a".repeat(400));
+        let id = f.inbox.push(None, "Bash", &long);
+        f.svc.pump();
+        f.svc.pump();
+        assert_eq!(verdict_of(&f, id), Some(Verdict::Deny));
+        let row = f.repo.rows().pop().unwrap();
+        assert!(row.extra.jev.unwrap().truncated);
+    }
+
+    #[test]
+    fn a_tool_with_nothing_to_judge_is_not_sent_to_jev() {
+        let (mut f, advisor) = with_jev();
+        advisor.answer_with(advice(AdviceAnswer::Allow, 1.0));
+        let id = f.inbox.push(None, "mcp__github__create_issue", "");
+        f.svc.pump();
+        f.svc.pump();
+        assert!(advisor.requests().is_empty());
+        assert_eq!(verdict_of(&f, id), None);
+        assert_eq!(f.svc.pending_count(), 1);
+    }
+}
+
+#[test]
+fn always_allow_refuses_what_it_cannot_scope() {
+    let mut f = fixture(&[], &[], Unmatched::Ask);
+    let mcp = f.inbox.push(None, "mcp__github__create_issue", "");
+    let search = f.inbox.push(None, "WebSearch", "rust");
+    let compound = f.inbox.push(None, "Bash", "cargo build && cargo test");
+    f.svc.pump();
+    for id in [mcp, search, compound] {
+        assert!(
+            matches!(f.svc.always_allow(id), Err(AppError::Guard(_))),
+            "{id}"
+        );
+        assert_eq!(verdict_of(&f, id), None, "the call stays held");
+    }
+    assert!(f.rules.rules().is_empty());
+    // It can still be allowed once.
+    f.svc.approve(mcp).unwrap();
+    assert_eq!(verdict_of(&f, mcp), Some(Verdict::Allow));
+    // And a rule that is the bare tool name can't be accepted either.
+    assert!(matches!(
+        f.svc.allow_rule("WebSearch", search),
+        Err(AppError::Guard(_))
+    ));
+}
+
+/// A repository that follows what the test sets, and a time that follows it.
+struct Moving {
+    repo: std::sync::Mutex<String>,
+    now: std::sync::atomic::AtomicI64,
+}
+
+impl crate::ports::RepoRoots for Moving {
+    fn repo_root(&self, _: Option<JobId>, _: &str) -> Option<String> {
+        Some(self.repo.lock().unwrap().clone())
+    }
+    fn workspace_root(&self, _: Option<JobId>, _: &str) -> Option<String> {
+        None
+    }
+    fn tree_root(&self, cwd: &str) -> Option<String> {
+        Some(cwd.to_string())
+    }
+}
+
+fn moving_fixture(always: AlwaysSettings) -> (Fixture, Arc<Moving>) {
+    let moving = Arc::new(Moving {
+        repo: std::sync::Mutex::new("/repo-a".into()),
+        now: std::sync::atomic::AtomicI64::new(1_000_000),
+    });
+    let mut f = fixture(&[], &[], Unmatched::Ask);
+    let reader = moving.clone();
+    let policy = SharedPolicy::default()
+        .with_roots(moving.clone())
+        .with_now(Arc::new(move || {
+            reader.now.load(std::sync::atomic::Ordering::SeqCst)
+        }));
+    f.svc = GuardService::new(policy, f.inbox.clone(), f.repo.clone(), f.clock.clone())
+        .with_rule_store(f.rules.clone())
+        .with_always(always);
+    (f, moving)
+}
+
+#[test]
+fn an_always_allow_applies_in_its_own_repository_only() {
+    let (mut f, moving) = moving_fixture(AlwaysSettings::default());
+    let id = f.inbox.push(None, "Bash", "make all");
+    f.svc.pump();
+    let done = f.svc.always_allow(id).unwrap();
+    assert_eq!(done.scope, RuleScope::Repo);
+    assert_eq!(done.root.as_deref(), Some("/repo-a"));
+    let same = f.inbox.push(None, "Bash", "make all");
+    f.svc.pump();
+    assert_eq!(verdict_of(&f, same), Some(Verdict::Allow));
+    *moving.repo.lock().unwrap() = "/repo-b".into();
+    let other = f.inbox.push(None, "Bash", "make all");
+    f.svc.pump();
+    assert_eq!(verdict_of(&f, other), None, "another repository asks again");
+    *moving.repo.lock().unwrap() = "/repo-a/".into();
+    let back = f.inbox.push(None, "Bash", "make all");
+    f.svc.pump();
+    assert_eq!(verdict_of(&f, back), Some(Verdict::Allow));
+}
+
+#[test]
+fn a_global_scope_is_an_explicit_choice_and_applies_everywhere() {
+    let always = AlwaysSettings {
+        scope: RuleScope::Global,
+        expiry_days: None,
+    };
+    let (mut f, moving) = moving_fixture(always);
+    let id = f.inbox.push(None, "Bash", "make all");
+    f.svc.pump();
+    let done = f.svc.always_allow(id).unwrap();
+    assert_eq!(
+        (done.scope, done.root, done.expires_at),
+        (RuleScope::Global, None, None)
+    );
+    *moving.repo.lock().unwrap() = "/elsewhere".into();
+    let other = f.inbox.push(None, "Bash", "make all");
+    f.svc.pump();
+    assert_eq!(verdict_of(&f, other), Some(Verdict::Allow));
+}
+
+#[test]
+fn an_always_allow_expires() {
+    let (mut f, moving) = moving_fixture(AlwaysSettings {
+        scope: RuleScope::Repo,
+        expiry_days: Some(30),
+    });
+    let id = f.inbox.push(None, "Bash", "make all");
+    f.svc.pump();
+    let done = f.svc.always_allow(id).unwrap();
+    assert_eq!(done.expires_at, Some(1_000_000 + 30 * DAY_MS));
+    let set = |t: i64| moving.now.store(t, std::sync::atomic::Ordering::SeqCst);
+    set(1_000_000 + 30 * DAY_MS - 1);
+    let before = f.inbox.push(None, "Bash", "make all");
+    f.svc.pump();
+    assert_eq!(verdict_of(&f, before), Some(Verdict::Allow));
+    set(1_000_000 + 30 * DAY_MS);
+    let after = f.inbox.push(None, "Bash", "make all");
+    f.svc.pump();
+    assert_eq!(verdict_of(&f, after), None, "expired: asked again");
+}
+
+#[test]
+fn a_rule_removed_from_the_store_stops_applying() {
+    let (mut f, _) = moving_fixture(AlwaysSettings::default());
+    let id = f.inbox.push(None, "Bash", "make all");
+    f.svc.pump();
+    let done = f.svc.always_allow(id).unwrap();
+    assert!(f.svc.remove_rule(&done.id).unwrap());
+    assert!(!f.svc.remove_rule(&done.id).unwrap());
+    let again = f.inbox.push(None, "Bash", "make all");
+    f.svc.pump();
+    assert_eq!(verdict_of(&f, again), None);
+    assert!(f.rules.rules().is_empty());
+}
+
+#[test]
+fn rules_kept_by_an_earlier_run_are_loaded_and_another_process_can_remove_them() {
+    let (mut f, _) = moving_fixture(AlwaysSettings::default());
+    let stored = StoredRule::new(
+        "Bash(make all)",
+        RuleScope::Repo,
+        Some("/repo-a"),
+        RuleSource::AlwaysAllow,
+        1_000_000,
+        None,
+    );
+    crate::ports::RuleStore::add(&*f.rules, &stored).unwrap();
+    assert!(f.svc.load_rules().unwrap().is_empty());
+    assert_eq!(f.svc.rules().len(), 1);
+    let id = f.inbox.push(None, "Bash", "make all");
+    f.svc.pump();
+    assert_eq!(verdict_of(&f, id), Some(Verdict::Allow));
+    // `swarmux guard rules remove` in another process; the next reload sees it.
+    crate::ports::RuleStore::remove(&*f.rules, &stored.id).unwrap();
+    f.clock.advance(3_000);
+    let later = f.inbox.push(None, "Bash", "make all");
+    f.svc.pump();
+    assert_eq!(verdict_of(&f, later), None);
+}
+
+fn protected_fixture(unattended: Option<JobId>) -> Fixture {
+    let mut f = fixture(&[], &[], Unmatched::Ask);
+    let marks = UnattendedJobs::new();
+    if let Some(job) = unattended {
+        marks.mark(job);
+    }
+    let mut p = Protection::new(
+        vec![
+            "/home/u/.swarmux/swarmux.db".into(),
+            "/home/u/.swarmux/config.toml".into(),
+        ],
+        "/home/u",
+    );
+    p.exe = Some("/usr/bin/swarmux".into());
+    p.protected_globs = swarmux_domain::AGENT_CONFIG_PROTECTED
+        .iter()
+        .map(|g| g.to_string())
+        .collect();
+    let policy = SharedPolicy::new(GuardPolicy::new(
+        ["Edit(**)", "Write(**)", "Bash", "Read(**)"]
+            .iter()
+            .map(|r| Pattern::parse(r).unwrap())
+            .collect(),
+        vec![],
+        Unmatched::Ask,
+    ))
+    .with_roots(Arc::new(FixedRoots::repo("/w")))
+    .with_unattended(marks)
+    .with_protection(p);
+    f.svc = GuardService::new(policy, f.inbox.clone(), f.repo.clone(), f.clock.clone());
+    f
+}
+
+#[test]
+fn an_agent_may_not_run_the_owners_swarmux_commands() {
+    let mut f = protected_fixture(None);
+    let audit = f.inbox.push(None, "Bash", "swarmux audit checkpoint");
+    let statusline = f.inbox.push(None, "Bash", "swarmux statusline");
+    let hook = f.inbox.push(None, "Bash", "/usr/bin/swarmux hook pre-tool");
+    f.svc.pump();
+    assert_eq!(verdict_of(&f, audit), Some(Verdict::Deny));
+    assert_eq!(verdict_of(&f, statusline), Some(Verdict::Allow));
+    assert_eq!(verdict_of(&f, hook), Some(Verdict::Allow));
+    let rule = f.repo.rows()[0].rule.clone().unwrap();
+    assert!(rule.contains("`swarmux audit` is the owner's"), "{rule}");
+}
+
+#[test]
+fn state_and_config_files_are_out_of_reach_even_with_allow_rules() {
+    let mut f = protected_fixture(None);
+    let db = f.inbox.push(None, "Read", "/home/u/.swarmux/swarmux.db");
+    let cfg = f.inbox.push(None, "Edit", "/home/u/.swarmux/config.toml");
+    let sh = f
+        .inbox
+        .push(None, "Bash", "cat ~/.swarmux/swarmux.db | head");
+    f.svc.pump();
+    for id in [db, cfg, sh] {
+        assert_eq!(verdict_of(&f, id), Some(Verdict::Deny), "{id}");
+    }
+}
+
+#[test]
+fn writes_to_agent_config_files_are_held_for_the_owner_and_never_always_allowed() {
+    let mut f = protected_fixture(None);
+    let id = f.inbox.push(None, "Write", "/w/CLAUDE.md");
+    f.svc.pump();
+    assert_eq!(
+        verdict_of(&f, id),
+        None,
+        "held, though Write(**) is allowed"
+    );
+    let row = f.repo.rows().pop().unwrap();
+    assert!(row.rule.unwrap().starts_with(PROTECTED_REASON));
+    assert!(matches!(f.svc.always_allow(id), Err(AppError::Guard(_))));
+    f.svc.approve(id).unwrap();
+    assert_eq!(verdict_of(&f, id), Some(Verdict::Allow));
+    // Reading it, and writing code, are not held.
+    let read = f.inbox.push(None, "Read", "/w/CLAUDE.md");
+    let code = f.inbox.push(None, "Write", "/w/src/a.rs");
+    f.svc.pump();
+    assert_eq!(verdict_of(&f, read), Some(Verdict::Allow));
+    assert_eq!(verdict_of(&f, code), Some(Verdict::Allow));
+}
+
+#[test]
+fn an_unattended_job_is_denied_those_writes() {
+    let mut f = protected_fixture(Some(JobId(9)));
+    let mine = f
+        .inbox
+        .push(Some(JobId(9)), "Write", "/w/.claude/settings.json");
+    let watched = f
+        .inbox
+        .push(Some(JobId(1)), "Write", "/w/.claude/settings.json");
+    f.svc.pump();
+    assert_eq!(verdict_of(&f, mine), Some(Verdict::Deny));
+    assert_eq!(verdict_of(&f, watched), None, "a watched job is asked");
+}
+
+#[test]
+fn subagent_calls_carry_who_made_them_into_the_record() {
+    let mut f = fixture(&["Bash"], &[], Unmatched::Ask);
+    f.inbox
+        .push_by(Some(JobId(1)), "Bash", "ls", ("agent-7", "Explore"));
+    f.svc.pump();
+    let row = f.repo.rows().pop().unwrap();
+    assert_eq!(row.extra.agent_id.as_deref(), Some("agent-7"));
+    assert_eq!(row.extra.agent_type.as_deref(), Some("Explore"));
+    f.inbox.push(Some(JobId(1)), "Bash", "ls");
+    f.svc.pump();
+    assert_eq!(f.repo.rows().pop().unwrap().extra.agent_id, None);
 }

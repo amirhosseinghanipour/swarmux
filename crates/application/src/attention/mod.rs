@@ -168,6 +168,16 @@ impl AttentionService {
                 item.priority = swarmux_domain::Priority::P1;
                 item.detail = rule.clone();
             }
+            // A subagent's call says so: who is asking matters to the answer.
+            let by = match (&r.agent_type, &r.agent_id) {
+                (Some(kind), Some(id)) => Some(format!("subagent {kind} ({id})")),
+                (Some(kind), None) => Some(format!("subagent {kind}")),
+                (None, Some(id)) => Some(format!("subagent {id}")),
+                (None, None) => None,
+            };
+            if let Some(by) = by {
+                item.detail = format!("{by} · {}", item.detail);
+            }
             if let Some(sig) = &item.signature
                 && tally.should_suggest(sig.tier)
             {
@@ -488,6 +498,7 @@ mod tests {
                 input: String::new(),
                 cwd: "C:/work".into(),
                 content: String::new(),
+                ..HookRequest::default()
             },
             secs_left,
         }
@@ -631,6 +642,28 @@ mod tests {
     }
 
     #[test]
+    fn a_subagents_call_says_who_made_it() {
+        let mut svc = AttentionService::new();
+        let mut by_agent = held(1, 1, "Edit", "a.rs", 60);
+        by_agent.request.agent_type = Some("Explore".into());
+        by_agent.request.agent_id = Some("agent-7".into());
+        let plain = held(2, 1, "Edit", "b.rs", 60);
+        let items = svc.collect_from(&[by_agent, plain], &[fact(1, JobStatus::Running)], 5_000);
+        let detail = |id: &str| {
+            items
+                .iter()
+                .find(|i| i.id.to_string() == id)
+                .map(|i| i.detail.clone())
+                .unwrap()
+        };
+        assert_eq!(
+            detail("approval:1"),
+            "subagent Explore (agent-7) · waiting for your answer"
+        );
+        assert_eq!(detail("approval:2"), "waiting for your answer");
+    }
+
+    #[test]
     fn changes_list_lifecycle_and_notable_decisions_newest_first() {
         let mut done = fact(1, JobStatus::Done);
         done.finished_at = Some(9_000);
@@ -645,6 +678,7 @@ mod tests {
             ts,
             source: crate::Source::Guard,
             confidence: None,
+            extra: crate::DecisionExtra::default(),
         };
         let allow = decision(Outcome::Allow, 9_500, "Read");
         let deny = decision(Outcome::Deny, 8_000, "Bash");

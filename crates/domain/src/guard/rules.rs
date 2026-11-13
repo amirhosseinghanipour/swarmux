@@ -149,7 +149,11 @@ pub fn same_folder(a: &str, b: &str) -> bool {
     let norm = |s: &str| {
         let n = normalize(s).unwrap_or_else(|| s.replace('\\', "/"));
         let n = n.trim_end_matches('/').to_string();
-        if is_windows(&n) { n.to_ascii_lowercase() } else { n }
+        if is_windows(&n) {
+            n.to_ascii_lowercase()
+        } else {
+            n
+        }
     };
     norm(a) == norm(b)
 }
@@ -208,7 +212,14 @@ mod tests {
     use crate::guard::{GuardPolicy, Unmatched, Verdict};
 
     fn rule(scope: RuleScope, root: Option<&str>) -> StoredRule {
-        StoredRule::new("Bash(make)", scope, root, RuleSource::AlwaysAllow, 1_000, Some(5_000))
+        StoredRule::new(
+            "Bash(make)",
+            scope,
+            root,
+            RuleSource::AlwaysAllow,
+            1_000,
+            Some(5_000),
+        )
     }
 
     #[test]
@@ -249,7 +260,10 @@ mod tests {
         assert!(global.applies_to(None, None));
         assert!(rule(RuleScope::Repo, Some(r"C:\Proj")).applies_to(Some("c:/proj"), None));
         let no_root = rule(RuleScope::Repo, None);
-        assert!(!no_root.applies_to(Some("/r"), Some("/r")), "no root, no match");
+        assert!(
+            !no_root.applies_to(Some("/r"), Some("/r")),
+            "no root, no match"
+        );
     }
 
     #[test]
@@ -283,11 +297,15 @@ mod tests {
             "Bash(cargo test)"
         );
         assert_eq!(
-            always_rule("WebFetch", "https://docs.rs/x", "/w").unwrap().to_string(),
+            always_rule("WebFetch", "https://docs.rs/x", "/w")
+                .unwrap()
+                .to_string(),
             "WebFetch(domain:docs.rs)"
         );
         assert_eq!(
-            always_rule("Edit", "/w/src/a.rs", "/w").unwrap().to_string(),
+            always_rule("Edit", "/w/src/a.rs", "/w")
+                .unwrap()
+                .to_string(),
             "Edit(/src/a.rs)"
         );
     }
@@ -313,7 +331,9 @@ mod tests {
         let mut policy = GuardPolicy::new(vec![], vec![], Unmatched::Ask);
         policy.add_allow(whole);
         assert_eq!(
-            policy.decide("Bash", "cargo build && cargo test", "/w").verdict,
+            policy
+                .decide("Bash", "cargo build && cargo test", "/w")
+                .verdict,
             Verdict::Ask
         );
     }

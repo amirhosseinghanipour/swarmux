@@ -14,9 +14,15 @@ use std::rc::Rc;
 use swarmux_domain::ledger::{
     ChainBreak, ChainVerifier, Hash, LedgerDraft, LedgerEntry, LedgerKind, Payload,
 };
-use swarmux_domain::{Job, JobId, JobResult, JobStatus, Millis, ReviewState, SessionId};
+use swarmux_domain::ledger::{hex, sha256};
+use swarmux_domain::{
+    Job, JobId, JobResult, JobStatus, Millis, ReviewState, SessionId, StoredRule,
+};
 
-use crate::ports::{Clock, DecisionRepository, JobRepository, NewJob, StoredEvent};
+use crate::ports::{
+    Clock, DecisionRepository, FallbackRecord, FallbackSpool, JobRepository, NewJob, RuleStore,
+    StoredEvent,
+};
 use crate::{AppResult, DecisionRecord, JobSummary};
 
 /// The append-only, hash-chained log.
@@ -653,14 +659,27 @@ impl LedgerService {
     }
 
     pub fn record_decision(&self, d: &DecisionRecord) -> AppResult<()> {
+        let rule_sha256 = d.rule.as_deref().map(|r| hex(&sha256(r.as_bytes())));
         let payload = Payload::new()
             .str("source", d.source.as_str())
             .str("outcome", d.outcome.as_str())
             .str("tool", &d.tool)
             .text("subject", &d.subject)
             .opt_str("rule", d.rule.as_deref())
+            .opt_str("rule_sha256", rule_sha256.as_deref())
             .int("latency_us", saturating(d.latency_us))
-            .opt_num("confidence", d.confidence);
+            .opt_num("confidence", d.confidence)
+            .opt_str("resolver", d.extra.resolver.as_deref())
+            .opt_str("agent_id", d.extra.agent_id.as_deref())
+            .opt_str("agent_type", d.extra.agent_type.as_deref());
+        let payload = match &d.extra.jev {
+            Some(j) => payload
+                .str("jev_provider", &j.provider)
+                .str("jev_model", &j.model)
+                .str("jev_prompt_sha256", &j.prompt_sha256)
+                .bool("jev_truncated", j.truncated),
+            None => payload,
+        };
         self.append(
             d.ts,
             LedgerKind::GuardDecision,
@@ -669,6 +688,47 @@ impl LedgerService {
             None,
             payload,
         )
+    }
+
+    /// An allow rule was added (`added`) or taken away (`removed`, or
+    /// `expired` when it was pruned): what it says, where it applies, who
+    /// made it and when it stops, and the hash of the rule as kept.
+    pub fn record_rule(&self, event: &str, rule: &StoredRule, now: Millis) -> AppResult<()> {
+        let kept = format!(
+            "{} {} {} {}",
+            rule.text,
+            rule.scope.as_str(),
+            rule.root.as_deref().unwrap_or(""),
+            rule.expires_at.map_or(String::new(), |e| e.to_string())
+        );
+        let payload = Payload::new()
+            .str("event", event)
+            .str("id", &rule.id)
+            .text("rule", &rule.text)
+            .str("scope", rule.scope.as_str())
+            .opt_str("root", rule.root.as_deref())
+            .str("source", rule.source.as_str())
+            .int("created_at", rule.created_at)
+            .opt_int("expires_at", rule.expires_at)
+            .str("rule_sha256", &hex(&sha256(kept.as_bytes())));
+        self.append(now, LedgerKind::Policy, "operator", None, None, payload)
+    }
+
+    /// A hook call that fell back because swarmux could not be reached
+    /// (read from the spool at the next start): what the hook printed and
+    /// why, and the hash of the setting that decided it.
+    pub fn record_fallback(&self, f: &FallbackRecord, now: Millis) -> AppResult<()> {
+        let setting = format!("guard.fail={}", f.mode);
+        let payload = Payload::new()
+            .str("event", "guard_fallback")
+            .int("at", f.ts)
+            .str("tool", &f.tool)
+            .str("input_sha256", &f.input_sha256)
+            .str("reason", &f.reason)
+            .str("mode", &f.mode)
+            .str("line_id", &f.line_id)
+            .str("policy_sha256", &hex(&sha256(setting.as_bytes())));
+        self.append(now, LedgerKind::Policy, "guard-hook", f.job, None, payload)
     }
 
     pub fn record_review(
@@ -854,6 +914,70 @@ impl DecisionRepository for LedgeredDecisions {
     fn recent_decisions(&self, limit: usize) -> AppResult<Vec<DecisionRecord>> {
         self.inner.recent_decisions(limit)
     }
+}
+
+/// A rule store that also records every rule added or removed in the
+/// ledger, on the same thread, right after the store changed.
+pub struct LedgeredRules {
+    inner: Rc<dyn RuleStore>,
+    ledger: Rc<LedgerService>,
+}
+
+impl LedgeredRules {
+    pub fn new(inner: Rc<dyn RuleStore>, ledger: Rc<LedgerService>) -> LedgeredRules {
+        LedgeredRules { inner, ledger }
+    }
+
+    /// Removes the rules that have expired, recording each as `expired`;
+    /// how many there were.
+    pub fn prune(&self) -> AppResult<Vec<StoredRule>> {
+        let now = self.ledger.now();
+        let mut gone = Vec::new();
+        for rule in self.inner.list()?.into_iter().filter(|r| r.expired(now)) {
+            if self.inner.remove(&rule.id)? {
+                self.ledger.record_rule("expired", &rule, now)?;
+                gone.push(rule);
+            }
+        }
+        Ok(gone)
+    }
+}
+
+impl RuleStore for LedgeredRules {
+    fn list(&self) -> AppResult<Vec<StoredRule>> {
+        self.inner.list()
+    }
+
+    fn add(&self, rule: &StoredRule) -> AppResult<()> {
+        self.inner.add(rule)?;
+        self.ledger.record_rule("added", rule, self.ledger.now())
+    }
+
+    fn remove(&self, id: &str) -> AppResult<bool> {
+        let was = self.inner.list()?.into_iter().find(|r| r.id == id);
+        let removed = self.inner.remove(id)?;
+        if let (true, Some(rule)) = (removed, was) {
+            self.ledger
+                .record_rule("removed", &rule, self.ledger.now())?;
+        }
+        Ok(removed)
+    }
+}
+
+/// Puts what the hook processes left in the spool into the ledger, then
+/// empties the spool. Returns how many records there were. The ledger is
+/// written first: a crash between the two repeats records (each carries
+/// its line id) rather than losing them.
+pub fn ingest_fallbacks(spool: &dyn FallbackSpool, ledger: &LedgerService) -> AppResult<usize> {
+    let records = spool.read()?;
+    let now = ledger.now();
+    for record in &records {
+        ledger.record_fallback(record, now)?;
+    }
+    if !records.is_empty() {
+        spool.clear()?;
+    }
+    Ok(records.len())
 }
 
 #[cfg(test)]

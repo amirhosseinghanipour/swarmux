@@ -4,8 +4,8 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
-use crate::AppResult;
 use crate::ports::{AdviceRequest, AdviceSink, Clock, ConsentStore, DecisionAdvisor, HookRequest};
+use crate::{AppResult, JevTrace};
 
 /// Longest text (subject or prompt summary) sent to the provider.
 pub const SUMMARY_MAX: usize = 200;
@@ -118,15 +118,29 @@ impl Jev {
     }
 
     /// Asks whether `request` may run. Only the tool name and its subject
-    /// (command, path or URL) are sent, never the rest of its input.
-    pub(crate) fn ask_tool(&self, request: &HookRequest, sink: AdviceSink) {
-        self.advisor.advise(
-            AdviceRequest::ToolCall {
-                tool: request.tool_name.clone(),
-                summary: summarize(&request.subject, SUMMARY_MAX),
-            },
-            sink,
-        );
+    /// (command, path or URL) are sent, never the rest of its input. A call
+    /// with no subject (an MCP or unknown tool) is not sent at all: there
+    /// is nothing to judge, and `None` comes back. Otherwise what was sent
+    /// is returned: the provider, the model, a hash of the exact request and
+    /// whether the subject was cut.
+    pub(crate) fn ask_tool(&self, request: &HookRequest, sink: AdviceSink) -> Option<JevTrace> {
+        if request.subject.trim().is_empty() {
+            return None;
+        }
+        let summary = summarize(&request.subject, SUMMARY_MAX);
+        let truncated = flatten(&request.subject).chars().count() > SUMMARY_MAX;
+        let advice = AdviceRequest::ToolCall {
+            tool: request.tool_name.clone(),
+            summary,
+        };
+        let trace = JevTrace {
+            provider: self.provider().to_string(),
+            model: self.advisor.model().to_string(),
+            prompt_sha256: self.advisor.prompt_sha256(&advice),
+            truncated,
+        };
+        self.advisor.advise(advice, sink);
+        Some(trace)
     }
 
     /// Asks whether a stuck agent should carry on, change approach or stop.
@@ -159,9 +173,13 @@ impl Jev {
     }
 }
 
+fn flatten(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// `s` on one line, cut to `max` characters.
 pub fn summarize(s: &str, max: usize) -> String {
-    let flat = s.split_whitespace().collect::<Vec<_>>().join(" ");
+    let flat = flatten(s);
     match flat.char_indices().nth(max) {
         Some((i, _)) => flat[..i].to_string(),
         None => flat,
@@ -233,6 +251,7 @@ mod tests {
             input: "{\"secret\":\"file contents\"}".into(),
             cwd: "/w".into(),
             content: String::new(),
+            ..HookRequest::default()
         };
         j.ask_tool(&request, Box::new(|_| {}));
         j.ask_session(&"y".repeat(5000), vec!["a".into()], Box::new(|_| {}));

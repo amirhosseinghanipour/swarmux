@@ -92,6 +92,7 @@ fn request(job: JobId, id: u64, tool: &str, subject: &str, content: &str) -> Hoo
         input: String::new(),
         cwd: "/w".into(),
         content: content.into(),
+        ..HookRequest::default()
     }
 }
 
@@ -262,8 +263,11 @@ fn guard_rules_deny_ask_warn_and_shadow_only_logs() {
         "{ctx}"
     );
 
+    // `Bash` is allowed, and only the irreversibility rule holds this call:
+    // the rule in shadow neither denies nor asks.
     let (d, _) = policy.decide(&request(job, 5, "Bash", "rm -rf build", ""));
-    assert_eq!(d.verdict, Verdict::Allow, "shadow rules don't act");
+    assert_eq!(d.verdict, Verdict::Ask, "shadow rules don't act");
+    assert!(d.rule.unwrap().starts_with("irreversible"));
     let (d, _) = policy.decide(&request(job, 6, "Bash", "ls", ""));
     assert_eq!(d.verdict, Verdict::Allow);
     // A call of an unknown job meets no rule.

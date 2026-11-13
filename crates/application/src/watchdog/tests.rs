@@ -144,6 +144,7 @@ impl Rig {
             input: String::new(),
             cwd: String::new(),
             content: String::new(),
+            ..HookRequest::default()
         };
         let (decision, _) = self.policy.decide(&request);
         let nudge = (decision.verdict == Verdict::Deny)

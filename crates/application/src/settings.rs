@@ -1,9 +1,13 @@
 use std::path::PathBuf;
 
 use crate::palette::ThemeDef;
+use swarmux_domain::alarm::Reversibility;
 use swarmux_domain::budget::GovernorPolicy;
 use swarmux_domain::telemetry::{MINUTE, PriceTable};
-use swarmux_domain::{DEFAULT_MODEL, GuardPolicy, Limits, Pattern, PortPlan, Unmatched};
+use swarmux_domain::{
+    AGENT_CONFIG_PROTECTED, DEFAULT_EXPIRY_DAYS, DEFAULT_MODEL, GuardPolicy, Limits, Pattern,
+    PortPlan, RuleScope, Unmatched,
+};
 
 /// The `[console]` section: what the Work and Deck screens show.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -67,6 +71,9 @@ pub struct Settings {
     /// The `[keys]` section as written: not yet checked against the
     /// actions that exist, which only the interface knows.
     pub keys: swarmux_domain::keys::KeyConfig,
+    /// What was wrong in lines the loader replaced with defaults, one
+    /// message each. Shown on start and by `swarmux doctor`.
+    pub warnings: Vec<String>,
 }
 
 /// The `[board]` section.
@@ -359,6 +366,81 @@ impl Default for ReviewSettings {
     }
 }
 
+/// What the hook does with a tool call when swarmux can't be reached.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum OnUnreachable {
+    /// Deny for unattended jobs, leave the call to Claude Code for the rest.
+    #[default]
+    Auto,
+    Deny,
+    /// Claude Code asks: in `claude -p` that is a refusal, in a terminal
+    /// session the question.
+    Ask,
+    /// Claude Code's own rules decide, as if there were no hook.
+    Pass,
+}
+
+/// What a hook prints when it can't reach swarmux.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FailMode {
+    /// A denial: the call does not run.
+    Closed,
+    Ask,
+    /// Nothing: Claude Code's rules decide.
+    Open,
+}
+
+impl FailMode {
+    /// The value of `SWARMUX_GUARD_FAIL`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            FailMode::Closed => "closed",
+            FailMode::Ask => "ask",
+            FailMode::Open => "open",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<FailMode> {
+        match s.trim() {
+            "closed" => Some(FailMode::Closed),
+            "ask" => Some(FailMode::Ask),
+            "open" => Some(FailMode::Open),
+            _ => None,
+        }
+    }
+}
+
+impl OnUnreachable {
+    pub fn parse(s: &str) -> Option<OnUnreachable> {
+        match s.trim() {
+            "auto" => Some(OnUnreachable::Auto),
+            "deny" => Some(OnUnreachable::Deny),
+            "ask" => Some(OnUnreachable::Ask),
+            "pass" => Some(OnUnreachable::Pass),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            OnUnreachable::Auto => "auto",
+            OnUnreachable::Deny => "deny",
+            OnUnreachable::Ask => "ask",
+            OnUnreachable::Pass => "pass",
+        }
+    }
+
+    /// What a job's hook does: `unattended` jobs (missions, reviewers and
+    /// the jobs that continue them) fail closed unless told otherwise.
+    pub fn mode(self, unattended: bool) -> FailMode {
+        match (self, unattended) {
+            (OnUnreachable::Deny, _) | (OnUnreachable::Auto, true) => FailMode::Closed,
+            (OnUnreachable::Ask, _) => FailMode::Ask,
+            (OnUnreachable::Pass, _) | (OnUnreachable::Auto, false) => FailMode::Open,
+        }
+    }
+}
+
 /// The `[guard]` section.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GuardSettings {
@@ -370,6 +452,35 @@ pub struct GuardSettings {
     pub approval_timeout_secs: u64,
     /// Identical failures in a row that stop a job (0 = never).
     pub loop_repeats: u32,
+    /// What a hook does when swarmux can't be reached.
+    pub on_unreachable: OnUnreachable,
+    /// Where an "always allow" applies.
+    pub always_scope: RuleScope,
+    /// Days an "always allow" lasts; `None` is never.
+    pub always_expiry_days: Option<u32>,
+    /// Files whose writes are held (denied for unattended jobs) besides the
+    /// built-in ones, as globs from the repository root.
+    pub protected_paths: Vec<String>,
+    /// Add `onFailure: "block"` to the PreToolUse hook. Claude Code
+    /// versions that don't know the key ignore it; detecting the version
+    /// is not done yet, so it is off unless asked for.
+    pub hook_on_failure_block: bool,
+}
+
+impl GuardSettings {
+    /// The built-in protected paths and the owner's.
+    pub fn protected_globs(&self) -> Vec<String> {
+        let mut globs: Vec<String> = AGENT_CONFIG_PROTECTED
+            .iter()
+            .map(|g| g.to_string())
+            .collect();
+        for extra in &self.protected_paths {
+            if !globs.contains(extra) {
+                globs.push(extra.clone());
+            }
+        }
+        globs
+    }
 }
 
 impl Default for Settings {
@@ -393,6 +504,7 @@ impl Default for Settings {
             board: BoardSettings::default(),
             followups: crate::FollowSettings::default(),
             keys: swarmux_domain::keys::KeyConfig::default(),
+            warnings: Vec::new(),
         }
     }
 }
@@ -442,6 +554,11 @@ pub struct JevSettings {
     pub threshold: f64,
     /// `None` uses the provider's default.
     pub timeout_ms: Option<u64>,
+    /// JEV may allow a call up to this reversibility; above it, and for
+    /// every call a person must confirm by typing, it may only deny or
+    /// hand the call to the owner. `R1` (changes that stay in the
+    /// worktree) by default; `R4` is not a choice.
+    pub max_allow: Reversibility,
 }
 
 impl Default for JevSettings {
@@ -450,6 +567,7 @@ impl Default for JevSettings {
             provider: JevProvider::Off,
             threshold: 0.85,
             timeout_ms: None,
+            max_allow: Reversibility::R1,
         }
     }
 }
@@ -469,6 +587,11 @@ impl Default for GuardSettings {
             unmatched: Unmatched::Ask,
             approval_timeout_secs: 120,
             loop_repeats: 2,
+            on_unreachable: OnUnreachable::Auto,
+            always_scope: RuleScope::Repo,
+            always_expiry_days: Some(DEFAULT_EXPIRY_DAYS),
+            protected_paths: Vec::new(),
+            hook_on_failure_block: false,
         }
     }
 }

@@ -124,7 +124,11 @@ fn a_session_without_worktrees_runs_where_it_always_did() {
     r.svc.dispatch(r.wt.session.id, "x").unwrap();
     let req = r.runner.request(0);
     assert_eq!(req.cwd, r.wt.session.cwd);
-    assert!(req.env.is_empty());
+    // Only what the Guard's hook is told: this job's owner is watching.
+    assert_eq!(
+        req.env,
+        [("SWARMUX_GUARD_FAIL".to_string(), "open".to_string())]
+    );
 }
 
 #[test]
@@ -268,7 +272,11 @@ fn the_reviewer_reads_the_worktree_of_the_job_it_audits() {
     let req = r.runner.request(1);
     assert!(req.review);
     assert_eq!(req.cwd, wt.path);
-    assert!(req.env.is_empty());
+    // Only what the Guard's hook is told: nobody watches a reviewer.
+    assert_eq!(
+        req.env,
+        [("SWARMUX_GUARD_FAIL".to_string(), "closed".to_string())]
+    );
 }
 
 #[test]

@@ -7,17 +7,18 @@ use std::rc::Rc;
 
 use swarmux_domain::{
     Decision, Job, JobId, JobResult, JobStatus, Millis, PromptDraft, PromptId, PromptTemplate,
-    ReviewState, Session, SessionId,
+    ReviewState, Session, SessionId, StoredRule,
 };
 
 use crate::followup::{FollowStore, Intent, IntentStore};
 use crate::ledger::Ledger;
 use crate::ports::{
     Advice, AdviceAnswer, AdviceError, AdviceReply, AdviceRequest, AdviceSink, AgentCatalog,
-    AgentProfile, AgentRunner, Clock, ConsentStore, DecisionAdvisor, DecisionRepository, HookInbox,
-    HookRequest, InboxItem, JobRepository, NewJob, PromptRepository, PromptRouter, RouteAnswer,
-    RouteReply, RouteRequest, RouteSink, RuleWriter, RunRequest, RunSink, RunnerMsg,
-    SessionRepository, StoredEvent, SystemMonitor, TelemetryFeed, TelemetryStore, Workspace,
+    AgentProfile, AgentRunner, Clock, ConsentStore, DecisionAdvisor, DecisionRepository,
+    FallbackRecord, FallbackSpool, HookInbox, HookRequest, InboxItem, JobRepository, NewJob,
+    PromptRepository, PromptRouter, RepoRoots, RouteAnswer, RouteReply, RouteRequest, RouteSink,
+    RuleStore, RuleWriter, RunRequest, RunSink, RunnerMsg, SessionRepository, StoredEvent,
+    SystemMonitor, TelemetryFeed, TelemetryStore, Workspace,
 };
 use crate::{AppError, AppResult, DecisionRecord, JobSummary, TelemetrySnapshot};
 use swarmux_domain::followup::FollowUp;
@@ -25,21 +26,30 @@ use swarmux_domain::ledger::{LedgerDraft, LedgerEntry};
 use swarmux_domain::telemetry::{Environment, RateLimit};
 
 /// A clock that only moves when told to.
-pub struct FixedClock(Cell<Millis>);
+pub struct FixedClock(std::sync::Arc<std::sync::atomic::AtomicI64>);
 
 impl FixedClock {
     pub fn new(start: Millis) -> FixedClock {
-        FixedClock(Cell::new(start))
+        FixedClock(std::sync::Arc::new(std::sync::atomic::AtomicI64::new(
+            start,
+        )))
     }
 
     pub fn advance(&self, ms: Millis) {
-        self.0.set(self.0.get() + ms);
+        self.0.fetch_add(ms, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// This clock's time, for the threads of the hook transport (the
+    /// policy's rules expire by it).
+    pub fn reader(&self) -> std::sync::Arc<dyn Fn() -> Millis + Send + Sync> {
+        let at = self.0.clone();
+        std::sync::Arc::new(move || at.load(std::sync::atomic::Ordering::SeqCst))
     }
 }
 
 impl Clock for FixedClock {
     fn now(&self) -> Millis {
-        self.0.get()
+        self.0.load(std::sync::atomic::Ordering::SeqCst)
     }
 }
 
@@ -558,9 +568,35 @@ impl FakeHookInbox {
                 input: format!("{{\"subject\":{subject:?}}}"),
                 cwd: "/w".into(),
                 content: String::new(),
+                ..HookRequest::default()
             },
             answered: None,
         });
+        id
+    }
+
+    /// Like [`push`](Self::push), made by the subagent `agent_id` of `agent_type`.
+    pub fn push_by(
+        &self,
+        job: Option<JobId>,
+        tool: &str,
+        subject: &str,
+        agent: (&str, &str),
+    ) -> u64 {
+        let id = self.push(job, tool, subject);
+        if let Some(item) = self.queue.borrow_mut().last_mut() {
+            item.request.agent_id = Some(agent.0.to_string());
+            item.request.agent_type = Some(agent.1.to_string());
+        }
+        id
+    }
+
+    /// Like [`push`](Self::push), made from the folder `cwd`.
+    pub fn push_in(&self, job: Option<JobId>, tool: &str, subject: &str, cwd: &str) -> u64 {
+        let id = self.push(job, tool, subject);
+        if let Some(item) = self.queue.borrow_mut().last_mut() {
+            item.request.cwd = cwd.to_string();
+        }
         id
     }
 
@@ -659,6 +695,90 @@ impl RuleWriter for FakeRuleWriter {
             return Err(AppError::Config("allow list is too complex to edit".into()));
         }
         self.rules.borrow_mut().push(rule.to_string());
+        Ok(())
+    }
+}
+
+/// Allow rules in memory.
+#[derive(Default)]
+pub struct FakeRuleStore {
+    rules: RefCell<Vec<StoredRule>>,
+    refuse: Cell<bool>,
+}
+
+impl FakeRuleStore {
+    pub fn rules(&self) -> Vec<StoredRule> {
+        self.rules.borrow().clone()
+    }
+
+    /// Every later `add` fails.
+    pub fn refuse(&self, refuse: bool) {
+        self.refuse.set(refuse);
+    }
+}
+
+impl RuleStore for FakeRuleStore {
+    fn list(&self) -> AppResult<Vec<StoredRule>> {
+        Ok(self.rules.borrow().clone())
+    }
+
+    fn add(&self, rule: &StoredRule) -> AppResult<()> {
+        if self.refuse.get() {
+            return Err(AppError::Config("the rules file is read-only".into()));
+        }
+        self.rules.borrow_mut().push(rule.clone());
+        Ok(())
+    }
+
+    fn remove(&self, id: &str) -> AppResult<bool> {
+        let mut rules = self.rules.borrow_mut();
+        let before = rules.len();
+        rules.retain(|r| r.id != id);
+        Ok(rules.len() != before)
+    }
+}
+
+/// A repository and workspace for every call, as set.
+#[derive(Default)]
+pub struct FixedRoots {
+    pub repo: Option<String>,
+    pub workspace: Option<String>,
+}
+
+impl FixedRoots {
+    pub fn repo(root: &str) -> FixedRoots {
+        FixedRoots {
+            repo: Some(root.into()),
+            workspace: None,
+        }
+    }
+}
+
+impl RepoRoots for FixedRoots {
+    fn repo_root(&self, _: Option<JobId>, _: &str) -> Option<String> {
+        self.repo.clone()
+    }
+
+    fn workspace_root(&self, _: Option<JobId>, _: &str) -> Option<String> {
+        self.workspace.clone()
+    }
+
+    fn tree_root(&self, cwd: &str) -> Option<String> {
+        Some(cwd.to_string())
+    }
+}
+
+/// A fallback spool in memory.
+#[derive(Default)]
+pub struct FakeSpool(pub RefCell<Vec<FallbackRecord>>);
+
+impl FallbackSpool for FakeSpool {
+    fn read(&self) -> AppResult<Vec<FallbackRecord>> {
+        Ok(self.0.borrow().clone())
+    }
+
+    fn clear(&self) -> AppResult<()> {
+        self.0.borrow_mut().clear();
         Ok(())
     }
 }

@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use swarmux_domain::telemetry::{Environment, RateLimit};
 use swarmux_domain::{
     AgentEvent, Decision, Job, JobId, JobResult, JobStatus, Millis, PromptDraft, PromptId,
-    PromptTemplate, ReviewState, Session, SessionId,
+    PromptTemplate, ReviewState, Session, SessionId, StoredRule,
 };
 
 use crate::{AppResult, DecisionRecord, JobSummary};
@@ -218,6 +218,10 @@ pub struct HookRequest {
     /// The text a file tool writes (`content`, `new_string`, every edit's
     /// `new_string`), for knowledge rules; empty for other tools.
     pub content: String,
+    /// The subagent that made the call, when Claude Code says which.
+    pub agent_id: Option<String>,
+    /// The kind of that subagent (`Explore`, `general-purpose`, ...).
+    pub agent_type: Option<String>,
 }
 
 /// A hook request as it left the inbox.
@@ -242,6 +246,54 @@ pub trait DecisionRepository {
     fn record(&self, decision: &DecisionRecord) -> AppResult<()>;
     /// The newest `limit` decisions, newest first.
     fn recent_decisions(&self, limit: usize) -> AppResult<Vec<DecisionRecord>>;
+}
+
+/// The allow rules the user added while swarmux ran, with where they apply
+/// and when they stop.
+pub trait RuleStore {
+    /// Every rule kept, expired ones included.
+    fn list(&self) -> AppResult<Vec<StoredRule>>;
+    fn add(&self, rule: &StoredRule) -> AppResult<()>;
+    /// Removes the rule called `id`; `false` when there is none.
+    fn remove(&self, id: &str) -> AppResult<bool>;
+}
+
+/// Which repository and workspace a call was made in.
+pub trait RepoRoots: Send + Sync {
+    /// The repository's own folder: for a worktree, the repository it was
+    /// made from. `None` outside any repository.
+    fn repo_root(&self, job: Option<JobId>, cwd: &str) -> Option<String>;
+    /// The root of the workspace the job belongs to, when it does.
+    fn workspace_root(&self, job: Option<JobId>, cwd: &str) -> Option<String>;
+    /// The folder the call's own working tree starts at (a worktree's top).
+    fn tree_root(&self, cwd: &str) -> Option<String>;
+}
+
+/// A hook call that fell back because swarmux could not be reached: the
+/// hook process leaves a line, the app puts it in the ledger at its next
+/// start.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FallbackRecord {
+    /// When the hook gave up, milliseconds since the epoch.
+    pub ts: Millis,
+    pub job: Option<JobId>,
+    pub tool: String,
+    /// SHA-256 of the hook input, when there was one.
+    pub input_sha256: String,
+    /// Why: `no socket`, `connect failed`, `no answer`, `unreadable input`.
+    pub reason: String,
+    /// What the hook printed: `deny`, `ask` or `pass`.
+    pub mode: String,
+    /// Identifies the line, so a line read twice is told.
+    pub line_id: String,
+}
+
+/// Where the hook processes leave their fallbacks.
+pub trait FallbackSpool {
+    /// Every record in the spool.
+    fn read(&self) -> AppResult<Vec<FallbackRecord>>;
+    /// Empties the spool (after its records reached the ledger).
+    fn clear(&self) -> AppResult<()>;
 }
 
 /// Saves guard rules the user adds while swarmux runs.
@@ -322,6 +374,15 @@ pub type AdviceSink = Box<dyn FnOnce(AdviceReply) + Send + 'static>;
 pub trait DecisionAdvisor {
     /// Provider name, e.g. "typesafe".
     fn provider(&self) -> &str;
+    /// The model the provider runs, for the ledger.
+    fn model(&self) -> &str {
+        ""
+    }
+    /// SHA-256 (hex) of what is sent for `request`, byte for byte.
+    fn prompt_sha256(&self, request: &AdviceRequest) -> String {
+        let text = format!("{request:?}");
+        swarmux_domain::ledger::hex(&swarmux_domain::ledger::sha256(text.as_bytes()))
+    }
     /// The host requests go to, for the consent screen.
     fn host(&self) -> &str;
     fn has_key(&self) -> bool;

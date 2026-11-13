@@ -211,8 +211,7 @@ impl GuardPolicy {
         extra: &[Pattern],
     ) -> Option<String> {
         let allow = || extra.iter().chain(self.allow.iter());
-        if let Some(rule) = allow()
-            .find(|r| !r.is_command_rule() && r.matches(tool, subject, cwd))
+        if let Some(rule) = allow().find(|r| !r.is_command_rule() && r.matches(tool, subject, cwd))
         {
             return Some(rule.to_string());
         }

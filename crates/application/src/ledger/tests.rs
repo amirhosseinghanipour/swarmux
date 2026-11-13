@@ -235,6 +235,7 @@ fn decisions_are_recorded_after_they_are_stored() {
         ts: 77,
         source: Source::Guard,
         confidence: None,
+        extra: crate::DecisionExtra::default(),
     };
     decisions.record(&d).unwrap();
     assert_eq!(repo.rows(), std::slice::from_ref(&d));
@@ -318,4 +319,176 @@ fn empty_ledger_verifies_and_tail_is_bounded() {
     assert_eq!(seqs, [8, 9, 10]);
     assert_eq!(tail(&*f.ledger, 100).unwrap().len(), 10);
     assert!(tail(&*f.ledger, 0).unwrap().is_empty());
+}
+
+// --- X1: the policy in the ledger -------------------------------------------
+
+use crate::ports::FallbackRecord;
+use crate::testing::{FakeRuleStore, FakeSpool};
+use swarmux_domain::{RuleScope, RuleSource, StoredRule};
+
+fn policy_entries(ledger: &InMemoryLedger) -> Vec<LedgerEntry> {
+    ledger
+        .entries()
+        .into_iter()
+        .filter(|e| e.draft.kind == LedgerKind::Policy)
+        .collect()
+}
+
+fn stored(text: &str) -> StoredRule {
+    StoredRule::new(
+        text,
+        RuleScope::Repo,
+        Some("/repo"),
+        RuleSource::AlwaysAllow,
+        500,
+        Some(900),
+    )
+}
+
+#[test]
+fn rules_added_and_removed_are_in_the_ledger_with_their_hash() {
+    let f = fixture();
+    let store = LedgeredRules::new(Rc::new(FakeRuleStore::default()), f.service.clone());
+    let rule = stored("Bash(make all)");
+    store.add(&rule).unwrap();
+    assert!(store.remove(&rule.id).unwrap());
+    assert!(!store.remove(&rule.id).unwrap(), "nothing more to record");
+    let entries = policy_entries(&f.ledger);
+    assert_eq!(entries.len(), 2);
+    let added = &entries[0].draft.payload_json;
+    assert!(added.contains("\"event\":\"added\""), "{added}");
+    assert!(added.contains("Bash(make all)"), "{added}");
+    assert!(added.contains("\"scope\":\"repo\""), "{added}");
+    assert!(added.contains("\"root\":\"/repo\""), "{added}");
+    assert!(added.contains("\"source\":\"always_allow\""), "{added}");
+    assert!(added.contains("\"expires_at\":900"), "{added}");
+    assert!(added.contains("\"rule_sha256\":\""), "{added}");
+    assert!(
+        entries[1]
+            .draft
+            .payload_json
+            .contains("\"event\":\"removed\"")
+    );
+    assert_eq!(entries[0].draft.actor, "operator");
+    assert!(
+        verify_all(&*f.ledger).unwrap().is_ok(),
+        "the chain still holds"
+    );
+}
+
+#[test]
+fn expired_rules_are_pruned_and_recorded() {
+    let f = fixture();
+    let inner = Rc::new(FakeRuleStore::default());
+    let store = LedgeredRules::new(inner.clone(), f.service.clone());
+    store.add(&stored("Bash(old)")).unwrap();
+    let fresh = StoredRule {
+        expires_at: None,
+        ..stored("Bash(new)")
+    };
+    store.add(&fresh).unwrap();
+    f.clock.advance(10_000);
+    let gone = store.prune().unwrap();
+    assert_eq!(gone.len(), 1);
+    assert_eq!(gone[0].text, "Bash(old)");
+    assert_eq!(inner.rules(), [fresh]);
+    let entries = policy_entries(&f.ledger);
+    assert!(
+        entries
+            .last()
+            .unwrap()
+            .draft
+            .payload_json
+            .contains("\"event\":\"expired\"")
+    );
+}
+
+fn fallback(reason: &str, mode: &str, line: &str) -> FallbackRecord {
+    FallbackRecord {
+        ts: 777,
+        job: Some(JobId(4)),
+        tool: "Bash".into(),
+        input_sha256: "cd".repeat(32),
+        reason: reason.into(),
+        mode: mode.into(),
+        line_id: line.into(),
+    }
+}
+
+#[test]
+fn spooled_fallbacks_reach_the_ledger_once_and_the_spool_is_emptied() {
+    let f = fixture();
+    let spool = FakeSpool::default();
+    spool
+        .0
+        .borrow_mut()
+        .push(fallback("connect failed", "deny", "l1"));
+    spool
+        .0
+        .borrow_mut()
+        .push(fallback("no answer", "pass", "l2"));
+    assert_eq!(ingest_fallbacks(&spool, &f.service).unwrap(), 2);
+    assert!(spool.0.borrow().is_empty());
+    assert_eq!(ingest_fallbacks(&spool, &f.service).unwrap(), 0);
+    let entries = policy_entries(&f.ledger);
+    assert_eq!(entries.len(), 2);
+    let first = &entries[0];
+    assert_eq!(first.draft.job, Some(JobId(4)));
+    assert_eq!(first.draft.actor, "guard-hook");
+    let p = &first.draft.payload_json;
+    for part in [
+        "\"event\":\"guard_fallback\"",
+        "\"at\":777",
+        "\"tool\":\"Bash\"",
+        "\"reason\":\"connect failed\"",
+        "\"mode\":\"deny\"",
+        "\"line_id\":\"l1\"",
+        "\"policy_sha256\":\"",
+    ] {
+        assert!(p.contains(part), "{part} in {p}");
+    }
+    assert!(verify_all(&*f.ledger).unwrap().is_ok());
+}
+
+#[test]
+fn decisions_carry_their_rule_hash_resolver_attribution_and_model_trace() {
+    let f = fixture();
+    let record = DecisionRecord {
+        job_id: Some(JobId(1)),
+        tool: "Bash".into(),
+        subject: "make".into(),
+        outcome: Outcome::Allow,
+        rule: Some("jev 0.97".into()),
+        latency_us: 5,
+        ts: 9,
+        source: Source::Jev,
+        confidence: Some(0.97),
+        extra: crate::DecisionExtra {
+            agent_id: Some("agent-7".into()),
+            agent_type: Some("Explore".into()),
+            jev: Some(crate::JevTrace {
+                provider: "typesafe".into(),
+                model: "jev-1".into(),
+                prompt_sha256: "ef".repeat(32),
+                truncated: true,
+            }),
+            resolver: Some("model".into()),
+        },
+    };
+    f.service.record_decision(&record).unwrap();
+    let last = f.ledger.entries().pop().unwrap();
+    let p = &last.draft.payload_json;
+    for part in [
+        "\"rule_sha256\":\"",
+        "\"resolver\":\"model\"",
+        "\"agent_id\":\"agent-7\"",
+        "\"agent_type\":\"Explore\"",
+        "\"jev_provider\":\"typesafe\"",
+        "\"jev_model\":\"jev-1\"",
+        "\"jev_truncated\":true",
+    ] {
+        assert!(p.contains(part), "{part} in {p}");
+    }
+    assert!(p.contains(&"ef".repeat(32)));
 }

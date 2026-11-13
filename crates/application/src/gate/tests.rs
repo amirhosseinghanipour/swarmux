@@ -430,6 +430,7 @@ fn the_fence_denies_protected_writes_through_the_policy() {
                 input: String::new(),
                 cwd: "/w".into(),
                 content: String::new(),
+                ..HookRequest::default()
             })
             .0
     };

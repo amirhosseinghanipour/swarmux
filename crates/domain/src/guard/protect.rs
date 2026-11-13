@@ -34,7 +34,16 @@ const PASSTHROUGH: [&str; 10] = [
     "xargs", "timeout", "watch", "setsid", "nohup", "env", "command", "time", "exec", "stdbuf",
 ];
 /// Shells whose `-c` argument is a command line.
-const SHELLS: [&str; 8] = ["sh", "bash", "zsh", "dash", "fish", "pwsh", "powershell", "cmd"];
+const SHELLS: [&str; 8] = [
+    "sh",
+    "bash",
+    "zsh",
+    "dash",
+    "fish",
+    "pwsh",
+    "powershell",
+    "cmd",
+];
 
 fn program_name(word: &str) -> String {
     let base = word.rsplit(['/', '\\']).next().unwrap_or(word);
@@ -90,10 +99,9 @@ fn scan_words(words: &[String], exe: Option<&str>, depth: usize) -> Option<Strin
         let p = program_name(w);
         if PASSTHROUGH.contains(&p.as_str()) {
             at += 1;
-            while words
-                .get(at)
-                .is_some_and(|w| w.starts_with('-') || w.chars().all(|c| c.is_ascii_digit() || c == '.'))
-            {
+            while words.get(at).is_some_and(|w| {
+                w.starts_with('-') || w.chars().all(|c| c.is_ascii_digit() || c == '.')
+            }) {
                 at += 1;
             }
         } else {
@@ -110,7 +118,9 @@ fn scan_words(words: &[String], exe: Option<&str>, depth: usize) -> Option<Strin
                 || w == "-c"
                 || (w.starts_with('-') && !w.starts_with("--") && w.ends_with('c'))
         })?;
-        return rest.get(inner + 1).and_then(|l| scan_line(l, exe, depth + 1));
+        return rest
+            .get(inner + 1)
+            .and_then(|l| scan_line(l, exe, depth + 1));
     }
     if !is_swarmux(program, exe) {
         return None;
@@ -122,7 +132,13 @@ fn scan_words(words: &[String], exe: Option<&str>, depth: usize) -> Option<Strin
             "`swarmux {s}` is the owner's; a job may run only swarmux {}",
             AGENT_SUBCOMMANDS.join(", ")
         )),
-        None if rest.iter().all(|w| matches!(w.as_str(), "--version" | "-V" | "--help" | "-h")) && !rest.is_empty() => None,
+        None if rest
+            .iter()
+            .all(|w| matches!(w.as_str(), "--version" | "-V" | "--help" | "-h"))
+            && !rest.is_empty() =>
+        {
+            None
+        }
         None => Some(format!(
             "swarmux without one of {} is the owner's",
             AGENT_SUBCOMMANDS.join(", ")
@@ -186,7 +202,8 @@ fn path_candidates(tool: &str, subject: &str) -> Vec<String> {
     let mut out = Vec::new();
     for command in split_commands(subject) {
         for word in words_of(strip_wrappers(&command)) {
-            let word = word.trim_start_matches(|c: char| c.is_ascii_digit() || c == '>' || c == '<');
+            let word =
+                word.trim_start_matches(|c: char| c.is_ascii_digit() || c == '>' || c == '<');
             if word.is_empty() {
                 continue;
             }
@@ -376,8 +393,7 @@ mod tests {
     }
 
     fn touched(tool: &str, subject: &str) -> Option<String> {
-        touches_fenced(&fence(), tool, subject, "/w/app", "/home/u", &no_links)
-            .map(str::to_string)
+        touches_fenced(&fence(), tool, subject, "/w/app", "/home/u", &no_links).map(str::to_string)
     }
 
     #[test]
@@ -432,9 +448,17 @@ mod tests {
 
     #[test]
     fn symlinks_are_followed_when_the_caller_can() {
-        let resolve = |p: &str| (p == "/w/app/link").then(|| "/home/u/.swarmux/audit.key".to_string());
+        let resolve =
+            |p: &str| (p == "/w/app/link").then(|| "/home/u/.swarmux/audit.key".to_string());
         let fenced = fence();
-        let found = touches_fenced(&fenced, "Read", "/w/app/link", "/w/app", "/home/u", &resolve);
+        let found = touches_fenced(
+            &fenced,
+            "Read",
+            "/w/app/link",
+            "/w/app",
+            "/home/u",
+            &resolve,
+        );
         assert_eq!(found, Some("/home/u/.swarmux/audit.key"));
     }
 
@@ -454,7 +478,10 @@ mod tests {
 
     #[test]
     fn agent_config_files_are_matched_as_data() {
-        let globs: Vec<String> = AGENT_CONFIG_PROTECTED.iter().map(|s| s.to_string()).collect();
+        let globs: Vec<String> = AGENT_CONFIG_PROTECTED
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         for (tool, subject) in [
             ("Edit", "/w/.claude/settings.json"),
             ("Write", "/w/.claude/settings.local.json"),

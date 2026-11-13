@@ -88,6 +88,7 @@ impl Plant {
                 input: String::new(),
                 cwd: CWD.into(),
                 content: String::new(),
+                ..HookRequest::default()
             },
             secs_left: 600,
         });

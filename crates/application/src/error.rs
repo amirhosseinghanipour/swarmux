@@ -26,6 +26,13 @@ pub enum AppError {
     NotResumable(JobId),
     #[error("that approval is no longer pending")]
     ApprovalNotFound,
+    /// An irreversible call can be allowed only by naming its target.
+    #[error("irreversible: only a typed confirmation of the target allows this call")]
+    NeedsTypedConfirmation,
+    /// The Guard can't do what was asked (a rule it won't make, a
+    /// confirmation that doesn't match).
+    #[error("{0}")]
+    Guard(String),
     /// The settings file couldn't be changed.
     #[error("config error: {0}")]
     Config(String),
