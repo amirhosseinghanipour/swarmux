@@ -358,6 +358,18 @@ fn a_half_typed_chord_expires() {
 }
 
 #[test]
+fn a_waiting_chord_can_be_expired_without_a_key() {
+    let m = map(&[(GLOBAL, "g w", ONE)]);
+    let mut r = Resolver::new();
+    feed(&mut r, &m, &[GLOBAL], "g", 0);
+    r.expire(CHORD_TIMEOUT_MS);
+    assert_eq!(r.pending().len(), 1, "still within its time");
+    r.expire(CHORD_TIMEOUT_MS + 1);
+    assert!(r.pending().is_empty());
+    r.expire(i64::MAX);
+}
+
+#[test]
 fn the_contexts_active_now_decide_the_chord() {
     let m = map(&[(A, "g w", ONE), (B, "g d", TWO)]);
     let mut r = Resolver::new();

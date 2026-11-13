@@ -152,6 +152,24 @@ fn the_g_chord_waits_shows_and_can_be_dropped() {
 }
 
 #[test]
+fn a_chord_nobody_finishes_goes_away_by_itself() {
+    let mut t = test_app();
+    chars(&mut t, "g");
+    t.clock.advance(1_000);
+    t.app.update();
+    assert_eq!(t.app.resolver.pending().len(), 1, "still waiting");
+    t.clock.advance(1_500);
+    t.app.update();
+    assert!(t.app.resolver.pending().is_empty());
+    chars(&mut t, "w");
+    assert_eq!(
+        t.app.screen,
+        Screen::Mission,
+        "w is not a chord end any more"
+    );
+}
+
+#[test]
 fn a_chord_is_plain_text_while_typing() {
     let mut t = test_app();
     chars(&mut t, "6n");

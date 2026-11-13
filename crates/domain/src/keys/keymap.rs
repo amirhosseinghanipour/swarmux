@@ -403,6 +403,13 @@ impl Resolver {
         self.pending.clear();
     }
 
+    /// Forgets a half-typed chord that has waited too long.
+    pub fn expire(&mut self, now: Millis) {
+        if !self.pending.is_empty() && now - self.since > CHORD_TIMEOUT_MS {
+            self.pending.clear();
+        }
+    }
+
     /// Takes the next key press, `now` being the time it came.
     pub fn feed(
         &mut self,
@@ -411,9 +418,7 @@ impl Resolver {
         key: KeySpec,
         now: Millis,
     ) -> Outcome {
-        if !self.pending.is_empty() && now - self.since > CHORD_TIMEOUT_MS {
-            self.pending.clear();
-        }
+        self.expire(now);
         if key == KeySpec::ctrl('c') {
             self.pending.clear();
             return Outcome::Actions(vec![actions::QUIT]);

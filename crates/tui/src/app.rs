@@ -18,7 +18,9 @@ use swarmux_application::{
 };
 use swarmux_domain::alarm::{Breakpoint, LoadMeter};
 use swarmux_domain::evidence::{brief, heat_strip};
-use swarmux_domain::keys::{Action, Catalog, Context, GLOBAL, Keymap, Outcome, Resolver, actions};
+use swarmux_domain::keys::{
+    Action, Catalog, Context, GLOBAL, KeySpec, Keymap, Outcome, Resolver, actions,
+};
 use swarmux_domain::mission::Contract;
 use swarmux_domain::{
     AttentionKind, JobId, JobProgress, Millis, Priority, PromptId, Session, SessionId,
@@ -869,6 +871,7 @@ impl App {
             evidence: self.pump_evidence(),
         };
         self.pump_palette();
+        self.resolver.expire(self.now());
         self.refresh_mission();
         self.tick_inbox();
         self.pump_notifications();
@@ -1055,7 +1058,8 @@ impl App {
     }
 
     pub fn on_key(&mut self, key: KeyEvent) {
-        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        // Ctrl+C is reserved: it quits wherever the user is, typing included.
+        if crate::keys::spec_of(key) == Some(KeySpec::ctrl('c')) {
             self.quit = true;
             return;
         }
