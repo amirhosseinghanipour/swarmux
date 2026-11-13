@@ -44,8 +44,8 @@ changes them, `?` lists the ones in use and `swarmux keys list` prints them all.
 | Key | Does |
 | --- | --- |
 | `1`-`9`, `0` | show a screen: `1` mission control, `2` missions, `3` prompts, `4` queue, `5` ledger, `6` sessions, `0` focus, `7` board, `8` knowledge, `9` follow-ups |
-| `g` then `m`, `p` or `k` | the same, by letter: missions, prompts, knowledge |
-| `g` then `d`, `w` or `r` | reserved for screens that are not built yet; until they are, each goes to the nearest screen and says so in the status bar |
+| `g` then `m`, `p`, `k` or `w` | the same, by letter: missions, prompts, knowledge, [work](work.md) |
+| `g` then `d` or `r` | reserved for screens that are not built yet; until they are, each goes to the nearest screen and says so in the status bar |
 | `Esc` | back to the screen you came from (it first closes what is open: the constellation, a highlighted panel); it never quits |
 | `q` / `Ctrl+C` | quit (a window attached to the background service lets go and the work goes on) |
 

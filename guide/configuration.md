@@ -19,6 +19,7 @@ The other settings live next to the feature they control:
 | `gates.toml` in a repository | the done-gate's checks and protected paths | [Done-gate](done-gate.md) |
 | `[verifier]` | clean copies and hidden checks | [Verifier](verifier.md) |
 | `[worktree]` | where worktrees go, port blocks | [Worktrees](worktrees.md) |
+| `[missions]` | plan-first, drift, and `landing` | [Missions](missions.md), [Landing](#landing) below |
 | `[governor]` | budgets, forecasts, auto-resume | [Usage governor](governor.md) |
 | `[notify]` | toasts, bell and `ntfy` | [Notifications](notifications.md) |
 | `[keys]` | hotkeys | [Keys](#keys) below |
@@ -134,3 +135,31 @@ can't be bound reliably:
   (full screen), `Alt+F4`, `Ctrl+Shift+P`, `Ctrl+Tab`, `Ctrl+,` and whatever
   you bound in its settings. The same goes for your multiplexer's prefix key.
 - `Esc` and `Ctrl+C`, above.
+
+## Landing
+
+`landing` in the `[missions]` section says when a workspace mission lands: its
+repositories' branches merged into `swarmux/<mission>/integration`, producers
+first, all or none (see [Workspaces](workspaces.md)). Only workspace
+missions land anything; a mission worked in one folder is delivered when its
+gate passes, whatever this says.
+
+```toml
+[missions]
+landing = "auto"      # "auto" (the default) or "manual"
+```
+
+- `"auto"`: the moment the gate passes, swarmux lands the mission and delivers
+  it. This is how it has always worked; nothing changes if you leave the
+  setting out.
+- `"manual"`: the gate passing does not land. The mission waits, verified, under
+  READY TO LAND on the [Work screen](work.md) until you land it with `l`. Landing
+  then does exactly what `"auto"` does: each repository is merged, producers
+  first; if one cannot take its merge, the ones merged before it are put back,
+  nothing stays landed, and the mission is escalated to your inbox. When every
+  repository landed the mission is delivered and its evidence sealed, so a
+  mission waiting to land has no evidence bundle yet. Delivered work is landed
+  once; asking again is refused.
+
+Any other word is refused with the line it is on, and swarmux says which two
+words it understands.

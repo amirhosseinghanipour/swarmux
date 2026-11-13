@@ -116,6 +116,12 @@ conflict, or git refuses), the repositories merged before it are put back,
 nothing stays landed, the mission is escalated and the inbox says which
 repository stopped it and why.
 
+With `landing = "manual"` in `[missions]` (see [Configuration](configuration.md#landing))
+the gate passing does not land the mission: it waits, verified, on the [Work
+screen](work.md) until you land it with `l`, and then lands exactly as above,
+including the undo when one repository can't take its merge. The default,
+`"auto"`, lands the moment the gate passes.
+
 ## Not yet
 
 - A workspace mission builds in one session: plans whose tasks could run

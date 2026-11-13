@@ -93,6 +93,7 @@ plan_first = false
 plan_model = "sonnet"
 drift_threshold = 0.3
 parallel = true
+landing = "auto"      # "manual": a workspace mission waits to be landed by you
 ```
 
 ## Task graphs

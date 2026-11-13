@@ -152,6 +152,7 @@ Single Rust binary. Windows, macOS, Linux. Works with Claude Code only.
 - [Configuration](guide/configuration.md)
 - [Telemetry sources](guide/telemetry.md)
 - [Mission control](guide/mission-control.md) and the [inbox](guide/mission-control.md#the-inbox-as-an-alarm-panel)
+- [Work: decide and land](guide/work.md)
 - [Missions](guide/missions.md)
 - [The Board: shared state between a mission's agents](guide/board.md)
 - [Follow-through: what your agents leave behind, brought to you three times a day](guide/follow-through.md)

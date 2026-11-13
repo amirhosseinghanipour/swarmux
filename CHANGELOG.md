@@ -8,6 +8,24 @@ follows [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- The Work screen (`g w`): decide and land in one place. A ranked queue (decide,
+  ready to land, running, landed) with the cost of waiting from data that
+  exists (the auto-deny countdown, what a plan's task dependencies hold up) and
+  the usage windows below it; and for the selected outcome four tabs (work
+  product, stream, diff, checks) showing plan against drift, the agent's claim
+  against the checks, the evidence, and what landing does. A held tool call
+  shows the call, the rule, the risk, the countdown and the agent's own words,
+  quoted and labelled. Actions (answer a held call, approve or change a plan,
+  land, kill, retry, resume, open the evidence in the Ledger) are named actions
+  in the keymap, shown dim with their reason when they can't be taken. The tab
+  bar counts the decisions waiting. See [Work](guide/work.md).
+- `landing` in `[missions]`: `"auto"` (the default, as before) lands a workspace
+  mission the moment its gate passes; `"manual"` leaves it verified, waiting
+  under READY TO LAND until you land it from Work (`l`). Landing on request
+  merges each repository into `swarmux/<mission>/integration`, producers first,
+  all or none, and puts back what it merged if one repository can't take its
+  merge, exactly as the automatic landing does. A bad value is refused with its
+  line. See [Configuration](guide/configuration.md#landing).
 - A console read model, the data layer for the Work and Deck screens and later
   a daemon API or phone client: ranked outcome groups (decide, ready to land,
   running, landed), each outcome's contract, plan and drift, checks and gate
@@ -33,7 +51,7 @@ follows [Semantic Versioning](https://semver.org/).
   with `? help` before `q quit`; a footer that is too wide drops the other
   hints from the end instead of being cut mid-hint, and those two go last.
 - Navigation: `Esc` goes back to the screen you came from, and `g` then a
-  letter goes to a screen (`gm`, `gp`, `gk`; `gd`, `gw` and `gr` are kept for
+  letter goes to a screen (`gm`, `gp`, `gk`, `gw`; `gd` and `gr` are kept for
   screens that are not built yet and go to the nearest one, saying so). The
   keys are now named actions behind a keymap, so they can be changed later;
   with the default keymap every existing key does what it did.
