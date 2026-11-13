@@ -62,6 +62,9 @@ struct RawConfig {
     motion: Option<String>,
     splash: Option<bool>,
     layouts: Option<Vec<RawLayout>>,
+    /// Read whole: what is wrong in it is for the keymap to report, not a
+    /// reason to refuse the file.
+    keys: Option<toml::Value>,
 }
 
 #[derive(Deserialize)]
@@ -213,6 +216,9 @@ pub fn parse_settings(text: &str, path: &Path) -> Result<Settings, ConfigError> 
         layouts: raw.layouts,
     };
     settings.ui = parse_ui(ui, text, path)?;
+    if let Some(keys) = &raw.keys {
+        settings.keys = crate::config_keys::parse_keys(keys);
+    }
     Ok(settings)
 }
 
@@ -1199,5 +1205,70 @@ bg = [\"#000000\", \"#111111\"]"
         let e = load_settings(dir.path()).unwrap_err();
         assert_eq!(e.line, None);
         assert!(e.to_string().contains(&dir.path().display().to_string()));
+    }
+
+    fn entries(text: &str) -> Vec<(String, String, Vec<String>)> {
+        parse(text)
+            .unwrap()
+            .keys
+            .entries
+            .into_iter()
+            .map(|e| (e.section, e.name, e.keys))
+            .collect()
+    }
+
+    fn strings(items: &[&str]) -> Vec<String> {
+        items.iter().map(ToString::to_string).collect()
+    }
+
+    #[test]
+    fn keys_are_read_as_written_one_or_a_list() {
+        let found = entries(concat!(
+            "[keys.global]\n",
+            "quit = \"x\"\n",
+            "\"look.next_theme\" = [\"t\", \"f2\"]\n",
+            "[keys.\"mission.wall\"]\n",
+            "\"list.next\" = []\n",
+            "[keys.focus.reading]\n",
+            "\"focus.top\" = \"g g\"\n",
+        ));
+        assert!(found.contains(&("global".into(), "quit".into(), strings(&["x"]))));
+        assert!(found.contains(&(
+            "global".into(),
+            "look.next_theme".into(),
+            strings(&["t", "f2"])
+        )));
+        assert!(found.contains(&("mission.wall".into(), "list.next".into(), vec![])));
+        // A table inside a table is a dotted context.
+        assert!(found.contains(&(
+            "focus.reading".into(),
+            "focus.top".into(),
+            strings(&["g g"])
+        )));
+    }
+
+    #[test]
+    fn no_keys_section_is_no_keys() {
+        assert!(parse("").unwrap().keys.is_empty());
+        assert!(parse("[keys]").unwrap().keys.is_empty());
+    }
+
+    #[test]
+    fn a_wrong_kind_of_value_in_keys_does_not_refuse_the_file() {
+        let s = parse(concat!(
+            "max_concurrent = 2\n",
+            "[keys.global]\n",
+            "quit = 5\n",
+            "ok = [\"a\", 3]\n",
+            "fine = \"x\"\n",
+        ))
+        .unwrap();
+        assert_eq!(s.max_concurrent, 2, "the rest of the file still loads");
+        assert_eq!(s.keys.entries.len(), 1);
+        assert_eq!(s.keys.malformed.len(), 2);
+        assert_eq!(s.keys.malformed[0].at, "global.ok");
+        assert!(s.keys.malformed[0].found.contains("number 3"));
+        let s = parse("keys = \"x\"").unwrap();
+        assert_eq!(s.keys.malformed.len(), 1);
     }
 }

@@ -11,6 +11,7 @@ mod config_board;
 pub mod config_edit;
 mod config_followups;
 mod config_governor;
+mod config_keys;
 mod config_missions;
 mod config_notify;
 mod config_telemetry;

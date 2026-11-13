@@ -33,6 +33,9 @@ pub struct Settings {
     pub board: BoardSettings,
     /// Follow-through: what agents leave behind, standing orders, the brief.
     pub followups: crate::FollowSettings,
+    /// The `[keys]` section as written: not yet checked against the
+    /// actions that exist, which only the interface knows.
+    pub keys: swarmux_domain::keys::KeyConfig,
 }
 
 /// The `[board]` section.
@@ -357,6 +360,7 @@ impl Default for Settings {
             missions: crate::PlanSettings::default(),
             board: BoardSettings::default(),
             followups: crate::FollowSettings::default(),
+            keys: swarmux_domain::keys::KeyConfig::default(),
         }
     }
 }
