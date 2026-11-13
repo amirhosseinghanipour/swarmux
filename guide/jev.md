@@ -15,12 +15,32 @@ confidence and latency; anything else (lower confidence, no key, a timeout,
 an HTTP error, an invalid reply) falls back to asking you, or to Haiku, and is
 logged too. JEV is asked off the UI thread and never holds up the screen.
 
+**What JEV may decide about a tool call.** It may deny any call it is asked
+about. It may allow only calls up to `max_allow` (default `R1`: reads and
+changes that stay in the worktree); a confident allow above that goes to you,
+and the record says why. It is never asked about a call that can't be taken
+back (a delete, a force push, a history rewrite): only your typed
+confirmation allows those, however sure the model is. It is not asked about a
+call with nothing to judge either, such as an MCP or unknown tool, whose
+command, path or URL swarmux doesn't know. Calls held by a protected path or a
+knowledge rule are yours alone, as before. JEV only ever decides the one call
+in front of it; it can't create a rule.
+
 ```toml
 [jev]
 provider = "typesafe"   # "off" (default), "typesafe" or "openrouter"
 threshold = 0.85        # answers below this go to you instead
 # timeout_ms = 2000     # default: 2000 for typesafe, 5000 for openrouter
+# max_allow = "R1"      # "R0".."R3": the riskiest call JEV may allow; R4 is not a choice
 ```
+
+`max_allow` is read line by line: a value that isn't valid is replaced by `"R1"`
+and `swarmux doctor` and `swarmux guard lint` name the line.
+
+**What is recorded.** Every decision JEV makes or hands back is in the ledger
+with the provider, the model, the SHA-256 of exactly what was sent, and whether
+the summary of the call was cut at 200 characters (the answer covers the whole
+call, the model saw the cut text).
 
 | Provider | Endpoint | Model | Key |
 | --- | --- | --- | --- |

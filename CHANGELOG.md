@@ -8,6 +8,39 @@ follows [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Guard hardening. Nothing below changes what a rule matches; it changes what
+  the Guard does when it can't decide, and who may decide.
+  - `[guard] on_unreachable` (`"auto"`, `"deny"`, `"ask"`, `"pass"`) sets what a
+    job's hook prints when swarmux can't be reached. Each job's mode is passed in
+    `SWARMUX_GUARD_FAIL`. The hook leaves every fallback in a spool file, and
+    swarmux writes the spool into the ledger at its next start (kind `policy`,
+    event `guard_fallback`). `swarmux doctor` shows the mode and runs the hook
+    against an unreachable app in each mode.
+  - `swarmux guard rules list | remove <id> | prune` and `swarmux guard lint`.
+    "Always allow" rules are kept in `guard-rules.toml` with their scope,
+    source, creation time and expiry; adding, removing and expiring one is a
+    ledger entry (kind `policy`, events `added`, `removed`, `expired`).
+  - `[guard] always_scope` (`"repo"`, `"workspace"`, `"global"`),
+    `always_expiry_days` (1 to 3650, or `"never"`), `protected_paths` and
+    `hook_on_failure_block`, and `[jev] max_allow`, all read line by line: a
+    value that isn't valid is replaced by its default and named by the status
+    bar, `swarmux doctor` and `swarmux guard lint`.
+  - A shell command that runs swarmux from a job is denied unless the
+    subcommand is `hook`, `board-mcp` or `statusline`. Tool calls can no longer
+    read or write the database, the audit key file, `config.toml`, the rules
+    file, the spool, the hidden checks or the verifier's copies; paths are
+    compared by component after expanding `~` and `$HOME` and following
+    symlinks. Writes to `.claude/settings*.json`, `.claude/hooks`, `.mcp.json`,
+    `CLAUDE.md`, `AGENTS.md`, `.git/hooks` and `.swarmux` are held for you
+    (denied for unattended jobs).
+  - A subagent's tool calls carry its `agent_id` and `agent_type` into the
+    decision record, the ledger and the inbox.
+  - Decisions in the ledger carry the hash of their rule and who resolved them;
+    JEV's carry the provider, the model, the hash of what was sent and whether
+    the summary was cut.
+  - The hook can add `"onFailure": "block"` to the PreToolUse hook
+    (`hook_on_failure_block`, off by default). Which Claude Code versions know
+    the key is not detected yet.
 - Send back with a note (`s` on Work). Work that stopped, was escalated or
   waits for you resumes in its own Claude session and worktree with your note
   as its next instruction, a mission follows the new job, and the gate judges
@@ -249,6 +282,28 @@ follows [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Irreversible calls (risk R4) are allowed only by the typed confirmation, and
+  the Guard enforces it, not only the key handler. A call that an allow rule
+  (even a bare `Bash`), `unmatched = "pass"` or JEV used to allow is now held
+  for you, and JEV is never asked about it. Update an `allow` rule that you
+  relied on to run `rm -rf` or `git reset --hard` unasked: it is asked now.
+- JEV may allow only calls up to `[jev] max_allow` (default `R1`) and is not
+  asked about calls with nothing to judge (MCP and unknown tools). It may
+  still deny anything it is asked about. A confident allow above the limit
+  goes to you.
+- "Always allow" (`a`) and the offered rule (`r`) now apply to the repository
+  the call was made in (`always_scope`) and expire after 30 days
+  (`always_expiry_days`), and are written to `guard-rules.toml`, not
+  `config.toml`. They are refused for irreversible calls, shell lines of
+  several commands and calls whose rule would be the bare tool name; those can
+  be approved once. Rules already in `config.toml` `[guard] allow` keep working
+  everywhere and never expire; `swarmux guard rules list` shows them as
+  `source config`.
+- Jobs nobody watches (a mission's jobs, reviewers and what continues them) are
+  denied when their hook can't reach swarmux. Before, every job fell back to
+  Claude Code's own rules. Set `[guard] on_unreachable = "pass"` for the old
+  behaviour. Jobs you start from your own prompt behave as before.
+- Every job's environment now has `SWARMUX_GUARD_FAIL` and `SWARMUX_GUARD_SPOOL`.
 - A key pressed with Ctrl or Alt (other than Ctrl+C) no longer counts as the
   plain letter: `Ctrl+q` does not quit and `Alt+x` is not `x`. `Shift` and
   AltGr characters (`D`, `[` on a German keyboard) work as before.
@@ -259,6 +314,8 @@ follows [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- An "always allow" of a shell line with several commands made a rule that
+  never matched the same line again. Such lines are refused now.
 - A second result no longer finishes a job twice.
 - A negative zero spend is never shown.
 - The selected session stays selected when the list changes.

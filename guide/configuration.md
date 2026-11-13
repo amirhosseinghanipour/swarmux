@@ -14,7 +14,7 @@ The other settings live next to the feature they control:
 | --- | --- | --- |
 | `[telemetry]`, `[pricing]` | which sources run, how often, model prices | [Telemetry](telemetry.md) |
 | `theme`, `layout`, `icons`, `motion`, `[themes]`, `[[layouts]]` | look and feel | [Themes](themes.md) |
-| `[guard]` | permission rules and the loop breaker | [Guard](guard.md) |
+| `[guard]` | permission rules, the loop breaker, what happens when swarmux can't be reached, "always allow" scope and expiry, protected paths | [Guard](guard.md) |
 | `[jev]` | the optional hosted decision model | [JEV](jev.md) |
 | `gates.toml` in a repository | the done-gate's checks and protected paths | [Done-gate](done-gate.md) |
 | `[verifier]` | clean copies and hidden checks | [Verifier](verifier.md) |

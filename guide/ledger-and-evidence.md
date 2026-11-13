@@ -128,3 +128,23 @@ with one, the note is recorded as an entry of kind `operator` (the actor is
 `failed`, `held`, ...), the job the agent carries on as, and for a call the
 call itself. It is chained like every other entry, so verifying the ledger
 covers it, and a mission's bundle range includes it when it falls inside.
+
+## Changes to the policy and gaps in it
+
+Entries of kind `policy` record what changes what the [Guard](guard.md)
+allows, and where it could not decide:
+
+- `added`, `removed` and `expired`: an "always allow" or an accepted rule offer
+  was added, removed by `swarmux guard rules remove`, or pruned after its expiry
+  (`rule`, `scope`, `root`, `source`, `created_at`, `expires_at` and the SHA-256
+  of the rule as kept; the actor is `operator`).
+- `guard_fallback`: a hook call that fell back because swarmux could not be
+  reached (when, job, tool, the SHA-256 of the hook input, why, what the hook
+  printed, and the hash of the setting that decided it; the actor is
+  `guard-hook`). These reach the ledger when swarmux next starts, from a spool
+  file the hook writes, so a fallback is on record only after that restart.
+
+Guard decisions (kind `guard_decision`) also carry the SHA-256 of the rule that
+decided them, who resolved a held call (`human-typed`, `human-key`, `rule`,
+`model`, `timeout`) and, for a subagent's call, its id and type; JEV's carry the
+provider, the model, the hash of what was sent and whether the summary was cut.
