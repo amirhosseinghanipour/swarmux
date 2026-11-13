@@ -8,6 +8,7 @@ use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifier
 use ratatui::DefaultTerminal;
 use std::rc::Rc;
 
+use swarmux_application::console::{ConsoleService, ConsoleSnapshot, Extra, Gathered};
 use swarmux_application::ports::Clock;
 use swarmux_application::{
     AppError, AppResult, Begun, CheckpointService, Engine, EvidenceService, FocusTracker,
@@ -147,6 +148,8 @@ pub struct App {
     /// Jobs, the Guard, hooks, the gate, the watchdog, missions and the
     /// board: the services that keep the work going.
     pub(crate) engine: Engine,
+    /// The console read model: what the Work and Deck screens read.
+    console: ConsoleService,
     /// Bundles, their verification and outcome labels.
     evidence: Option<Rc<EvidenceService>>,
     /// When the user was last here: what happened since is the digest.
@@ -327,6 +330,7 @@ impl App {
             knowledge_screen: Default::default(),
             followup_screen: Default::default(),
             engine: Engine::new(jobs, guard),
+            console: ConsoleService::new(),
             evidence: None,
             away_since: None,
             clock: None,
@@ -726,6 +730,29 @@ impl App {
             return Some(found.clone());
         }
         approvals.into_iter().next()
+    }
+
+    /// The console read model as it stands: ranked outcome groups, the
+    /// Guard's holds, the Deck's graph and the header figures, as plain
+    /// data (no terminal types), the same data a daemon API would serve.
+    ///
+    /// Call it when the engine reported a change, not per frame: the
+    /// snapshot is rebuilt only when what it reads changed, and is
+    /// served as it was otherwise.
+    pub fn console_snapshot(&mut self) -> &ConsoleSnapshot {
+        let now = self.now();
+        let gathered = Gathered::of(&self.engine);
+        let src = gathered.sources(
+            &self.engine,
+            Extra {
+                now,
+                attention: self.mission.alarms().open(),
+                evidence: self.evidence.as_deref(),
+                telemetry: Some(&self.mission.snapshot),
+                stream: self.history_service.repository(),
+            },
+        );
+        self.console.snapshot(&src)
     }
 
     pub(crate) fn refresh_mission(&mut self) {

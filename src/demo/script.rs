@@ -350,6 +350,16 @@ pub fn timeline(mission: &str) -> Vec<(u64, Act)> {
         },
     ));
 
+    // The agent says what it will do next. The console quotes this line, as
+    // its own words, beside the call it is about to make.
+    v.push((
+        at(7.2),
+        Act::Text(
+            "web-checkout",
+            "Refused. I will push the branch with the test as it was.",
+        ),
+    ));
+
     // Refused, the agent pushes the branch with the test as it was: a push is
     // irreversible, so it is held for the user as a P1.
     v.push((
