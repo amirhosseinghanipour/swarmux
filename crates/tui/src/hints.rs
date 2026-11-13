@@ -72,8 +72,8 @@ fn piece(app: &App, hint: &Hint) -> Option<String> {
     }
 }
 
-/// `0-9 screens` when the screens are on digits, else the key of the list
-/// that names them all.
+/// `0-9 screens` when the screens are on digits, else nothing (`? help`
+/// lists them).
 fn screens_piece(app: &App) -> Option<String> {
     let digits: Option<Vec<char>> = screens::all()
         .map(|s| {
@@ -90,7 +90,7 @@ fn screens_piece(app: &App) -> Option<String> {
             let (lo, hi) = (d.iter().min()?, d.iter().max()?);
             Some(format!("{lo}-{hi} screens"))
         }
-        _ => app.key_of(HELP_TOGGLE).map(|k| format!("{k} all keys")),
+        _ => None,
     }
 }
 
@@ -107,22 +107,48 @@ fn join(pieces: &[String]) -> String {
     }
 }
 
-/// The hints that fit in `width` cells, whole: the last one (the way out)
-/// stays, and the others go from the end, the least important first. A
-/// hint is never cut in half.
+/// The hints of the screen with whether each is pinned: the way out, the
+/// key list and the screen's last hint stay as long as anything does.
+fn pinned_pieces(app: &App) -> Vec<(String, bool)> {
+    let hints = app.screen.def().hints(app);
+    let last = hints.len().saturating_sub(1);
+    hints
+        .iter()
+        .enumerate()
+        .filter_map(|(i, h)| {
+            let pinned = i == last
+                || matches!(h, Hint::Keys { actions: a, .. }
+                    if **a == [actions::QUIT] || **a == [HELP_TOGGLE]);
+            piece(app, h).map(|p| (p, pinned))
+        })
+        .collect()
+}
+
+fn joined(kept: &[(String, bool)]) -> String {
+    join(&kept.iter().map(|(p, _)| p.clone()).collect::<Vec<_>>())
+}
+
+/// The hints that fit in `width` cells, whole. The others go first, from
+/// the end; the pinned ones (`? help`, `q quit`) are the last to go, the
+/// help before the way out. A hint is never cut in half.
 pub(crate) fn fit(app: &App, width: usize) -> String {
-    let all = pieces(app);
+    let all = pinned_pieces(app);
     let mut kept = all.clone();
-    while cells(&join(&kept)) > width && kept.len() > 2 {
-        // The one before the last.
-        kept.remove(kept.len() - 2);
+    loop {
+        let line = joined(&kept);
+        if cells(&line) <= width {
+            return line;
+        }
+        match kept.iter().rposition(|(_, pinned)| !pinned) {
+            Some(i) => {
+                kept.remove(i);
+            }
+            None => break,
+        }
     }
-    let line = join(&kept);
-    if cells(&line) <= width {
-        return line;
-    }
-    // Two did not fit: the way out alone, else nothing.
-    let last = join(&all[all.len().saturating_sub(1)..]);
+    // Only the pinned ones are left and they do not fit: the way out alone,
+    // else nothing.
+    let last = joined(&all[all.len().saturating_sub(1)..]);
     if cells(&last) <= width {
         last
     } else {

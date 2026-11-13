@@ -6,6 +6,7 @@ use swarmux_domain::keys::{Action, Context, actions};
 
 use super::{Bind, Handled, Hint, Screen, ScreenDef, Section};
 use crate::app::App;
+use crate::keys::HELP_TOGGLE;
 use crate::prompts::{FormAction, PromptForm};
 
 pub(super) struct Def;
@@ -68,6 +69,7 @@ const HINTS: &[Hint] = &[
     Hint::keys(&[ROUTE], "route"),
     Hint::symbols(&[actions::LIST_PREV, actions::LIST_NEXT], "select"),
     Hint::Screens,
+    Hint::keys(&[HELP_TOGGLE], "help"),
     Hint::keys(&[actions::QUIT], "quit"),
 ];
 

@@ -6,6 +6,7 @@ use swarmux_domain::keys::{Action, Context, actions};
 
 use super::{Bind, Handled, Hint, Screen, ScreenDef, Section, board};
 use crate::app::App;
+use crate::keys::HELP_TOGGLE;
 use crate::keys::{DECIDE_ALWAYS, DECIDE_NO, DECIDE_YES, INBOX_FOCUS_MODE};
 use crate::keys::{PROMPT_ROUTE, PROMPT_SEND};
 use crate::mission::Pane;
@@ -122,6 +123,7 @@ const HINTS: &[Hint] = &[
     Hint::keys(&[INBOX_FOCUS_MODE], "focus"),
     Hint::keys(&[SWITCH_PANE], "wall"),
     Hint::keys(&[PROMPT_SEND], "prompt"),
+    Hint::keys(&[HELP_TOGGLE], "help"),
     Hint::keys(&[actions::QUIT], "quit"),
 ];
 

@@ -7,6 +7,7 @@ use swarmux_domain::keys::{Action, Context, actions};
 
 use super::{Bind, Handled, Hint, Screen, ScreenDef, Section};
 use crate::app::App;
+use crate::keys::HELP_TOGGLE;
 use crate::keys::{DECIDE_CANCEL_PLAN, DECIDE_NO, DECIDE_YES};
 use crate::missions::Composer;
 
@@ -82,6 +83,7 @@ const HINTS: &[Hint] = &[
     Hint::keys(&[RUN], "run"),
     Hint::keys(&[DECIDE_YES, DECIDE_NO, DECIDE_CANCEL_PLAN], "plan"),
     Hint::symbols(&[actions::LIST_OPEN], "focus"),
+    Hint::keys(&[HELP_TOGGLE], "help"),
     Hint::keys(&[actions::QUIT], "quit"),
 ];
 

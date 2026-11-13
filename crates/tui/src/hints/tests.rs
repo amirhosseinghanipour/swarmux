@@ -9,39 +9,39 @@ use crate::screens::Screen;
 const TODAYS_FOOTERS: &[(&str, &str)] = &[
     (
         "board",
-        " ↑↓ select · r answer a question · x close it · 0-9 screens · q quit",
+        " ↑↓ select · r answer a question · x close it · 0-9 screens · ? help · q quit",
     ),
     (
         "followups",
-        " ↑↓ select · a approve · d decline · l later · o open job · m draft mission · 0-9 screens · q quit",
+        " ↑↓ select · a approve · d decline · l later · o open job · m draft mission · 0-9 screens · ? help · q quit",
     ),
     (
         "knowledge",
-        " ↑↓ select · a add (kind: text) · e edit · p promote · c confirm · x retire · 0-9 screens · q quit",
+        " ↑↓ select · a add (kind: text) · e edit · p promote · c confirm · x retire · 0-9 screens · ? help · q quit",
     ),
     (
         "ledger",
-        " / search · o filter · v verify · l labels · r re-run · f fork · enter view · ↑↓ select · q quit",
+        " / search · o filter · v verify · l labels · r re-run · f fork · enter view · ↑↓ select · ? help · q quit",
     ),
     (
         "mission",
-        " ↑↓ select · ⏎ open · y/n/a answer · A batch · s shelve · F focus · tab wall · p prompt · q quit",
+        " ↑↓ select · ⏎ open · y/n/a answer · A batch · s shelve · F focus · tab wall · p prompt · ? help · q quit",
     ),
     (
         "missions",
-        " n new · e edit · l lint · f protect · p plan first · r run · y/n/c plan · ⏎ focus · q quit",
+        " n new · e edit · l lint · f protect · p plan first · r run · y/n/c plan · ⏎ focus · ? help · q quit",
     ),
     (
         "prompts",
-        " n new · e edit · x delete · d dispatch · D route · ↑↓ select · 0-9 screens · q quit",
+        " n new · e edit · x delete · d dispatch · D route · ↑↓ select · 0-9 screens · ? help · q quit",
     ),
     (
         "queue",
-        " c cancel · r retry · +/- priority · enter view · ↑↓ select · q quit",
+        " c cancel · r retry · +/- priority · enter view · ↑↓ select · ? help · q quit",
     ),
     (
         "sessions",
-        " n new session · w on a workspace · l lean on/off · ↑↓ select · 0-9 screens · q quit",
+        " n new session · w on a workspace · l lean on/off · ↑↓ select · 0-9 screens · ? help · q quit",
     ),
 ];
 
@@ -67,12 +67,12 @@ fn focus_has_two_footers_and_the_forms_have_their_own() {
     t.app.dashboard.classic = true;
     assert_eq!(
         full(&t.app),
-        " p prompt · P route · v review · ↑↓ session · t theme · L layout · tab focus · q quit"
+        " p prompt · P route · v review · ↑↓ session · t theme · L layout · tab focus · ? help · q quit"
     );
     t.app.dashboard.classic = false;
     assert_eq!(
         full(&t.app),
-        " ↑↓ scroll · d diff · t open session · p prompt · v review · D classic · q quit"
+        " ↑↓ scroll · d diff · t open session · p prompt · v review · D classic · ? help · q quit"
     );
     t.app.screen = Screen::Prompts;
     t.app.prompts.form = Some(crate::prompts::PromptForm::blank());
@@ -129,11 +129,14 @@ fn a_footer_that_is_too_long_drops_whole_hints_and_keeps_the_way_out() {
             from += at + 1;
         }
     }
-    // The first hints stay as long as anything does.
+    // The first hints stay as long as any of the others do, and the help
+    // and the way out are the last to go.
     let tight = fit(&t.app, 40);
-    assert!(tight.starts_with(" / search"), "{tight:?}");
-    assert!(tight.ends_with("q quit"), "{tight:?}");
-    // Too narrow for even that: the way out alone, then nothing.
+    assert_eq!(tight, " / search · o filter · ? help · q quit");
+    assert_eq!(fit(&t.app, 27), " / search · ? help · q quit");
+    assert_eq!(fit(&t.app, 16), " ? help · q quit");
+    // Too narrow for the help: the way out alone, then nothing.
+    assert_eq!(fit(&t.app, 15), " q quit");
     assert_eq!(fit(&t.app, 8), " q quit");
     assert_eq!(fit(&t.app, 3), "");
 }
@@ -165,6 +168,58 @@ fn the_footer_never_runs_into_the_status_area() {
         assert!(
             kept.iter().all(|k| pieces.contains(k)),
             "{}: {footer:?}",
+            screen.title()
+        );
+    }
+}
+
+#[test]
+fn every_footer_has_the_help_hint_just_before_the_way_out() {
+    for screen in crate::screens::all() {
+        let mut t = test_app();
+        t.app.screen = screen;
+        let line = full(&t.app);
+        assert!(
+            line.ends_with(" · ? help · q quit"),
+            "{}: {line}",
+            screen.title()
+        );
+    }
+}
+
+#[test]
+fn a_rebound_help_key_shows_and_an_unbound_one_leaves_the_footer() {
+    use crate::keys::config_of;
+    let mut t = test_app();
+    t.app = t
+        .app
+        .with_key_config(&config_of(&[("global", "help.toggle", &["f1"])]));
+    t.app.screen = Screen::Queue;
+    assert!(
+        full(&t.app).ends_with(" · f1 help · q quit"),
+        "{}",
+        full(&t.app)
+    );
+    let mut t = test_app();
+    t.app = t
+        .app
+        .with_key_config(&config_of(&[("global", "help.toggle", &[])]));
+    t.app.screen = Screen::Queue;
+    let line = full(&t.app);
+    assert!(!line.contains("help"), "{line}");
+    assert!(line.ends_with(" · q quit"), "{line}");
+}
+
+#[test]
+fn the_help_hint_outlives_the_other_hints_in_a_narrow_footer() {
+    for screen in crate::screens::all() {
+        let mut t = test_app();
+        t.app.screen = screen;
+        // Wide enough for the pinned two and little else.
+        let line = fit(&t.app, 24);
+        assert!(
+            line.ends_with("? help · q quit"),
+            "{}: {line:?}",
             screen.title()
         );
     }

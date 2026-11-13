@@ -5,6 +5,7 @@ use swarmux_domain::keys::{Action, Context, actions};
 
 use super::{Bind, Handled, Hint, Screen, ScreenDef, Section};
 use crate::app::App;
+use crate::keys::HELP_TOGGLE;
 use crate::queue::{Command, QueueAction};
 
 pub(super) struct Def;
@@ -64,6 +65,7 @@ const HINTS: &[Hint] = &[
     Hint::keys(&[PRIORITY_UP, PRIORITY_DOWN], "priority"),
     Hint::keys(&[actions::LIST_OPEN], "view"),
     Hint::symbols(&[actions::LIST_PREV, actions::LIST_NEXT], "select"),
+    Hint::keys(&[HELP_TOGGLE], "help"),
     Hint::keys(&[actions::QUIT], "quit"),
 ];
 

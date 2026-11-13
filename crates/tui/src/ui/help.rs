@@ -5,7 +5,7 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Clear, Paragraph},
+    widgets::{Block, Clear, Paragraph},
 };
 
 use super::rounded;
@@ -15,7 +15,7 @@ use crate::keys::HELP_TOGGLE;
 use crate::theme::Theme;
 
 /// Widest the panel gets.
-const MAX_WIDTH: u16 = 100;
+pub(crate) const MAX_WIDTH: u16 = 100;
 /// Most the key column takes.
 const MAX_KEYS: usize = 22;
 
@@ -87,7 +87,13 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, state: &HelpState) {
             format!(" {close}{more} "),
             Style::new().fg(t.muted),
         )));
-    frame.render_widget(Clear, panel);
+    // The key list is modal: nothing of the screen behind it shows, not even
+    // beside the panel. Clear, then paint the theme's background again.
+    frame.render_widget(Clear, area);
+    frame.render_widget(
+        Block::new().style(Style::new().bg(t.bg_paint()).fg(t.text)),
+        area,
+    );
     frame.render_widget(Paragraph::new(shown).block(block), panel);
 }
 

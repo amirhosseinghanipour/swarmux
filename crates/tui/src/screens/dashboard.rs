@@ -5,6 +5,7 @@ use swarmux_domain::keys::{Action, Context, actions};
 
 use super::{Bind, Handled, Hint, Screen, ScreenDef, Section};
 use crate::app::App;
+use crate::keys::HELP_TOGGLE;
 use crate::keys::{LOOK_NEXT_LAYOUT, LOOK_NEXT_THEME};
 use crate::keys::{PROMPT_ROUTE, PROMPT_SEND};
 use crate::theme::Theme;
@@ -162,6 +163,7 @@ const GRID_HINTS: &[Hint] = &[
     Hint::keys(&[LOOK_NEXT_THEME], "theme"),
     Hint::keys(&[LOOK_NEXT_LAYOUT], "layout"),
     Hint::keys(&[PANEL_NEXT], "focus"),
+    Hint::keys(&[HELP_TOGGLE], "help"),
     Hint::keys(&[actions::QUIT], "quit"),
 ];
 
@@ -173,6 +175,7 @@ const READING_HINTS: &[Hint] = &[
     Hint::keys(&[PROMPT_SEND], "prompt"),
     Hint::keys(&[TOGGLE_REVIEW], "review"),
     Hint::keys(&[TOGGLE_CLASSIC], "classic"),
+    Hint::keys(&[HELP_TOGGLE], "help"),
     Hint::keys(&[actions::QUIT], "quit"),
 ];
 

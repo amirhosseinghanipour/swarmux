@@ -325,11 +325,11 @@ fn the_tab_shows_the_key_of_a_rebound_screen() {
 }
 
 #[test]
-fn the_screens_range_follows_the_digits_or_points_to_the_key_list() {
+fn the_screens_range_follows_the_digits_and_leaves_when_they_move() {
     let mut t = with_keys(&[("global", "nav.go_ledger", &["f5"])]);
     t.app.screen = Screen::Board;
     let hints = crate::ui::hints(&t.app);
-    assert!(hints.contains("? all keys"), "{hints}");
+    assert!(hints.contains("? help"), "{hints}");
     assert!(!hints.contains("0-9"), "{hints}");
     let mut t = test_app();
     t.app.screen = Screen::Board;
@@ -508,4 +508,48 @@ fn the_key_list_follows_a_rebound_toggle() {
     assert!(t.app.help.is_some());
     t.keys([KeyCode::F(1)]);
     assert!(t.app.help.is_none());
+}
+
+#[test]
+fn nothing_of_the_screen_shows_beside_the_key_list() {
+    use crate::ui::help::MAX_WIDTH;
+    use ratatui::layout::Rect;
+    let mut t = test_app();
+    t.app.screen = Screen::Queue;
+    let behind = Snapshot::of(&t.app, 200, 80);
+    let body = behind.body();
+    let side = (200 - MAX_WIDTH) / 2;
+    let strip = |s: &Snapshot, x: u16, w: u16| s.region(Rect::new(x, body.y, w, body.height));
+    assert!(
+        !strip(&behind, 0, side).trim().is_empty(),
+        "the queue draws there without the list"
+    );
+    chars(&mut t, "?");
+    let s = Snapshot::of(&t.app, 200, 80);
+    assert!(s.contains("keys · queue"), "{}", s.text());
+    assert!(strip(&s, 0, side).trim().is_empty(), "left of the list");
+    assert!(
+        strip(&s, 200 - side, side).trim().is_empty(),
+        "right of the list"
+    );
+    // Above and below it too, in a taller window than the list needs.
+    let first = (body.y..body.bottom())
+        .find(|y| s.row(*y).contains("keys · queue"))
+        .unwrap();
+    assert!(first > body.y, "the panel is centred");
+    assert!(
+        s.region(Rect::new(0, body.y, 200, first - body.y))
+            .trim()
+            .is_empty(),
+        "above the list"
+    );
+    assert!(
+        s.region(Rect::new(0, body.bottom() - 1, 200, 1))
+            .trim()
+            .is_empty(),
+        "below the list"
+    );
+    // Narrow terminals: the list fills the width and nothing leaks either.
+    let n = Snapshot::of(&t.app, 90, 40);
+    assert!(n.contains("keys · queue"), "{}", n.text());
 }

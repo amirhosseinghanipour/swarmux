@@ -6,6 +6,7 @@ use swarmux_domain::keys::{Action, Context, actions};
 use super::{Bind, Handled, Hint, Screen, ScreenDef, Section};
 use crate::app::App;
 use crate::keys::BOARD_ANSWER;
+use crate::keys::HELP_TOGGLE;
 
 pub(super) struct Def;
 
@@ -57,6 +58,7 @@ const HINTS: &[Hint] = &[
     Hint::keys(&[BOARD_ANSWER], "answer a question"),
     Hint::keys(&[DISMISS], "close it"),
     Hint::Screens,
+    Hint::keys(&[HELP_TOGGLE], "help"),
     Hint::keys(&[actions::QUIT], "quit"),
 ];
 

@@ -5,6 +5,7 @@ use swarmux_domain::keys::{Action, Context, actions};
 
 use super::{Bind, Handled, Hint, Screen, ScreenDef, Section};
 use crate::app::{App, InputPurpose, Mode};
+use crate::keys::HELP_TOGGLE;
 use crate::ui::input::Input;
 
 pub(super) struct Def;
@@ -53,6 +54,7 @@ const HINTS: &[Hint] = &[
     Hint::keys(&[TOGGLE_LEAN], "lean on/off"),
     Hint::symbols(&[actions::LIST_PREV, actions::LIST_NEXT], "select"),
     Hint::Screens,
+    Hint::keys(&[HELP_TOGGLE], "help"),
     Hint::keys(&[actions::QUIT], "quit"),
 ];
 
