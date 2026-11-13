@@ -23,6 +23,9 @@ the token flow. From 220x60 it adds burn, model mix, agents, tools, files, git,
 pull requests, MCP servers, system load and a 12-week activity calendar. From
 300x80 it adds a peek at the agent the inbox selection points to.
 
+These are the default keys; [`[keys]`](configuration.md#keys) in the config
+changes them, `?` lists the ones in use and `swarmux keys list` prints them all.
+
 | Key | Does |
 | --- | --- |
 | `Up` / `Down` | select an item (or a wall card, after `Tab`) |

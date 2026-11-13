@@ -8,6 +8,21 @@ follows [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Customizable hotkeys: a `[keys]` section in `config.toml` rebinds any
+  action (one key, a list, a chord like `"g w"`, `ctrl+x`, `alt+x`,
+  `shift+tab`, `f5`) or unbinds it with an empty list; what you don't mention
+  keeps its keys. `Esc`, `Ctrl+C`, the typed-confirm challenge and the answers
+  to approvals (`y`, `n`, `a`, `c`) are not rebindable. A mistake in `[keys]`
+  never costs you the keys: the line is ignored, its action keeps the default
+  keys, the status bar says so and points to the new `swarmux keys lint`
+  (every problem, exit 1 on errors, warns about new overlaps). `swarmux keys
+  list` shows every action with its keys and default, `swarmux keys export`
+  prints the keys in use as TOML to paste into the config.
+- `?` opens the keys that work on the current screen and the global ones,
+  from the keymap in use; `Esc` or `?` closes it. Footer hints, tab numbers,
+  the shelve prompt and the "press 6 then n" style messages are written from
+  the keymap too, so a rebound key shows as what it is. A footer that is too
+  wide drops hints from the end instead of being cut mid-hint.
 - Navigation: `Esc` goes back to the screen you came from, and `g` then a
   letter goes to a screen (`gm`, `gp`, `gk`; `gd`, `gw` and `gr` are kept for
   screens that are not built yet and go to the nearest one, saying so). The
