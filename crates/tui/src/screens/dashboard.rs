@@ -3,8 +3,9 @@
 use ratatui::{Frame, layout::Rect, text::Line};
 use swarmux_domain::keys::{Action, Context, actions};
 
-use super::{Bind, Handled, Screen, ScreenDef, Section};
+use super::{Bind, Handled, Hint, Screen, ScreenDef, Section};
 use crate::app::App;
+use crate::keys::{LOOK_NEXT_LAYOUT, LOOK_NEXT_THEME};
 use crate::keys::{PROMPT_ROUTE, PROMPT_SEND};
 use crate::theme::Theme;
 
@@ -152,6 +153,29 @@ const SECTIONS: &[Section] = &[
     },
 ];
 
+/// The footer of the classic panels.
+const GRID_HINTS: &[Hint] = &[
+    Hint::keys(&[PROMPT_SEND], "prompt"),
+    Hint::keys(&[PROMPT_ROUTE], "route"),
+    Hint::keys(&[TOGGLE_REVIEW], "review"),
+    Hint::symbols(&[actions::LIST_PREV, actions::LIST_NEXT], "session"),
+    Hint::keys(&[LOOK_NEXT_THEME], "theme"),
+    Hint::keys(&[LOOK_NEXT_LAYOUT], "layout"),
+    Hint::keys(&[PANEL_NEXT], "focus"),
+    Hint::keys(&[actions::QUIT], "quit"),
+];
+
+/// The footer of the reading view.
+const READING_HINTS: &[Hint] = &[
+    Hint::symbols(&[SCROLL_UP, SCROLL_DOWN], "scroll"),
+    Hint::keys(&[TOGGLE_DIFF], "diff"),
+    Hint::keys(&[OPEN_TERMINAL], "open session"),
+    Hint::keys(&[PROMPT_SEND], "prompt"),
+    Hint::keys(&[TOGGLE_REVIEW], "review"),
+    Hint::keys(&[TOGGLE_CLASSIC], "classic"),
+    Hint::keys(&[actions::QUIT], "quit"),
+];
+
 impl ScreenDef for Def {
     fn id(&self) -> Screen {
         Screen::Dashboard
@@ -190,12 +214,16 @@ impl ScreenDef for Def {
         }
     }
 
-    fn hints(&self, app: &App) -> &'static str {
+    fn hints(&self, app: &App) -> &'static [Hint] {
         if app.dashboard.classic {
-            " p prompt · P route · v review · ↑↓ session · t theme · L layout · tab focus · q quit"
+            GRID_HINTS
         } else {
-            " ↑↓ scroll · d diff · t open session · p prompt · v review · D classic · q quit"
+            READING_HINTS
         }
+    }
+
+    fn context_stacks(&self) -> Vec<Vec<Context>> {
+        vec![vec![GRID, CTX], vec![READING, CTX]]
     }
 
     fn handle(&self, app: &mut App, action: Action) -> Handled {

@@ -19,7 +19,7 @@ use swarmux_application::{
 use swarmux_domain::alarm::{Breakpoint, LoadMeter};
 use swarmux_domain::evidence::{brief, heat_strip};
 use swarmux_domain::keys::{
-    Action, Catalog, Context, GLOBAL, KeySpec, Keymap, Outcome, Resolver, actions,
+    Action, Catalog, Context, GLOBAL, KeyConfig, KeySpec, Keymap, Outcome, Resolver, actions,
 };
 use swarmux_domain::mission::Contract;
 use swarmux_domain::{
@@ -28,11 +28,12 @@ use swarmux_domain::{
 
 use crate::dashboard::DashboardState;
 use crate::focus::{Checkpoints, FocusState};
+use crate::help::HelpState;
 use crate::inbox::{Confirm, Decision};
 use crate::keys::{
-    BOARD_ANSWER, DECIDE, DECIDE_ALWAYS, DECIDE_CANCEL_PLAN, DECIDE_NO, DECIDE_YES,
-    INBOX_FOCUS_MODE, LOOK_NEXT_LAYOUT, LOOK_NEXT_THEME, PROMPT_ROUTE, PROMPT_SEND,
-    SHOWCASE_CONSTELLATION, SHOWCASE_SPECTRUM,
+    BOARD_ANSWER, DECIDE, DECIDE_ALWAYS, DECIDE_CANCEL_PLAN, DECIDE_NO, DECIDE_YES, HELP,
+    HELP_PAGE_DOWN, HELP_PAGE_UP, HELP_TOGGLE, INBOX_FOCUS_MODE, LOOK_NEXT_LAYOUT, LOOK_NEXT_THEME,
+    PROMPT_ROUTE, PROMPT_SEND, SHOWCASE_CONSTELLATION, SHOWCASE_SPECTRUM,
 };
 use crate::ledger::{HEAT_DAYS, LedgerScreen};
 use crate::mission::{Cadence, MissionState, Pane, Tile, wall_tiles};
@@ -96,6 +97,12 @@ pub struct App {
     catalog: Catalog,
     /// A half-typed chord, and what a key press means.
     pub(crate) resolver: Resolver,
+    /// The key list `?` opens, while it is open.
+    pub(crate) help: Option<HelpState>,
+    /// How many entries of the user's `[keys]` could not be used.
+    key_problems: usize,
+    /// What to tell the user about them, and the frame it disappears at.
+    key_warning: Option<(String, u64)>,
     /// Milliseconds the terminal session has been on screen: real time,
     /// unlike the clock the work runs by (which the demo moves by hand).
     /// What a half-typed chord waits in.
@@ -271,6 +278,8 @@ const SPECTRUM_FPS: u16 = 8;
 const SHOWCASE_MAX_STEP_MS: u64 = 250;
 /// How long a toast stays up, in milliseconds.
 const TOAST_MS: u64 = 2500;
+/// How long the warning about the user's `[keys]` stays up.
+const KEY_WARNING_MS: u64 = 12_000;
 /// How often Focus re-reads the job's checkpoints.
 const CHECKPOINTS_EVERY_MS: Millis = 1_000;
 
@@ -292,6 +301,9 @@ impl App {
             keymap,
             catalog,
             resolver: Resolver::new(),
+            help: None,
+            key_problems: 0,
+            key_warning: None,
             ui_ms: 0,
             ui_tick: None,
             frame: 0,
@@ -414,6 +426,71 @@ impl App {
     /// The keys in use.
     pub fn keymap(&self) -> &Keymap {
         &self.keymap
+    }
+
+    /// Uses the defaults with the user's `[keys]` applied. What can't be
+    /// used keeps its default keys, and the status bar says so for a while
+    /// (the key list says so too), pointing to `swarmux keys lint`.
+    pub fn with_key_config(mut self, config: &KeyConfig) -> App {
+        let Ok(found) = crate::keys::effective(config) else {
+            // The defaults themselves are wrong: a bug a test catches. Keep
+            // the ones the app started with.
+            return self;
+        };
+        self.keymap = found.keymap;
+        self.catalog = found.catalog;
+        self.resolver.clear();
+        self.key_problems = found.problems.len();
+        if self.key_problems > 0 {
+            let n = self.key_problems;
+            self.key_warning = Some((
+                format!(
+                    "run `swarmux keys lint`: {n} key setting{} in config.toml can't be used, \
+                     the default keys apply there",
+                    if n == 1 { "" } else { "s" }
+                ),
+                self.frame + self.look.frames(KEY_WARNING_MS),
+            ));
+        }
+        self
+    }
+
+    /// How many entries of `[keys]` were left out.
+    pub(crate) fn key_problems(&self) -> usize {
+        self.key_problems
+    }
+
+    /// The warning about `[keys]`, while it shows.
+    pub(crate) fn key_warning(&self) -> Option<&str> {
+        self.key_warning
+            .as_ref()
+            .filter(|(_, until)| self.frame < *until)
+            .map(|(text, _)| text.as_str())
+    }
+
+    /// How the first key of `action` is written, looking in the contexts
+    /// active now first and then everywhere. None when it has no key.
+    pub(crate) fn key_of(&self, action: Action) -> Option<String> {
+        self.contexts()
+            .into_iter()
+            .chain(self.keymap.contexts())
+            .find_map(|c| self.keymap.chords_of(c, action).next())
+            .map(ToString::to_string)
+    }
+
+    /// The key that goes to `screen` and the key of `action` there, for a
+    /// message like "press 6 then n".
+    pub(crate) fn goto_keys(&self, screen: Screen, action: Action) -> (String, String) {
+        (
+            crate::keys::nav_label(&self.keymap, screen),
+            crate::hints::key_or_name(self, action),
+        )
+    }
+
+    /// What to say when a session is needed and there is none.
+    pub(crate) fn need_session(&self) -> String {
+        let (go, new) = self.goto_keys(Screen::Sessions, screens::sessions::NEW);
+        format!("create a session first: press {go} then {new}")
     }
 
     /// Re-reads the palette file when it has changed (looked at about once a
@@ -1142,7 +1219,12 @@ impl App {
     fn dispatch_key(&mut self, key: KeyEvent) {
         let outcome = match crate::keys::spec_of(key) {
             Some(spec) => {
-                let stack = self.contexts();
+                // The key list is modal: only its own keys and the global ones.
+                let stack = if self.help.is_some() {
+                    vec![HELP, GLOBAL]
+                } else {
+                    self.contexts()
+                };
                 self.resolver.feed(&self.keymap, &stack, spec, self.ui_ms)
             }
             None => Outcome::Unbound,
@@ -1199,6 +1281,9 @@ impl App {
 
     /// Runs `action`: the screen first, then what every screen shares.
     fn perform(&mut self, action: Action) -> Handled {
+        if self.help.is_some() {
+            return self.help_action(action);
+        }
         if self.showcase.mode.is_some() && !passes_showcase(action) {
             // The constellation and the spectrum take every other key.
             return Handled::Yes;
@@ -1209,9 +1294,30 @@ impl App {
         self.handle_shared(action)
     }
 
+    /// What a key does while the key list shows: scroll it, close it, leave.
+    /// Nothing else gets through.
+    fn help_action(&mut self, action: Action) -> Handled {
+        let scroll = |app: &App, by: isize| {
+            if let Some(help) = &app.help {
+                help.scroll.set(help.scroll.get().saturating_add_signed(by));
+            }
+        };
+        match action {
+            HELP_TOGGLE | actions::BACK => self.help = None,
+            actions::QUIT => self.quit = true,
+            actions::LIST_PREV => scroll(self, -1),
+            actions::LIST_NEXT => scroll(self, 1),
+            HELP_PAGE_UP => scroll(self, -10),
+            HELP_PAGE_DOWN => scroll(self, 10),
+            _ => {}
+        }
+        Handled::Yes
+    }
+
     fn handle_shared(&mut self, action: Action) -> Handled {
         match action {
             actions::QUIT => self.quit = true,
+            HELP_TOGGLE => self.help = Some(HelpState::default()),
             actions::BACK => self.go_back(),
             DECIDE_YES | DECIDE_NO | DECIDE_ALWAYS | DECIDE_CANCEL_PLAN => {
                 return self.decide(action);
@@ -1344,7 +1450,7 @@ impl App {
             self.select_inbox_session();
         }
         if self.sessions.is_empty() {
-            self.error = Some("create a session first: press 6 then n".into());
+            self.error = Some(self.need_session());
         } else {
             let purpose = if routed {
                 InputPurpose::RoutedPrompt
@@ -1715,8 +1821,10 @@ impl App {
             match answer {
                 Decision::Yes => self.begin_confirm(&target),
                 Decision::Always => {
-                    self.notice =
-                        Some("irreversible calls are never always-allowed: y to confirm".into());
+                    self.notice = Some(format!(
+                        "irreversible calls are never always-allowed: {} to confirm",
+                        crate::hints::key_or_name(self, DECIDE_YES)
+                    ));
                 }
                 _ => {
                     self.engine.guard.deny(id)?;
@@ -1869,11 +1977,14 @@ impl App {
     /// routes it, with `route`).
     pub(crate) fn start_template_dispatch(&mut self, route: bool) -> AppResult<()> {
         let Some(prompt) = self.prompts.selected_prompt() else {
-            self.error = Some("no prompt selected: press n to write one".into());
+            self.error = Some(format!(
+                "no prompt selected: press {} to write one",
+                crate::hints::key_or_name(self, screens::prompts::NEW)
+            ));
             return Ok(());
         };
         let Some(session) = self.selected_session() else {
-            self.error = Some("create a session first: press 6 then n".into());
+            self.error = Some(self.need_session());
             return Ok(());
         };
         self.prompts.pending = Some(PendingDispatch {

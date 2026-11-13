@@ -39,11 +39,12 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, tiles: &[Tile], mode: Wa
         return;
     }
     if tiles.is_empty() {
+        let (go, new) = app.goto_keys(crate::app::Screen::Sessions, crate::screens::sessions::NEW);
         frame.render_widget(
             Paragraph::new(Line::from(dim(
                 t,
                 fit(
-                    "no sessions yet · press 6, then n, to create one",
+                    &format!("no sessions yet · press {go}, then {new}, to create one"),
                     usize::from(inner.width),
                 ),
             ))),

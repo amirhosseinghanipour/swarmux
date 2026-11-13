@@ -80,14 +80,16 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, now: Millis) {
 
     if m.items.is_empty() {
         let hint = if m.alarms().focus() && m.alarms().held_back().count > 0 {
-            "focus: nothing urgent is waiting"
+            "focus: nothing urgent is waiting".to_string()
         } else if app.sessions.is_empty() {
-            "press 6, then n, to add a session"
+            let (go, new) =
+                app.goto_keys(crate::app::Screen::Sessions, crate::screens::sessions::NEW);
+            format!("press {go}, then {new}, to add a session")
         } else {
-            "all quiet · nothing needs you"
+            "all quiet · nothing needs you".to_string()
         };
         frame.render_widget(
-            Paragraph::new(Line::from(dim(t, fit(hint, usize::from(inner.width))))),
+            Paragraph::new(Line::from(dim(t, fit(&hint, usize::from(inner.width))))),
             Rect { height: 1, ..inner },
         );
         return;

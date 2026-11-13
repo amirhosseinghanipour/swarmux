@@ -226,14 +226,22 @@ pub fn build(options: &Options) -> anyhow::Result<App> {
     .with_telemetry_feed(telemetry, &settings.telemetry)
     .with_demo(LABEL)
     .with_driver(director.into_driver());
-    Ok(app.with_look(
+    let app = app.with_look(
         &settings.ui,
         Launch {
             claude: "claude (scripted demo)".into(),
             no_splash: true,
             now_ms: script::START,
         },
-    ))
+    );
+    // The demo is on its own: nothing of the user's config but their keys,
+    // so `swarmux --demo` shows what their own keymap looks like.
+    let keys = Paths::default_home()
+        .ok()
+        .and_then(|p| swarmux_infrastructure::load_settings(&p.config).ok())
+        .map(|s| s.keys)
+        .unwrap_or_default();
+    Ok(app.with_key_config(&keys))
 }
 
 #[cfg(test)]

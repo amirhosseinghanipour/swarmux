@@ -3,7 +3,7 @@
 use ratatui::{Frame, layout::Rect};
 use swarmux_domain::keys::{Action, Context, actions};
 
-use super::{Bind, Handled, Screen, ScreenDef, Section};
+use super::{Bind, Handled, Hint, Screen, ScreenDef, Section};
 use crate::app::{App, InputPurpose, Mode};
 use crate::ui::input::Input;
 
@@ -46,6 +46,16 @@ const SECTIONS: &[Section] = &[Section {
     ],
 }];
 
+/// The footer.
+const HINTS: &[Hint] = &[
+    Hint::keys(&[NEW], "new session"),
+    Hint::keys(&[ON_WORKSPACE], "on a workspace"),
+    Hint::keys(&[TOGGLE_LEAN], "lean on/off"),
+    Hint::symbols(&[actions::LIST_PREV, actions::LIST_NEXT], "select"),
+    Hint::Screens,
+    Hint::keys(&[actions::QUIT], "quit"),
+];
+
 impl ScreenDef for Def {
     fn id(&self) -> Screen {
         Screen::Sessions
@@ -79,8 +89,12 @@ impl ScreenDef for Def {
         crate::ui::sessions::render(frame, area, app);
     }
 
-    fn hints(&self, _app: &App) -> &'static str {
-        " n new session · w on a workspace · l lean on/off · ↑↓ select · 0-9 screens · q quit"
+    fn hints(&self, _app: &App) -> &'static [Hint] {
+        HINTS
+    }
+
+    fn context_stacks(&self) -> Vec<Vec<Context>> {
+        vec![vec![CTX]]
     }
 
     fn handle(&self, app: &mut App, action: Action) -> Handled {

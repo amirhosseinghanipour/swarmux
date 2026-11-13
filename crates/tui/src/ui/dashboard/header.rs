@@ -209,11 +209,12 @@ pub fn steps(frame: &mut Frame, area: Rect, view: &View, hints: &str, t: &Theme)
 /// Where the next prompt goes, highlighted so it can't be missed.
 pub fn target(app: &App, t: &Theme, width: u16) -> Line<'static> {
     let Some(s) = app.selected_session() else {
+        let (go, new) = app.goto_keys(crate::app::Screen::Sessions, crate::screens::sessions::NEW);
         return Line::from(vec![
             Span::styled(" ▶ ", Style::new().fg(t.lead)),
             label(
                 t,
-                "no session yet: press 6 then n to create one in this folder",
+                format!("no session yet: press {go} then {new} to create one in this folder"),
             ),
         ]);
     };
@@ -290,7 +291,7 @@ impl Panel for Strip {
         match self.0 {
             PanelId::Legend => frame.render_widget(legend(&vm.view, t), area),
             PanelId::Command => command(frame, area, &vm.view, t),
-            PanelId::Steps => steps(frame, area, &vm.view, crate::ui::hints(vm.app), t),
+            PanelId::Steps => steps(frame, area, &vm.view, &crate::ui::hints(vm.app), t),
             _ => frame.render_widget(target(vm.app, t, area.width), area),
         }
     }

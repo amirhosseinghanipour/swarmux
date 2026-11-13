@@ -12,6 +12,7 @@ mod followup;
 mod gate;
 mod holdout;
 mod jev;
+mod keys;
 mod knowledge;
 mod stats;
 mod telemetry;
@@ -103,6 +104,12 @@ enum Command {
     Theme {
         #[command(subcommand)]
         action: ThemeAction,
+    },
+    /// Hotkeys: list them, check the `[keys]` of your config, or export the
+    /// keys in use.
+    Keys {
+        #[command(subcommand)]
+        action: KeysAction,
     },
     /// The tamper-evident ledger of everything swarmux observed or decided.
     Audit {
@@ -359,6 +366,19 @@ enum ThemeAction {
 }
 
 #[derive(Subcommand)]
+enum KeysAction {
+    /// Every action with its context, its keys now and by default; changed
+    /// ones are marked.
+    List,
+    /// Check the `[keys]` of your config. Prints every problem and exits
+    /// with 1 if there is one; the app still starts, with the default keys
+    /// for what is wrong.
+    Lint,
+    /// Print the keys in use, defaults included, as TOML for the config.
+    Export,
+}
+
+#[derive(Subcommand)]
 enum AuditAction {
     /// Check the whole hash chain and every signed checkpoint of it; exits
     /// with 1 if the chain is broken or the ledger was cut short or
@@ -476,6 +496,13 @@ fn main() -> anyhow::Result<ExitCode> {
         Some(Command::Daemon { action }) => return daemon::run(action),
         Some(Command::Doctor) => doctor::run(),
         Some(Command::Fetch { theme, color }) => fetch::run(theme.as_deref(), &color),
+        Some(Command::Keys { action }) => {
+            return keys::run(match action {
+                KeysAction::List => keys::Action::List,
+                KeysAction::Lint => keys::Action::Lint,
+                KeysAction::Export => keys::Action::Export,
+            });
+        }
         Some(Command::Theme { action }) => match action {
             ThemeAction::List => theme::list(),
             ThemeAction::Export { name, format } => theme::export_cmd(name.as_deref(), &format),
@@ -877,5 +904,6 @@ fn build_app(
             now_ms: SystemClock.now(),
         },
     );
-    Ok(app)
+    // After the look: how long the warning about the keys shows depends on it.
+    Ok(app.with_key_config(&settings.keys))
 }

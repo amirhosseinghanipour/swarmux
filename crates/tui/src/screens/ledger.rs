@@ -4,7 +4,7 @@ use ratatui::{Frame, layout::Rect};
 use swarmux_application::AppResult;
 use swarmux_domain::keys::{Action, Context, actions};
 
-use super::{Bind, Changes, Handled, Screen, ScreenDef, Section};
+use super::{Bind, Changes, Handled, Hint, Screen, ScreenDef, Section};
 use crate::app::{App, InputPurpose, Mode};
 use crate::ledger::{Command, LedgerAction};
 use crate::ui::input::Input;
@@ -71,6 +71,19 @@ const SECTIONS: &[Section] = &[Section {
     ],
 }];
 
+/// The footer.
+const HINTS: &[Hint] = &[
+    Hint::keys(&[SEARCH], "search"),
+    Hint::keys(&[FILTER], "filter"),
+    Hint::keys(&[VERIFY], "verify"),
+    Hint::keys(&[LABELS], "labels"),
+    Hint::keys(&[RERUN], "re-run"),
+    Hint::keys(&[FORK], "fork"),
+    Hint::keys(&[actions::LIST_OPEN], "view"),
+    Hint::symbols(&[actions::LIST_PREV, actions::LIST_NEXT], "select"),
+    Hint::keys(&[actions::QUIT], "quit"),
+];
+
 impl ScreenDef for Def {
     fn id(&self) -> Screen {
         Screen::Ledger
@@ -104,8 +117,12 @@ impl ScreenDef for Def {
         crate::ui::ledger::render(frame, area, app);
     }
 
-    fn hints(&self, _app: &App) -> &'static str {
-        " / search · o filter · v verify · l labels · r re-run · f fork · enter view · ↑↓ select · q quit"
+    fn hints(&self, _app: &App) -> &'static [Hint] {
+        HINTS
+    }
+
+    fn context_stacks(&self) -> Vec<Vec<Context>> {
+        vec![vec![CTX]]
     }
 
     fn handle(&self, app: &mut App, action: Action) -> Handled {

@@ -150,6 +150,51 @@ pub struct Section {
     pub binds: &'static [Bind],
 }
 
+/// One entry of a screen's footer. The keys are looked up in the live
+/// keymap when it is drawn, so a rebound key shows as what it is now, and
+/// an action with no key shows nothing.
+#[derive(Clone, Copy, Debug)]
+pub enum Hint {
+    /// The first key of each action, joined, then what they do.
+    Keys {
+        actions: &'static [Action],
+        text: &'static str,
+        /// Arrows and Enter as symbols (`↑↓`, `⏎`) instead of words.
+        symbols: bool,
+    },
+    /// A key that an editor takes as typed, bypassing the keymap.
+    Fixed {
+        keys: &'static str,
+        text: &'static str,
+    },
+    /// The keys that go to the screens, as a range (`0-9`).
+    Screens,
+}
+
+impl Hint {
+    /// `x text`, `x/y text`.
+    pub const fn keys(actions: &'static [Action], text: &'static str) -> Hint {
+        Hint::Keys {
+            actions,
+            text,
+            symbols: false,
+        }
+    }
+
+    /// Like [`Hint::keys`], with arrows and Enter as symbols.
+    pub const fn symbols(actions: &'static [Action], text: &'static str) -> Hint {
+        Hint::Keys {
+            actions,
+            text,
+            symbols: true,
+        }
+    }
+
+    pub const fn fixed(keys: &'static str, text: &'static str) -> Hint {
+        Hint::Fixed { keys, text }
+    }
+}
+
 /// A screen that is planned but not built. Its navigation keys already
 /// work: they go to the nearest screen that exists, and say so.
 pub struct Planned {
@@ -214,8 +259,14 @@ pub trait ScreenDef: Sync {
 
     fn draw(&self, frame: &mut Frame, area: Rect, app: &App);
 
-    /// The keys, as the status bar lists them.
-    fn hints(&self, app: &App) -> &'static str;
+    /// Every stack of contexts the screen can have, innermost first (what
+    /// [`ScreenDef::contexts`] gives in each state of the screen). The
+    /// overlays and the global context are added by the caller.
+    fn context_stacks(&self) -> Vec<Vec<Context>>;
+
+    /// The footer, most important first, the way out last. Which keys they
+    /// show comes from the keymap; see [`crate::hints`].
+    fn hints(&self, app: &App) -> &'static [Hint];
 
     /// Runs `action`, or says it does not apply. Actions that do nothing
     /// useful now (nothing selected, a feature off) return [`Handled::No`]

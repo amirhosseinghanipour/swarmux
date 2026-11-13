@@ -363,3 +363,29 @@ fn the_screens_that_edit_text_take_every_key_as_typed() {
     assert!(t.app.prompts.form.is_none());
     assert_eq!(t.app.screen, Screen::Prompts, "esc closed the form only");
 }
+
+#[test]
+fn the_declared_context_stacks_are_every_stack_a_screen_has() {
+    // `context_stacks` is what the config's overlap warnings look at; it
+    // must be every stack `contexts` gives in any state of the screen.
+    for screen in all() {
+        let t = test_app();
+        let mut app = t.app;
+        app.screen = screen;
+        let declared = screen.def().context_stacks();
+        for variant in 0..4 {
+            match variant {
+                1 => app.dashboard.classic = false,
+                2 => app.mission.pane = crate::mission::Pane::Wall,
+                3 => app.knowledge_screen.contracts_tab = true,
+                _ => {}
+            }
+            let now = screen.def().contexts(&app);
+            assert!(
+                declared.contains(&now),
+                "{} in state {variant} has {now:?}, declared {declared:?}",
+                screen.title()
+            );
+        }
+    }
+}

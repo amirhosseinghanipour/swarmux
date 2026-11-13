@@ -16,10 +16,13 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         .title(" queue ");
     let rows = app.queue_rows();
     if rows.is_empty() {
+        let (go, send) = app.goto_keys(crate::app::Screen::Mission, crate::keys::PROMPT_SEND);
         frame.render_widget(
-            Paragraph::new("no jobs yet: press 1 then p to send a prompt")
-                .fg(t.muted)
-                .block(block),
+            Paragraph::new(format!(
+                "no jobs yet: press {go} then {send} to send a prompt"
+            ))
+            .fg(t.muted)
+            .block(block),
             area,
         );
         return;

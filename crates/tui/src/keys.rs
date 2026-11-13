@@ -8,8 +8,8 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use swarmux_domain::keys::{
-    Action, BindError, Catalog, Chord, Context, GLOBAL, Key, KeyError, KeySpec, Keymap, Mods,
-    actions,
+    Action, BindError, Catalog, Chord, Context, GLOBAL, Key, KeyConfig, KeyError, KeyProblem,
+    KeySpec, Keymap, Mods, Shadow, actions, apply, new_shadows,
 };
 
 use crate::screens::{self, Bind, PLANNED, Screen, Section};
@@ -22,6 +22,9 @@ use crate::screens::{self, Bind, PLANNED, Screen, Section};
 pub const DECIDE: Context = Context::new("decide");
 /// The choice after `s` on an inbox item.
 pub const SHELVE: Context = Context::new("shelve");
+/// The key list that `?` opens: what scrolls it. Closing it is the global
+/// `help.toggle` (and `Esc`).
+pub const HELP: Context = Context::new("help");
 
 // ---- actions shared by several screens, or by none
 
@@ -33,6 +36,11 @@ pub const DECIDE_CANCEL_PLAN: Action = Action::new("decide.cancel_plan");
 pub const SHELVE_15_MIN: Action = Action::new("shelve.15_min");
 pub const SHELVE_60_MIN: Action = Action::new("shelve.60_min");
 pub const SHELVE_UNTIL_JOB_ENDS: Action = Action::new("shelve.until_job_ends");
+
+/// Opens the list of keys, or closes it.
+pub const HELP_TOGGLE: Action = Action::new("help.toggle");
+pub const HELP_PAGE_UP: Action = Action::new("help.page_up");
+pub const HELP_PAGE_DOWN: Action = Action::new("help.page_down");
 
 pub const LOOK_NEXT_THEME: Action = Action::new("look.next_theme");
 pub const LOOK_NEXT_LAYOUT: Action = Action::new("look.next_layout");
@@ -71,6 +79,17 @@ const SHELVE_SECTION: Section = Section {
     ],
 };
 
+/// Scrolling the key list.
+const HELP_SECTION: Section = Section {
+    context: HELP,
+    binds: &[
+        bind(actions::LIST_PREV, &["up", "k"], "scroll up"),
+        bind(actions::LIST_NEXT, &["down", "j"], "scroll down"),
+        bind(HELP_PAGE_UP, &["pageup"], "page up"),
+        bind(HELP_PAGE_DOWN, &["pagedown"], "page down"),
+    ],
+};
+
 /// What works on every screen, after the screen's own keys.
 const GLOBAL_SECTION: Section = Section {
     context: GLOBAL,
@@ -81,6 +100,7 @@ const GLOBAL_SECTION: Section = Section {
             &[],
             "dismiss what is open, else go back (Esc)",
         ),
+        bind(HELP_TOGGLE, &["?"], "show the keys of this screen"),
         bind(LOOK_NEXT_THEME, &["t"], "next theme"),
         bind(LOOK_NEXT_LAYOUT, &["L"], "next layout"),
         bind(INBOX_FOCUS_MODE, &["F"], "focus mode on or off"),
@@ -162,6 +182,7 @@ fn sections() -> Vec<Section> {
     }
     all.push(DECIDE_SECTION);
     all.push(SHELVE_SECTION);
+    all.push(HELP_SECTION);
     all.push(GLOBAL_SECTION);
     all
 }
@@ -207,7 +228,78 @@ pub fn defaults() -> Result<(Keymap, Catalog), DefaultsError> {
             planned.action,
         )?;
     }
+    // What answers an approval must stay where the user expects it, and
+    // Esc is not a binding at all.
+    for answer in [DECIDE_YES, DECIDE_NO, DECIDE_ALWAYS, DECIDE_CANCEL_PLAN] {
+        catalog.lock(DECIDE, answer);
+    }
+    catalog.lock(GLOBAL, actions::BACK);
     Ok((keymap, catalog))
+}
+
+/// The keys of `action` in `context` as a person reads them: `esc` for
+/// going back, `ctrl+c` always among the ways to quit, `(none)` when
+/// unbound.
+pub fn keys_text(keymap: &Keymap, context: Context, action: Action) -> String {
+    if action == actions::BACK {
+        return "esc".to_string();
+    }
+    let mut keys: Vec<String> = keymap
+        .chords_of(context, action)
+        .map(ToString::to_string)
+        .collect();
+    if action == actions::QUIT {
+        keys.push("ctrl+c".to_string());
+    }
+    if keys.is_empty() {
+        "(none)".to_string()
+    } else {
+        keys.join(", ")
+    }
+}
+
+/// The keymap in use once the user's `[keys]` is applied, with what was
+/// wrong with it. Never fails because of the config: what can't be used
+/// is reported and the defaults stand in for it.
+pub struct Effective {
+    pub keymap: Keymap,
+    pub catalog: Catalog,
+    /// The keys before the config, for what a config changes.
+    pub defaults: Keymap,
+    /// Entries that were refused. Each one's action keeps its default keys.
+    pub problems: Vec<KeyProblem>,
+    /// Overlaps the config made: legal, and probably not meant.
+    pub warnings: Vec<Shadow>,
+}
+
+/// Every stack of contexts the app can have at once, as [`crate::app::App`]
+/// builds them: the decision overlays, the screen's own, the global ones.
+fn context_stacks() -> Vec<Vec<Context>> {
+    let mut out = Vec::new();
+    for screen in screens::all() {
+        for inner in screen.def().context_stacks() {
+            let mut stack = vec![DECIDE];
+            stack.extend(inner);
+            stack.push(GLOBAL);
+            out.push(stack);
+        }
+    }
+    out.push(vec![HELP, GLOBAL]);
+    out
+}
+
+/// The defaults with `config` applied.
+pub fn effective(config: &KeyConfig) -> Result<Effective, DefaultsError> {
+    let (defaults, catalog) = defaults()?;
+    let applied = apply(&defaults, &catalog, config);
+    let warnings = new_shadows(&defaults, &applied.keymap, &context_stacks());
+    Ok(Effective {
+        keymap: applied.keymap,
+        catalog,
+        defaults,
+        problems: applied.problems,
+        warnings,
+    })
 }
 
 /// The key that goes to `screen`, as the tab bar shows it.
@@ -217,5 +309,23 @@ pub fn nav_label(keymap: &Keymap, screen: Screen) -> String {
         .unwrap_or_else(|| "·".to_string())
 }
 
+/// A `[keys]` section from `(section, name, keys)` lines, for tests.
+#[cfg(test)]
+pub(crate) fn config_of(entries: &[(&str, &str, &[&str])]) -> KeyConfig {
+    KeyConfig {
+        entries: entries
+            .iter()
+            .map(|(section, name, keys)| swarmux_domain::keys::KeyEntry {
+                section: section.to_string(),
+                name: name.to_string(),
+                keys: keys.iter().map(|k| k.to_string()).collect(),
+            })
+            .collect(),
+        malformed: Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod rebind_tests;
 #[cfg(test)]
 mod tests;

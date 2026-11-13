@@ -3,7 +3,7 @@
 use ratatui::{Frame, layout::Rect};
 use swarmux_domain::keys::{Action, Context, actions};
 
-use super::{Bind, Handled, Screen, ScreenDef, Section};
+use super::{Bind, Handled, Hint, Screen, ScreenDef, Section};
 use crate::app::App;
 use crate::queue::{Command, QueueAction};
 
@@ -57,6 +57,16 @@ const SECTIONS: &[Section] = &[Section {
     ],
 }];
 
+/// The footer.
+const HINTS: &[Hint] = &[
+    Hint::keys(&[CANCEL], "cancel"),
+    Hint::keys(&[RETRY], "retry"),
+    Hint::keys(&[PRIORITY_UP, PRIORITY_DOWN], "priority"),
+    Hint::keys(&[actions::LIST_OPEN], "view"),
+    Hint::symbols(&[actions::LIST_PREV, actions::LIST_NEXT], "select"),
+    Hint::keys(&[actions::QUIT], "quit"),
+];
+
 impl ScreenDef for Def {
     fn id(&self) -> Screen {
         Screen::Queue
@@ -90,8 +100,12 @@ impl ScreenDef for Def {
         crate::ui::queue::render(frame, area, app);
     }
 
-    fn hints(&self, _app: &App) -> &'static str {
-        " c cancel · r retry · +/- priority · enter view · ↑↓ select · q quit"
+    fn hints(&self, _app: &App) -> &'static [Hint] {
+        HINTS
+    }
+
+    fn context_stacks(&self) -> Vec<Vec<Context>> {
+        vec![vec![CTX]]
     }
 
     fn handle(&self, app: &mut App, action: Action) -> Handled {

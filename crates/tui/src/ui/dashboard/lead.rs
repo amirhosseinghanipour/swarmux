@@ -57,7 +57,11 @@ impl Panel for Lead {
                 None,
             );
             let hint = match app.selected_session() {
-                Some(s) => format!("no job yet · press p to send a prompt to {}", s.name),
+                Some(s) => format!(
+                    "no job yet · press {} to send a prompt to {}",
+                    crate::hints::key_or_name(app, crate::keys::PROMPT_SEND),
+                    s.name
+                ),
                 None => "no job yet · create a session first (5, then n)".into(),
             };
             frame.render_widget(Paragraph::new(Line::from(dim(t, hint))).block(block), area);
@@ -119,7 +123,13 @@ impl Panel for Lead {
     /// One line for small windows.
     fn summary(&self, vm: &ViewModel, t: &Theme, _tick: u64) -> Line<'static> {
         let Some(job) = vm.view.job else {
-            return Line::from(dim(t, " no job yet · press p to send a prompt"));
+            return Line::from(dim(
+                t,
+                format!(
+                    " no job yet · press {} to send a prompt",
+                    crate::hints::key_or_name(vm.app, crate::keys::PROMPT_SEND)
+                ),
+            ));
         };
         let color = t.model(Some(&job.model));
         Line::from(vec![

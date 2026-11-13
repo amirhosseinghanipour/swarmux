@@ -5,8 +5,9 @@ use ratatui::{Frame, layout::Rect};
 use swarmux_application::AppResult;
 use swarmux_domain::keys::{Action, Context, actions};
 
-use super::{Bind, Handled, Screen, ScreenDef, Section};
+use super::{Bind, Handled, Hint, Screen, ScreenDef, Section};
 use crate::app::App;
+use crate::keys::{DECIDE_CANCEL_PLAN, DECIDE_NO, DECIDE_YES};
 use crate::missions::Composer;
 
 pub(super) struct Def;
@@ -71,6 +72,28 @@ const SECTIONS: &[Section] = &[Section {
     ],
 }];
 
+/// The footer.
+const HINTS: &[Hint] = &[
+    Hint::keys(&[NEW], "new"),
+    Hint::keys(&[EDIT], "edit"),
+    Hint::keys(&[LINT], "lint"),
+    Hint::keys(&[FIX], "protect"),
+    Hint::keys(&[PLAN_FIRST], "plan first"),
+    Hint::keys(&[RUN], "run"),
+    Hint::keys(&[DECIDE_YES, DECIDE_NO, DECIDE_CANCEL_PLAN], "plan"),
+    Hint::symbols(&[actions::LIST_OPEN], "focus"),
+    Hint::keys(&[actions::QUIT], "quit"),
+];
+
+/// The footer while the composer is open: its keys are typed as they are.
+const COMPOSER_HINTS: &[Hint] = &[
+    Hint::fixed("tab", "next field"),
+    Hint::fixed("ctrl+s", "save & lint"),
+    Hint::fixed("ctrl+f", "protect oracles"),
+    Hint::fixed("ctrl+r", "save & run"),
+    Hint::fixed("esc", "close"),
+];
+
 impl ScreenDef for Def {
     fn id(&self) -> Screen {
         Screen::Missions
@@ -104,11 +127,16 @@ impl ScreenDef for Def {
         crate::ui::missions::render(frame, area, app);
     }
 
-    fn hints(&self, app: &App) -> &'static str {
+    fn hints(&self, app: &App) -> &'static [Hint] {
         if app.missions_screen.composer.is_some() {
-            return " tab next field · ctrl+s save & lint · ctrl+f protect oracles · ctrl+r save & run · esc close";
+            COMPOSER_HINTS
+        } else {
+            HINTS
         }
-        " n new · e edit · l lint · f protect · p plan first · r run · y/n/c plan · ⏎ focus · q quit"
+    }
+
+    fn context_stacks(&self) -> Vec<Vec<Context>> {
+        vec![vec![CTX]]
     }
 
     fn handle(&self, app: &mut App, action: Action) -> Handled {
@@ -127,7 +155,7 @@ impl ScreenDef for Def {
                 if app.engine.missions.is_none() {
                     app.notice = Some("missions are not set up in this run".into());
                 } else if app.sessions.is_empty() {
-                    app.error = Some("create a session first: press 6 then n".into());
+                    app.error = Some(app.need_session());
                 } else {
                     app.missions_screen.composer = Some(Composer::blank());
                 }

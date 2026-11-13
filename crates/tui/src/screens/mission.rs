@@ -4,8 +4,9 @@
 use ratatui::{Frame, layout::Rect};
 use swarmux_domain::keys::{Action, Context, actions};
 
-use super::{Bind, Handled, Screen, ScreenDef, Section, board};
+use super::{Bind, Handled, Hint, Screen, ScreenDef, Section, board};
 use crate::app::App;
+use crate::keys::{DECIDE_ALWAYS, DECIDE_NO, DECIDE_YES, INBOX_FOCUS_MODE};
 use crate::keys::{PROMPT_ROUTE, PROMPT_SEND};
 use crate::mission::Pane;
 
@@ -111,6 +112,19 @@ const SECTIONS: &[Section] = &[
     },
 ];
 
+/// The footer.
+const HINTS: &[Hint] = &[
+    Hint::symbols(&[actions::LIST_PREV, actions::LIST_NEXT], "select"),
+    Hint::symbols(&[actions::LIST_OPEN], "open"),
+    Hint::keys(&[DECIDE_YES, DECIDE_NO, DECIDE_ALWAYS], "answer"),
+    Hint::keys(&[ANSWER_BATCH], "batch"),
+    Hint::keys(&[SHELVE], "shelve"),
+    Hint::keys(&[INBOX_FOCUS_MODE], "focus"),
+    Hint::keys(&[SWITCH_PANE], "wall"),
+    Hint::keys(&[PROMPT_SEND], "prompt"),
+    Hint::keys(&[actions::QUIT], "quit"),
+];
+
 impl ScreenDef for Def {
     fn id(&self) -> Screen {
         Screen::Mission
@@ -148,8 +162,12 @@ impl ScreenDef for Def {
         crate::ui::mission::render(frame, area, app);
     }
 
-    fn hints(&self, _app: &App) -> &'static str {
-        " ↑↓ select · ⏎ open · y/n/a answer · A batch · s shelve · F focus · tab wall · p prompt · q quit"
+    fn hints(&self, _app: &App) -> &'static [Hint] {
+        HINTS
+    }
+
+    fn context_stacks(&self) -> Vec<Vec<Context>> {
+        vec![vec![board::ASK, INBOX, CTX], vec![WALL, CTX]]
     }
 
     fn handle(&self, app: &mut App, action: Action) -> Handled {

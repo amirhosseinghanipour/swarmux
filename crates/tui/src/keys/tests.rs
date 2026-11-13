@@ -196,6 +196,17 @@ const NEW_KEYS: &[(&str, &str, &str)] = &[
     ("global", "g r", "nav.go_record"),
 ];
 
+/// Keys that came with customizable hotkeys: the key list.
+const HELP_KEYS: &[(&str, &str, &str)] = &[
+    ("global", "?", "help.toggle"),
+    ("help", "up", "list.prev"),
+    ("help", "k", "list.prev"),
+    ("help", "down", "list.next"),
+    ("help", "j", "list.next"),
+    ("help", "pageup", "help.page_up"),
+    ("help", "pagedown", "help.page_down"),
+];
+
 fn bound(keymap: &Keymap) -> Vec<(String, String, String)> {
     let mut all = Vec::new();
     for context in keymap.contexts() {
@@ -234,6 +245,7 @@ fn the_defaults_are_todays_keys_and_the_new_chords_and_nothing_else() {
     let (keymap, _) = defaults().unwrap();
     let mut want = table(TODAYS_KEYS);
     want.extend(table(NEW_KEYS));
+    want.extend(table(HELP_KEYS));
     want.sort();
     assert_eq!(bound(&keymap), want);
 }

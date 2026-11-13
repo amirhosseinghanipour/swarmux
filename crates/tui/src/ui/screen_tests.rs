@@ -78,8 +78,8 @@ fn every_screen_draws_the_shared_layout_at_every_size() {
 
             // The status bar: the screen's hints, or its own line.
             if w >= 100 && def.status(&t.app, &t.app.look.theme).is_none() {
-                let hints = def.hints(&t.app).trim();
-                let start: String = hints.chars().take(24).collect();
+                let hints = crate::ui::hints(&t.app);
+                let start: String = hints.trim().chars().take(24).collect();
                 assert!(s.status().contains(&start), "{at}: {}", s.status());
             }
         }

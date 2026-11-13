@@ -36,10 +36,13 @@ fn render_list(frame: &mut Frame, area: Rect, app: &App) {
     let t = &app.look.theme;
     if app.prompts.list.is_empty() {
         frame.render_widget(
-            Paragraph::new("no prompts yet: press n to write one")
-                .fg(t.muted)
-                .wrap(Wrap { trim: true })
-                .block(panel(t, "prompts")),
+            Paragraph::new(format!(
+                "no prompts yet: press {} to write one",
+                crate::hints::key_or_name(app, crate::screens::prompts::NEW)
+            ))
+            .fg(t.muted)
+            .wrap(Wrap { trim: true })
+            .block(panel(t, "prompts")),
             area,
         );
         return;

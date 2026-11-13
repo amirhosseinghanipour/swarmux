@@ -3,7 +3,7 @@
 use ratatui::{Frame, layout::Rect};
 use swarmux_domain::keys::{Action, Context, actions};
 
-use super::{Bind, Changes, Handled, Screen, ScreenDef, Section};
+use super::{Bind, Changes, Handled, Hint, Screen, ScreenDef, Section};
 use crate::app::App;
 
 pub(super) struct Def;
@@ -57,6 +57,18 @@ const SECTIONS: &[Section] = &[Section {
     ],
 }];
 
+/// The footer.
+const HINTS: &[Hint] = &[
+    Hint::symbols(&[actions::LIST_PREV, actions::LIST_NEXT], "select"),
+    Hint::keys(&[APPROVE], "approve"),
+    Hint::keys(&[DECLINE], "decline"),
+    Hint::keys(&[LATER], "later"),
+    Hint::keys(&[OPEN_JOB], "open job"),
+    Hint::keys(&[DRAFT_MISSION], "draft mission"),
+    Hint::Screens,
+    Hint::keys(&[actions::QUIT], "quit"),
+];
+
 impl ScreenDef for Def {
     fn id(&self) -> Screen {
         Screen::Followups
@@ -90,8 +102,12 @@ impl ScreenDef for Def {
         crate::ui::followups::render(frame, area, app);
     }
 
-    fn hints(&self, _app: &App) -> &'static str {
-        " ↑↓ select · a approve · d decline · l later · o open job · m draft mission · 0-9 screens · q quit"
+    fn hints(&self, _app: &App) -> &'static [Hint] {
+        HINTS
+    }
+
+    fn context_stacks(&self) -> Vec<Vec<Context>> {
+        vec![vec![CTX]]
     }
 
     fn handle(&self, app: &mut App, action: Action) -> Handled {

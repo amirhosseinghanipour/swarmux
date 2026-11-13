@@ -4,7 +4,7 @@ use crossterm::event::KeyEvent;
 use ratatui::{Frame, layout::Rect};
 use swarmux_domain::keys::{Action, Context, actions};
 
-use super::{Bind, Handled, Screen, ScreenDef, Section};
+use super::{Bind, Handled, Hint, Screen, ScreenDef, Section};
 use crate::app::App;
 use crate::prompts::{FormAction, PromptForm};
 
@@ -59,6 +59,25 @@ const SECTIONS: &[Section] = &[Section {
     ],
 }];
 
+/// The footer.
+const HINTS: &[Hint] = &[
+    Hint::keys(&[NEW], "new"),
+    Hint::keys(&[EDIT], "edit"),
+    Hint::keys(&[DELETE], "delete"),
+    Hint::keys(&[DISPATCH], "dispatch"),
+    Hint::keys(&[ROUTE], "route"),
+    Hint::symbols(&[actions::LIST_PREV, actions::LIST_NEXT], "select"),
+    Hint::Screens,
+    Hint::keys(&[actions::QUIT], "quit"),
+];
+
+/// The footer while the form is open: its keys are typed as they are.
+const FORM_HINTS: &[Hint] = &[
+    Hint::fixed("tab", "next field"),
+    Hint::fixed("ctrl+s", "save"),
+    Hint::fixed("esc", "cancel"),
+];
+
 impl ScreenDef for Def {
     fn id(&self) -> Screen {
         Screen::Prompts
@@ -92,11 +111,16 @@ impl ScreenDef for Def {
         crate::ui::prompts::render(frame, area, app);
     }
 
-    fn hints(&self, app: &App) -> &'static str {
+    fn hints(&self, app: &App) -> &'static [Hint] {
         if app.prompts.form.is_some() {
-            return " tab next field · ctrl+s save · esc cancel";
+            FORM_HINTS
+        } else {
+            HINTS
         }
-        " n new · e edit · x delete · d dispatch · D route · ↑↓ select · 0-9 screens · q quit"
+    }
+
+    fn context_stacks(&self) -> Vec<Vec<Context>> {
+        vec![vec![CTX]]
     }
 
     fn handle(&self, app: &mut App, action: Action) -> Handled {

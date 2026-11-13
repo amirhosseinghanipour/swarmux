@@ -14,10 +14,14 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         .border_style(Style::new().fg(t.muted))
         .title(" sessions ");
     if app.sessions.is_empty() {
+        let new = crate::hints::key_or_name(app, crate::screens::sessions::NEW);
         let text = if app.workspaces.is_empty() {
-            "no sessions yet: press n to create one in the current folder"
+            format!("no sessions yet: press {new} to create one in the current folder")
         } else {
-            "no sessions yet: press n to create one in the current folder, w for one on a workspace"
+            let on = crate::hints::key_or_name(app, crate::screens::sessions::ON_WORKSPACE);
+            format!(
+                "no sessions yet: press {new} to create one in the current folder, {on} for one on a workspace"
+            )
         };
         frame.render_widget(Paragraph::new(text).fg(t.muted).block(block), area);
         return;

@@ -76,7 +76,13 @@ impl Panel for Reviewer {
         let mut lines = vec![Line::from(match (review, view.job) {
             (Some(_), _) => label(t, "on call · silent auditor"),
             (None, None) if app.review_next() => label(t, "on call for the next job"),
-            _ => dim(t, "off · press v before sending"),
+            _ => dim(
+                t,
+                format!(
+                    "off · press {} before sending",
+                    crate::hints::key_or_name(app, crate::screens::dashboard::TOGGLE_REVIEW)
+                ),
+            ),
         })];
         lines.push(Line::raw(""));
 
@@ -168,7 +174,13 @@ impl Panel for Reviewer {
         let review = view.job.and_then(|j| j.review.as_ref());
         spans.push(match review {
             None if view.job.is_none() && app.review_next() => label(t, "on call for the next job"),
-            None => dim(t, "off · press v before sending"),
+            None => dim(
+                t,
+                format!(
+                    "off · press {} before sending",
+                    crate::hints::key_or_name(app, crate::screens::dashboard::TOGGLE_REVIEW)
+                ),
+            ),
             Some(ReviewState::Requested) => label(t, "on call · waits for the job"),
             Some(ReviewState::Running { .. }) => label(t, format!("reviewing [{}]", vm.spin())),
             Some(ReviewState::Done { review, .. }) => {

@@ -44,12 +44,18 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     }
     let Some(focus) = Focus::of(app) else {
         let hint = if app.sessions.is_empty() {
-            "press 6, then n, to add a session"
+            let (go, new) =
+                app.goto_keys(crate::app::Screen::Sessions, crate::screens::sessions::NEW);
+            format!("press {go}, then {new}, to add a session")
         } else {
-            "nothing to focus on yet · press p to send a prompt, or ⏎ on a card"
+            format!(
+                "nothing to focus on yet · press {} to send a prompt, or {} on a card",
+                crate::hints::key_or_name(app, crate::keys::PROMPT_SEND),
+                crate::hints::key_symbol(app, swarmux_domain::keys::actions::LIST_OPEN)
+            )
         };
         frame.render_widget(
-            Paragraph::new(Line::from(dim(t, fit(hint, usize::from(area.width))))),
+            Paragraph::new(Line::from(dim(t, fit(&hint, usize::from(area.width))))),
             Rect { height: 1, ..area },
         );
         return;

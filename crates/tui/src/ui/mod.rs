@@ -11,6 +11,7 @@ pub mod focus;
 pub mod followups;
 pub mod grid;
 pub mod guard;
+pub mod help;
 pub mod input;
 pub mod knowledge;
 pub mod ledger;
@@ -128,6 +129,10 @@ fn draw_screens(frame: &mut Frame, app: &App, t: &Theme) {
         } else {
             guard::render_approval(frame, overlay, app);
         }
+    }
+
+    if let Some(state) = &app.help {
+        help::render(frame, body, app, state);
     }
 
     let stats = stats_line(
@@ -357,18 +362,32 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App, t: &Theme) {
             " irreversible: name the target to approve · esc keeps the call held",
             Style::new().fg(t.error),
         )),
-        Mode::Shelve => Line::from(vec![
-            Span::styled(" shelve: ", Style::new().fg(t.lead)),
-            Span::styled("1", Style::new().add_modifier(Modifier::BOLD)),
-            Span::styled(" 15 min · ", Style::new().fg(t.muted)),
-            Span::styled("2", Style::new().add_modifier(Modifier::BOLD)),
-            Span::styled(" 60 min · ", Style::new().fg(t.muted)),
-            Span::styled("3", Style::new().add_modifier(Modifier::BOLD)),
-            Span::styled(
-                " until its job ends · esc cancel (it comes back by itself)",
+        Mode::Shelve => {
+            let mut spans = vec![Span::styled(" shelve: ", Style::new().fg(t.lead))];
+            let choices = [
+                (crate::keys::SHELVE_15_MIN, " 15 min"),
+                (crate::keys::SHELVE_60_MIN, " 60 min"),
+                (crate::keys::SHELVE_UNTIL_JOB_ENDS, " until its job ends"),
+            ];
+            for (action, text) in choices {
+                let Some(key) = app.keymap().chords_of(crate::keys::SHELVE, action).next() else {
+                    continue;
+                };
+                if spans.len() > 1 {
+                    spans.push(Span::styled(" · ", Style::new().fg(t.muted)));
+                }
+                spans.push(Span::styled(
+                    key.to_string(),
+                    Style::new().add_modifier(Modifier::BOLD),
+                ));
+                spans.push(Span::styled(text, Style::new().fg(t.muted)));
+            }
+            spans.push(Span::styled(
+                " · esc cancel (it comes back by itself)",
                 Style::new().fg(t.muted),
-            ),
-        ]),
+            ));
+            Line::from(spans)
+        }
         Mode::Normal => match (&app.error, app.prompts.selected_prompt(), app.toast()) {
             (Some(e), _, _) => {
                 Line::from(Span::styled(format!(" ! {e}"), Style::new().fg(t.error)))
@@ -379,7 +398,8 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App, t: &Theme) {
             )),
             (None, Some(p), _) if app.prompts.confirm_delete => Line::from(Span::styled(
                 format!(
-                    " press x again to delete \"{}\" · any other key keeps it",
+                    " press {} again to delete \"{}\" · any other key keeps it",
+                    crate::hints::key_or_name(app, screens::prompts::DELETE),
                     p.name
                 ),
                 Style::new().fg(t.warn),
@@ -409,27 +429,24 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App, t: &Theme) {
                     ),
                 ])
             }
+            _ if app.key_warning().is_some() => Line::from(Span::styled(
+                format!(" ! {}", app.key_warning().unwrap_or_default()),
+                Style::new().fg(t.warn),
+            )),
             _ => app.screen.def().status(app, t).unwrap_or_else(|| {
-                Line::from(Span::styled(hint_line(app), Style::new().fg(t.muted)))
+                Line::from(Span::styled(
+                    crate::hints::fit(app, area.width as usize),
+                    Style::new().fg(t.muted),
+                ))
             }),
         },
     };
     frame.render_widget(line, area);
 }
 
-/// The hints, with `q` letting the window go when the background service
-/// runs the app.
-fn hint_line(app: &App) -> String {
-    let hints = hints(app);
-    if app.in_service() {
-        hints.replace("q quit", "q detach")
-    } else {
-        hints.to_string()
-    }
-}
-
-pub(crate) fn hints(app: &App) -> &'static str {
-    app.screen.def().hints(app)
+/// Every hint of the screen in one line, however wide the terminal is.
+pub(crate) fn hints(app: &App) -> String {
+    crate::hints::full(app)
 }
 
 pub(crate) fn render_to_string(app: &App, w: u16, h: u16) -> String {

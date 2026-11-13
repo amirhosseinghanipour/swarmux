@@ -209,7 +209,11 @@ impl App {
         match service.reply(card.id, reply) {
             Ok(_) => {
                 self.notice = Some(match reply {
-                    Reply::Approve => format!("#{} approved: press m to draft a mission", card.id),
+                    Reply::Approve => format!(
+                        "#{} approved: press {} to draft a mission",
+                        card.id,
+                        crate::hints::key_or_name(self, crate::screens::followups::DRAFT_MISSION)
+                    ),
                     Reply::Decline => format!("#{} declined", card.id),
                     Reply::Defer => format!("#{} comes back later", card.id),
                 });
@@ -227,7 +231,7 @@ impl App {
             return;
         }
         if self.sessions.is_empty() {
-            self.error = Some("create a session first: press 6 then n".into());
+            self.error = Some(self.need_session());
             return;
         }
         let Some(service) = self.engine.followups.clone() else {
