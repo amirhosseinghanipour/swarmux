@@ -173,6 +173,9 @@ pub struct GuardService {
     decisions: Rc<dyn DecisionRepository>,
     clock: Rc<dyn Clock>,
     store: Option<Rc<dyn RuleStore>>,
+    /// Rules the store would not keep: they last this run, so a reload of
+    /// the store must not drop them.
+    unsaved: Vec<StoredRule>,
     always: AlwaysSettings,
     last_reload: Option<Millis>,
     jev: Option<Rc<Jev>>,
@@ -202,6 +205,7 @@ impl GuardService {
             decisions,
             clock,
             store: None,
+            unsaved: Vec::new(),
             always: AlwaysSettings::default(),
             last_reload: None,
             jev: None,
@@ -254,7 +258,11 @@ impl GuardService {
         };
         let kept = store.list()?;
         self.last_reload = Some(self.clock.now());
-        Ok(self.policy.set_learned(kept))
+        let skipped = self.policy.set_learned(kept);
+        for rule in &self.unsaved {
+            self.policy.add_learned(rule.clone());
+        }
+        Ok(skipped)
     }
 
     /// The rules in force, expired ones included.
@@ -525,6 +533,9 @@ impl GuardService {
             Some(store) => store.add(&stored).err().map(|e| e.to_string()),
             None => Some("no store to keep it in".into()),
         };
+        if not_saved.is_some() && self.store.is_some() {
+            self.unsaved.push(stored.clone());
+        }
         if let Some(request_id) = answering {
             let how = Resolution::by(Verdict::Allow, text.clone(), Resolver::HumanKey);
             self.resolve(request_id, how)?;
@@ -587,6 +598,7 @@ impl GuardService {
     /// Removes the rule called `id` from the policy and the store; whether
     /// there was one.
     pub fn remove_rule(&mut self, id: &str) -> AppResult<bool> {
+        self.unsaved.retain(|r| r.id != id);
         let was = self.policy.remove_learned(id);
         let stored = match &self.store {
             Some(store) => store.remove(id)?,

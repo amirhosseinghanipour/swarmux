@@ -230,6 +230,11 @@ fn always_allow_still_works_when_saving_fails() {
     let done = f.svc.always_allow(id).unwrap();
     assert!(done.not_saved.unwrap().contains("read-only"));
     assert_eq!(verdict_of(&f, id), Some(Verdict::Allow));
+    // It lasts this run: reading the store again doesn't drop it.
+    f.clock.advance(3_000);
+    let again = f.inbox.push(None, "Bash", "make");
+    f.svc.pump();
+    assert_eq!(verdict_of(&f, again), Some(Verdict::Allow));
 }
 
 #[test]
@@ -944,4 +949,20 @@ fn subagent_calls_carry_who_made_them_into_the_record() {
     f.inbox.push(Some(JobId(1)), "Bash", "ls");
     f.svc.pump();
     assert_eq!(f.repo.rows().pop().unwrap().extra.agent_id, None);
+}
+
+#[test]
+fn allow_rules_written_in_config_stay_global_and_never_expire() {
+    // Rules from before scopes and expiry: no repository, no end.
+    let mut f = fixture(&["Bash(make all)"], &[], Unmatched::Ask);
+    f.clock.advance(1_000 * DAY_MS);
+    let here = f.inbox.push_in(None, "Bash", "make all", "/w");
+    let elsewhere = f
+        .inbox
+        .push_in(None, "Bash", "make all", "/some/other/repo");
+    f.svc.pump();
+    assert_eq!(verdict_of(&f, here), Some(Verdict::Allow));
+    assert_eq!(verdict_of(&f, elsewhere), Some(Verdict::Allow));
+    let rule = f.repo.rows()[0].rule.clone().unwrap();
+    assert_eq!(rule, "Bash(make all)");
 }
