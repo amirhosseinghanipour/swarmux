@@ -180,6 +180,9 @@ pub struct DecisionView {
     pub kind: Option<AskKind>,
     /// What is asked.
     pub ask: String,
+    /// The first line of what the ask says besides its title, when it
+    /// says something else.
+    pub detail: Option<String>,
     pub since_at: Millis,
     /// When it resolves without the user (a held call is denied).
     pub deadline_at: Option<Millis>,
@@ -653,6 +656,10 @@ fn decision(snap: &ConsoleSnapshot, o: &OutcomeView, now: Millis) -> DecisionVie
         priority: o.priority.or(first.map(|a| a.priority)),
         kind: first.map(|a| a.kind),
         ask: first.map_or_else(|| "needs a decision".to_string(), |a| a.title.clone()),
+        detail: first
+            .and_then(|a| a.detail.lines().map(str::trim).find(|l| !l.is_empty()))
+            .filter(|l| Some(*l) != first.map(|a| a.title.as_str()))
+            .map(str::to_string),
         since_at: o.since_at,
         deadline_at,
         blocks: blocked_by(snap, o),

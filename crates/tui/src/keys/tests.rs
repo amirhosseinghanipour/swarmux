@@ -193,6 +193,7 @@ const NEW_KEYS: &[(&str, &str, &str)] = &[
     ("global", "g k", "nav.go_knowledge"),
     ("global", "g d", "nav.go_deck"),
     ("global", "g w", "nav.go_work"),
+    ("global", "g b", "nav.go_brief"),
     ("global", "g r", "nav.go_record"),
 ];
 
@@ -230,6 +231,14 @@ const DECK_KEYS: &[(&str, &str, &str)] = &[
     ("deck", "enter", "list.open"),
     ("deck", "s", "deck.sessions"),
     ("deck", "tab", "deck.more"),
+];
+
+/// The Return brief's own keys.
+const BRIEF_KEYS: &[(&str, &str, &str)] = &[
+    ("brief", "enter", "list.open"),
+    ("brief", "w", "brief.to_work"),
+    ("brief", "d", "brief.to_deck"),
+    ("brief", "tab", "brief.more"),
 ];
 
 /// Keys that came with customizable hotkeys: the key list.
@@ -284,6 +293,7 @@ fn the_defaults_are_todays_keys_and_the_new_chords_and_nothing_else() {
     want.extend(table(HELP_KEYS));
     want.extend(table(WORK_KEYS));
     want.extend(table(DECK_KEYS));
+    want.extend(table(BRIEF_KEYS));
     want.sort();
     assert_eq!(bound(&keymap), want);
 }
@@ -295,6 +305,7 @@ fn the_screens_keep_their_numbers_and_titles() {
         (Screen::Mission, "mission", "1"),
         (Screen::Deck, "deck", "g d"),
         (Screen::Work, "work", "g w"),
+        (Screen::Brief, "brief", "g b"),
         (Screen::Missions, "missions", "2"),
         (Screen::Prompts, "prompts", "3"),
         (Screen::Queue, "queue", "4"),

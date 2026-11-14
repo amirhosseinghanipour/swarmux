@@ -38,8 +38,6 @@ const MIN_WIDTH: u16 = 80;
 const MIN_HEIGHT: u16 = 16;
 /// The bottom row of a wide window: timeline and what lands where.
 const FOOT_HEIGHT: u16 = 12;
-/// Rows each decision takes: title, what is asked, what it waits on, a gap.
-const DECISION_ROWS: usize = 4;
 
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let t = &app.look.theme;
@@ -333,7 +331,39 @@ fn first_run(frame: &mut Frame, area: Rect, app: &App, view: &BriefView) {
     }
     let [intro, rest] = Layout::vertical([Constraint::Length(3), Constraint::Fill(1)]).areas(area);
     paragraph(frame, intro, lines);
-    main_sections(frame, rest, app, view, false);
+    let [left, right] =
+        Layout::horizontal([Constraint::Percentage(54), Constraint::Percentage(46)]).areas(rest);
+    decisions(frame, left, app, view);
+    if view.ready_total > 0 {
+        let Some(inner) = open(
+            frame,
+            right,
+            app,
+            &format!("VERIFIED, READY TO LAND {}", view.ready_total),
+            "",
+            t.ok,
+        ) else {
+            return;
+        };
+        let mut rows: Lines = view
+            .ready
+            .iter()
+            .map(|r| {
+                Line::from(vec![
+                    span(
+                        format!("{} ", mark(app, Mark::Ready)),
+                        Style::new().fg(t.ok),
+                    ),
+                    span(
+                        fit(&r.title, usize::from(inner.width).saturating_sub(2)),
+                        Style::new().fg(t.text),
+                    ),
+                ])
+            })
+            .collect();
+        rows.truncate(usize::from(inner.height));
+        paragraph(frame, inner, rows);
+    }
 }
 
 fn nothing(frame: &mut Frame, area: Rect, app: &App, view: &BriefView) {
@@ -370,22 +400,25 @@ fn nothing(frame: &mut Frame, area: Rect, app: &App, view: &BriefView) {
 // ---------------------------------------------------------------------
 
 /// Decisions on the left; landed, stopped, the Guard and spend on the
-/// right, each as many rows as it wants and the room allows.
+/// right, each as many rows as it wants and the room allows. When the size
+/// folds sections, what is left of the right column goes to the timeline
+/// (if it has room) or to a line naming what folded.
 fn main_sections(frame: &mut Frame, area: Rect, app: &App, view: &BriefView, folded: bool) {
     let [left, right] =
         Layout::horizontal([Constraint::Percentage(54), Constraint::Percentage(46)]).areas(area);
     decisions(frame, left, app, view);
 
-    let landed_rows = landed_lines(app, view, usize::from(right.width).saturating_sub(2)).len();
-    let stopped_rows = stopped_lines(app, view, usize::from(right.width).saturating_sub(2)).len();
-    let guard_rows = guard_lines(app, view, usize::from(right.width).saturating_sub(2)).len();
-    let spend_rows = spend_lines(app, view, usize::from(right.width).saturating_sub(2)).len();
+    let w = usize::from(right.width).saturating_sub(2);
+    let landed_rows = landed_lines(app, view, w).len();
+    let stopped_rows = stopped_lines(app, view, w).len();
+    let guard_rows = guard_lines(app, view, w).len();
+    let spend_rows = spend_lines(app, view, w).len();
     let want = |rows: usize, grow: u16| {
         let ideal = u16::try_from(rows + 2).unwrap_or(u16::MAX);
         Want {
             min: 4.min(ideal),
             ideal,
-            grow,
+            grow: if folded { 0 } else { grow },
         }
     };
     let mut wants = vec![want(landed_rows, 1)];
@@ -394,7 +427,9 @@ fn main_sections(frame: &mut Frame, area: Rect, app: &App, view: &BriefView, fol
     }
     wants.push(want(guard_rows, 1));
     wants.push(want(spend_rows, 0));
-    let rows = heights(right.height, &wants);
+    // The last row is for what folded, when a size folds sections.
+    let reserve = u16::from(folded);
+    let rows = heights(right.height.saturating_sub(reserve), &wants);
     let mut y = right.y;
     let mut at = 0usize;
     let mut next = |at: &mut usize| {
@@ -414,31 +449,39 @@ fn main_sections(frame: &mut Frame, area: Rect, app: &App, view: &BriefView, fol
     }
     guard(frame, next(&mut at), app, view);
     spend(frame, next(&mut at), app, view);
-    if folded {
-        // One line below the panels names what the size folded.
-        let used = y.saturating_sub(right.y);
-        if used < right.height {
-            let r = Rect {
-                y,
-                height: 1,
-                ..right
-            };
-            let key = app
-                .key_of(crate::screens::brief::MORE)
-                .unwrap_or_else(|| "tab".into());
-            paragraph(
-                frame,
-                r,
-                vec![Line::from(span(
-                    fit(
-                        &format!(" {key}: the timeline and what lands where"),
-                        usize::from(r.width),
-                    ),
-                    Style::new().fg(app.look.theme.dim),
-                ))],
-            );
-        }
+    if !folded {
+        return;
     }
+    let spare = right.y + right.height - y;
+    // A timeline of its own needs a border and a few lines.
+    if spare >= 6 {
+        let r = Rect {
+            y,
+            height: spare - 1,
+            ..right
+        };
+        timeline(frame, r, app, view);
+        y += spare - 1;
+    }
+    let r = Rect {
+        y,
+        height: 1,
+        ..right
+    };
+    let key = app
+        .key_of(crate::screens::brief::MORE)
+        .unwrap_or_else(|| "tab".into());
+    paragraph(
+        frame,
+        r,
+        vec![Line::from(span(
+            fit(
+                &format!(" {key}: the timeline and what lands where, in full"),
+                usize::from(r.width),
+            ),
+            Style::new().fg(app.look.theme.dim),
+        ))],
+    );
 }
 
 /// The sections that fold at a small size, in the main ones' place.
@@ -473,9 +516,16 @@ fn decisions(frame: &mut Frame, area: Rect, app: &App, view: &BriefView) {
         )));
     }
     let room = usize::from(inner.height);
-    let fits = (room / DECISION_ROWS).max(1);
-    let shown = view.decisions.len().min(fits);
-    for (i, d) in view.decisions.iter().take(shown).enumerate() {
+    let mut shown = 0usize;
+    for (i, d) in view.decisions.iter().enumerate() {
+        let rows = 3 + usize::from(d.detail.is_some()) + 1;
+        // Keep a line for "+N more" when not everything fits.
+        let last = i + 1 == view.decisions.len();
+        let need = lines.len() + rows - 1 + if last { 0 } else { 1 };
+        if need > room && shown > 0 {
+            break;
+        }
+        shown += 1;
         let (m, color) = match d.priority {
             Some(PriorityKind::P1) => (mark(app, Mark::Bad), priority_color(t, PriorityKind::P1)),
             Some(p) => (mark(app, Mark::Ask), priority_color(t, p)),
@@ -501,6 +551,12 @@ fn decisions(frame: &mut Frame, area: Rect, app: &App, view: &BriefView) {
             format!("  {}", fit(&d.ask, w.saturating_sub(2))),
             Style::new().fg(t.label),
         )));
+        if let Some(detail) = &d.detail {
+            lines.push(Line::from(span(
+                format!("  {}", fit(detail, w.saturating_sub(2))),
+                muted(t),
+            )));
+        }
         // What resolves it by itself, or what waits on it.
         let third = if let Some(deadline) = d.deadline_at {
             span(
@@ -523,11 +579,13 @@ fn decisions(frame: &mut Frame, area: Rect, app: &App, view: &BriefView) {
     }
     let hidden = n.saturating_sub(shown);
     if hidden > 0 {
-        let more = format!("+{hidden} more, in Work");
-        if lines.len() >= room {
+        while lines.len() >= room && !lines.is_empty() {
             lines.pop();
         }
-        lines.push(Line::from(span(more, muted(t))));
+        lines.push(Line::from(span(
+            format!("+{hidden} more, in Work"),
+            muted(t),
+        )));
     }
     paragraph(frame, inner, lines);
 }

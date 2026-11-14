@@ -5,8 +5,8 @@
 use ratatui::{Terminal, backend::TestBackend, buffer::Buffer};
 use swarmux_application::console::{BriefInput, BriefView, ConsoleSnapshot, build_brief};
 use swarmux_domain::console::{
-    BriefDigest, BriefMoment, BriefSpend, BriefTone, CallState, GuardCall, GuardDigest,
-    GuardFallback, HiddenNotRun, RuleAdded, WorktreeRun, compute_metrics,
+    BriefDigest, BriefMoment, BriefSpend, BriefTone, CallState, FirstRun, GuardCall, GuardDigest,
+    GuardFallback, HiddenNotRun, Metrics, RuleAdded, Spread, WorktreeRun, compute_metrics,
 };
 
 use super::render_with;
@@ -92,7 +92,19 @@ fn digest(snap: &ConsoleSnapshot) -> BriefDigest {
                 text: "denied: Bash curl".into(),
             },
         ],
-        metrics: compute_metrics(&[], NOW, NOW - FROM, true),
+        metrics: Metrics {
+            first_run: Some(FirstRun {
+                passed: 11,
+                judged: 18,
+            }),
+            claim_to_verified: Some(Spread {
+                median_ms: 34 * 60_000,
+                p90_ms: 90 * 60_000,
+                samples: 18,
+            }),
+            verified: 23,
+            ..compute_metrics(&[], NOW, NOW - FROM, true)
+        },
     }
 }
 
@@ -155,7 +167,8 @@ fn the_wide_brief_has_every_section() {
         "decisions waiting",
         "stopped",
         "spent",
-        "claim → verified",
+        "claim → verified: median 34m (n 18)",
+        "first-run pass 61% (11 of 18)",
         "DECISIONS WAITING 4",
         "start here",
         "Bash git push origin HEAD:main",
@@ -178,7 +191,7 @@ fn the_wide_brief_has_every_section() {
         assert!(out.contains(needle), "{needle}\n{out}");
     }
     // The wide window folds nothing: no hint about what folded.
-    assert!(!out.contains("the timeline and what lands where"), "{out}");
+    assert!(!out.contains("and what lands where, in full"), "{out}");
 }
 
 #[test]
@@ -215,7 +228,7 @@ fn the_compact_brief_keeps_the_first_sections_and_folds_the_rest_behind_tab() {
         "DECISIONS WAITING 4",
         "LANDED 1",
         "GUARD WHILE AWAY",
-        "tab: the timeline and what lands where",
+        "tab: the timeline and what lands where, in full",
     ] {
         assert!(out.contains(needle), "{needle}\n{out}");
     }
@@ -234,7 +247,7 @@ fn the_compact_brief_keeps_the_first_sections_and_folds_the_rest_behind_tab() {
 #[test]
 fn a_narrow_decision_list_says_how_many_more_wait_in_work() {
     let (_, v) = view(Some((FROM, NOW)), true);
-    let out = text(&draw(&app(), &v, 120, 24));
+    let out = text(&draw(&app(), &v, 120, 20));
     assert!(out.contains("+") && out.contains("more, in Work"), "{out}");
 }
 
@@ -273,6 +286,7 @@ fn nothing_happened_is_said_plainly_and_no_zeros_are_drawn() {
         hidden_not_run: Vec::new(),
         worktree_runs: Vec::new(),
         timeline: Vec::new(),
+        metrics: compute_metrics(&[], NOW, NOW - FROM, true),
         ..digest(&evening())
     };
     let v = build_brief(
