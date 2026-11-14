@@ -339,7 +339,7 @@ pub fn arrange(
 
 /// The frame of a panel: its title at the left in bold, a note at the
 /// right, and a border of `color`.
-pub(super) fn frame(
+pub(crate) fn frame(
     app: &App,
     title: &str,
     note: &str,

@@ -53,6 +53,10 @@ pub struct Options {
     pub theme: Option<String>,
     /// Seed of the made-up token counts.
     pub seed: u64,
+    /// Start as if the user had been away this many minutes: the script
+    /// plays through first, then the app attaches and shows the Return
+    /// brief over what the script left in the ledger.
+    pub away_minutes: Option<u32>,
 }
 
 impl Default for Options {
@@ -60,6 +64,7 @@ impl Default for Options {
         Options {
             theme: None,
             seed: 7,
+            away_minutes: None,
         }
     }
 }
@@ -251,8 +256,24 @@ pub fn build(options: &Options) -> anyhow::Result<App> {
         .and_then(|p| swarmux_infrastructure::load_settings(&p.config).ok())
         .map(|s| s.keys)
         .unwrap_or_default();
-    Ok(app.with_key_config(&keys))
+    let mut app = app.with_key_config(&keys);
+    if let Some(minutes) = options.away_minutes {
+        // What the scripted org did "while you were away": played in full,
+        // through the same doors, before the user attaches.
+        for _ in 0..AWAY_TICKS {
+            app.update();
+            app.frame += 1;
+        }
+        let at = app.now() - i64::from(minutes) * 60_000;
+        app = app
+            .with_away_since(at)
+            .with_brief_config(&swarmux_domain::console::BriefConfig::default());
+    }
+    Ok(app)
 }
+
+/// Ticks the whole scenario takes, plus a little for the last job to settle.
+const AWAY_TICKS: u32 = 340;
 
 #[cfg(test)]
 mod deck_tests;

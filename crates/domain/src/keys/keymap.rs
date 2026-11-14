@@ -85,6 +85,7 @@ pub mod actions {
     /// nearest screen that exists (or does nothing); the app says which.
     pub const GO_DECK: Action = Action::new("nav.go_deck");
     pub const GO_WORK: Action = Action::new("nav.go_work");
+    pub const GO_BRIEF: Action = Action::new("nav.go_brief");
     pub const GO_RECORD: Action = Action::new("nav.go_record");
 }
 

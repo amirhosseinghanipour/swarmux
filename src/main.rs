@@ -1,6 +1,7 @@
 //! Composition root: the only place that wires concrete adapters to use cases.
 
 mod audit;
+mod brief;
 mod contracts;
 mod daemon;
 mod deck;
@@ -65,6 +66,11 @@ struct Cli {
     /// A built-in theme for the demo (see `swarmux theme list`).
     #[arg(long, requires = "demo", value_name = "NAME")]
     theme: Option<String>,
+    /// With the demo: start as if you had been away for this many minutes,
+    /// after the script has played, so the Return brief shows what the
+    /// scripted org did meanwhile (at least 1).
+    #[arg(long, requires = "demo", value_name = "MINUTES", value_parser = clap::value_parser!(u32).range(1..))]
+    demo_away: Option<u32>,
     /// Run the engine in this window instead of the background service:
     /// quitting stops its jobs.
     #[arg(long, conflicts_with = "demo")]
@@ -114,6 +120,12 @@ enum Command {
     Keys {
         #[command(subcommand)]
         action: KeysAction,
+    },
+    /// The Return brief screen: check the `[brief]` of your config. (The
+    /// text brief of the last hours is `swarmux brief`.)
+    ReturnBrief {
+        #[command(subcommand)]
+        action: BriefAction,
     },
     /// The Deck: check the `[deck]` of your config, or show its layout.
     Deck {
@@ -403,6 +415,14 @@ enum KeysAction {
 }
 
 #[derive(Subcommand)]
+enum BriefAction {
+    /// Check the `[brief]` of your config. Prints every problem and exits
+    /// with 1 if there is one; the app still starts, with the default for
+    /// what is wrong.
+    Lint,
+}
+
+#[derive(Subcommand)]
 enum DeckAction {
     /// Check the `[deck]` of your config. Prints every problem and exits
     /// with 1 if there is one; the app still starts, with the default for
@@ -539,6 +559,7 @@ fn main() -> anyhow::Result<ExitCode> {
         None if cli.demo => {
             let options = demo::Options {
                 theme: cli.theme,
+                away_minutes: cli.demo_away,
                 ..demo::Options::default()
             };
             match cli.snapshot {
@@ -567,6 +588,11 @@ fn main() -> anyhow::Result<ExitCode> {
                 KeysAction::List => keys::Action::List,
                 KeysAction::Lint => keys::Action::Lint,
                 KeysAction::Export => keys::Action::Export,
+            });
+        }
+        Some(Command::ReturnBrief { action }) => {
+            return brief::run(match action {
+                BriefAction::Lint => brief::Action::Lint,
             });
         }
         Some(Command::Deck { action }) => {
@@ -1031,5 +1057,6 @@ fn build_app(
     // After the look: how long the warning about the keys shows depends on it.
     Ok(app
         .with_key_config(&settings.keys)
-        .with_deck_config(&settings.deck))
+        .with_deck_config(&settings.deck)
+        .with_brief_config(&settings.brief))
 }
