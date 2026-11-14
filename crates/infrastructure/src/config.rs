@@ -69,7 +69,7 @@ struct RawConfig {
     keys: Option<toml::Value>,
     /// Read whole too: the Deck's lint reports what is wrong in it.
     deck: Option<toml::Value>,
-    /// Read whole too: `swarmux brief lint` reports what is wrong in it.
+    /// Read whole too: `swarmux return-brief lint` reports what is wrong in it.
     brief: Option<toml::Value>,
 }
 

@@ -20,6 +20,7 @@ The other settings live next to the feature they control:
 | `[worktree]` | where worktrees go, port blocks | [Worktrees](worktrees.md) |
 | `[missions]` | plan-first, drift, and `landing` | [Missions](missions.md), [Landing](#landing) below |
 | `[deck]` | which panels the Deck shows, their order, the graph's direction, the sessions strip | [The Deck](deck.md#customizing-deck) |
+| `[brief]` | when the Return brief opens by itself, how long away counts, where `Esc` skips to | [The Return brief](brief.md#customizing-brief) |
 | `[console]` | the Work screen's verification window and suggested notes | [Console](#console) below |
 | `[governor]` | budgets, forecasts, auto-resume | [Usage governor](governor.md) |
 | `[notify]` | toasts, bell and `ntfy` | [Notifications](notifications.md) |

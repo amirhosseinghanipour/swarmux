@@ -5,7 +5,7 @@
 //! written ([`BriefConfig`]); [`resolve`] decides what can be used. A mistake
 //! never stops swarmux: what cannot be used is ignored, the default applies
 //! in its place, and each such case is a [`BriefProblem`] that the lint
-//! (`swarmux brief lint`) prints and the app says once at start.
+//! (`swarmux return-brief lint`) prints and the app says once at start.
 
 use std::fmt;
 

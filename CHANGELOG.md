@@ -8,6 +8,20 @@ follows [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- The Return brief (`g b`). After a gap (`[brief] away_after_minutes`, default
+  30) swarmux starts on a screen that says what happened while you were away:
+  what landed with its evidence bundle, what is verified and ready to land,
+  the decisions waiting (ranked as in Work, each with its auto-deny countdown
+  or what waits on it), what stopped, what the jobs cost, claim to verified
+  and the first-run pass rate with their sample sizes, the Guard's exceptions
+  (held and refused calls with their rule, calls that fell back because
+  swarmux was not reachable, always-allow rules added), hidden checks that did
+  not run, jobs checked in their own worktree, what landed where, and a
+  timeline. `Enter` opens the first decision in Work, `Esc` skips to Work (or
+  the Deck, `esc_goes_to`). Nothing is invented: no estimate of your time, no
+  day budget, a missing figure is unknown and never zero. `[brief]` config with
+  `swarmux return-brief lint`; `swarmux --demo --demo-away 60` shows it. See
+  [the guide](guide/brief.md).
 - Verifier and gate hardening. The verifier now checks what runs the tests as
   well as the tests, and says so when it could not check something.
   - The harness is a finding. Created, changed, moved or deleted, any file of a

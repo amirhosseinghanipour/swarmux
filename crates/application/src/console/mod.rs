@@ -31,6 +31,9 @@
 //! - the repositories' contract index, once per rescan (cached by the
 //!   index it was derived from).
 //!
+//! The snapshot never scans the ledger; the Return brief ([`build_brief`]) reads a
+//! bounded window of it separately ([`read_digest`]).
+//!
 //! The ledger is never scanned: the ledger range of an outcome comes from
 //! its sealed bundle, so a ledger of tens of thousands of entries costs
 //! the same as an empty one. The landed group holds its newest
