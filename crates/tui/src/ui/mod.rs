@@ -338,7 +338,7 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App, t: &Theme) {
                     None => "note".to_string(),
                 },
                 InputPurpose::WorkMessage => match &app.work_screen.message {
-                    Some(m) => format!("message {} · {}", m.about, m.mode.as_str()),
+                    Some(m) => format!("message job #{} · {}", m.job, m.mode.as_str()),
                     None => "message".to_string(),
                 },
                 InputPurpose::BoardAnswer => format!(
