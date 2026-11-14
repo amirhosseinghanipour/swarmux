@@ -70,8 +70,9 @@ fn work_shows_the_held_push_with_the_agents_own_words_and_the_refused_edit() {
 fn work_shows_the_delivered_mission_with_its_proof() {
     let mut app = played();
     on_work(&mut app);
-    // Down to the landed mission: the decisions, then the landed group.
-    for _ in 0..2 {
+    // Down to the landed mission: the two decisions, the job ready to land,
+    // then the landed group.
+    for _ in 0..3 {
         app.press_char('j');
     }
     tick(&mut app);
@@ -134,7 +135,7 @@ fn typed(app: &mut App, text: &str) {
 fn the_delivered_missions_diff_tab_lists_each_file_with_its_lines() {
     let mut app = played();
     on_work(&mut app);
-    for _ in 0..2 {
+    for _ in 0..3 {
         app.press_char('j');
     }
     app.press_char('3');
@@ -161,11 +162,12 @@ fn work_shows_how_verification_has_gone_from_the_ledger() {
     on_work(&mut app);
     let out = app.render_text(180, 50);
     assert!(out.contains("last 24h"), "{out}");
-    // The mission's gate blocked a premature claim and then passed: one job
-    // verified, its first claim not a pass, its checks and its bundle counted.
+    // The mission's gate and the docs site's blocked a premature claim, and
+    // the four other first claims passed: five jobs verified, four of the
+    // six first claims a pass, the checks and the one bundle counted.
     for needle in [
-        "first-run 0% (0/1)",
-        "1 verified",
+        "first-run 67% (4/6)",
+        "5 verified",
         "claim→verified",
         "sealed",
     ] {

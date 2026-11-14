@@ -26,8 +26,11 @@ const TICKS: u32 = 340;
 const MOMENTS: [(&str, &str); 5] = [
     ("guard-deny", "deny Edit tests/checkout_oracle.rs"),
     ("p1-approval", "P1 ◆ approval W web-checkout Bash git push"),
-    ("flood", "flood: 13 items from 2 causes"),
-    ("gate-blocked", "gate blocked a stop (1 of"),
+    (
+        "docs-blocked",
+        "gate blocked a stop (1 of 3): npm run docs:build",
+    ),
+    ("gate-blocked", "gate blocked a stop (1 of 3): cargo test"),
     ("gate-passed", "gate passed"),
 ];
 

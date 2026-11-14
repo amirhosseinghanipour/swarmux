@@ -21,13 +21,14 @@ use swarmux_application::ports::{Clock, SessionRepository};
 use swarmux_application::{
     GateKeeper, GateService, GuardService, GuardSettings, HistoryService, JobService,
     MissionService, PromptService, RoutingService, SessionService, Settings, SharedPolicy,
-    UiSettings,
+    UiSettings, Verifier,
 };
+use swarmux_domain::Pattern;
 use swarmux_domain::mission::{Acceptance, Budget, Constraints, Contract};
 use swarmux_domain::{Session, SessionId};
 use swarmux_infrastructure::demo::{
-    DemoChecker, DemoClock, DemoFeed, DemoGateSource, DemoMissions, DemoMonitor, DemoPlanner,
-    DemoPlans, DemoVcs, DemoWorkspace, ScriptedInbox, ScriptedRunner,
+    DemoChecker, DemoCheckout, DemoClock, DemoFeed, DemoGateSource, DemoMissions, DemoMonitor,
+    DemoPlanner, DemoPlans, DemoVcs, DemoWorkspace, ScriptedInbox, ScriptedRunner,
 };
 use swarmux_infrastructure::{EvidenceFiles, Paths, SqliteLedger, SqliteStore};
 use swarmux_tui::{App, Launch};
@@ -87,6 +88,8 @@ pub fn build(options: &Options) -> anyhow::Result<App> {
     let settings = Settings {
         max_concurrent: SESSIONS.len(),
         guard: GuardSettings {
+            // The owner's one standing rule: `cargo check` is routine.
+            allow: vec![Pattern::parse("Bash(cargo check:*)")?],
             // A held call waits for the whole scenario (the clock runs fast).
             approval_timeout_secs: 3600,
             ..defaults.guard.clone()
@@ -111,7 +114,9 @@ pub fn build(options: &Options) -> anyhow::Result<App> {
     // The real gate and guard, over a gate source and checker that follow the script.
     let checker = Arc::new(DemoChecker::default());
     let (keeper, gate_records) = GateKeeper::new(Arc::new(DemoGateSource), checker.clone());
-    let keeper = Arc::new(keeper);
+    // The checks run in a "clean copy" made by swarmux, as for real work.
+    let keeper =
+        Arc::new(keeper.with_verifier(Verifier::new(Arc::new(DemoCheckout), checker.clone())));
     let policy = SharedPolicy::new(settings.guard.policy()).with_fence(keeper.clone());
     let inbox = Rc::new(ScriptedInbox::default());
     let runner = Rc::new(ScriptedRunner::default());

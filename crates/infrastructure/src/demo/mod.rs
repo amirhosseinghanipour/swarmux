@@ -10,6 +10,6 @@ mod misc;
 mod runner;
 
 pub use clock::DemoClock;
-pub use gate::{DemoChecker, DemoGateSource, DemoVcs};
+pub use gate::{DemoChecker, DemoCheckout, DemoGateSource, DemoVcs};
 pub use misc::{DemoFeed, DemoMissions, DemoMonitor, DemoPlanner, DemoPlans, DemoWorkspace};
 pub use runner::{ScriptedInbox, ScriptedRunner};

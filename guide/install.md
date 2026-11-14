@@ -25,10 +25,13 @@ restart it when nothing is running. Maintainers: see
 ## The scripted demo
 
 `swarmux --demo` opens the real interface on a made-up "overnight org": five
-agents at work, a Guard denial, a run of routine approvals waiting as one row, a
-mission the done-gate sends back once before it passes, and the delivered
-mission with its evidence on the Ledger screen (`5`). It plays for about half
-a minute and then stays open so you can look around; `q` quits.
+agents at work, routine `cargo check` calls the Guard lets through, a Guard
+denial, a push held for you, a docs agent whose first "done" the done-gate sends
+back and that then waits on two held calls, a mission the gate sends back once
+before it passes, and the delivered mission with its evidence on the Ledger
+screen (`5`). It plays on its own and then stays open so you can look
+around; `q` quits. The checks run in a clean copy, as they do for real work,
+and the demo's clock reads a day in November 2026.
 
 It is a script, not a recording of a real run, and every number in it is made
 up. The status bar says `DEMO · scripted` the whole time. It works on a plain

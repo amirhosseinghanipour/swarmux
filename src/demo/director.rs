@@ -56,6 +56,10 @@ impl Director {
         if let Some((_, root)) = parts.cwds.first() {
             parts.checker.fail(root, 2);
         }
+        // The docs site's first "done" is sent back: its build finds broken links.
+        if let Some((_, root)) = parts.cwds.iter().find(|(name, _)| *name == "docs-site") {
+            parts.checker.fail(root, 2);
+        }
         Director {
             rng: parts.seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1,
             parts,

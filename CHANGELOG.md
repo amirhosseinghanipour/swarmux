@@ -446,6 +446,13 @@ follows [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- `swarmux --demo` plays a calmer night: `cargo check` calls pass on a standing
+  rule, two calls wait on you besides the held push (not twelve), the docs
+  agent's first "done" is sent back by its build, every repository configures a
+  check so each Deck card shows its dots, the gate runs the checks in a clean
+  copy, and the clock reads a day in November 2026. The `flood` frame of
+  `--snapshot` is now `docs-blocked`. The README screenshots come from
+  `scripts/screenshots.sh`.
 - **Action needed: a repository's checks do not run until you trust it.** A
   repository with `.swarmux/gates.toml` (and, for jobs nobody watches, checks
   swarmux guesses from its files) now runs none of its commands until you run

@@ -28,8 +28,8 @@ Type "swarmux --demo"
 Enter
 Show
 
-# Mission control: agents at work, a Guard denial, a run of routine
-# approvals as one row, a mission the gate sends back once and then passes.
+# Mission control: agents at work, a Guard denial, a held push, a gate that
+# sends a mission back once and then passes.
 Sleep 16s
 
 # The Ledger: the delivered mission and its evidence card.

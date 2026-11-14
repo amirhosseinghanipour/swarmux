@@ -127,12 +127,14 @@ fn the_key_moments_appear_in_order() {
         needle: "P1 ◆ approval W web-checkout Bash git push",
         seen: None,
     };
-    let mut flood = Watch {
-        needle: "flood: 13 items from 2 causes",
+    // The docs site's first "done" is sent back too: its build finds broken
+    // links, and the agent then waits on two held calls.
+    let mut docs_blocked = Watch {
+        needle: "gate blocked a stop (1 of 3): npm run docs:build",
         seen: None,
     };
     let mut blocked = Watch {
-        needle: "gate blocked a stop (1 of",
+        needle: "gate blocked a stop (1 of 3): cargo test",
         seen: None,
     };
     let mut passed = Watch {
@@ -149,7 +151,7 @@ fn the_key_moments_appear_in_order() {
         for w in [
             &mut guard_deny,
             &mut p1_alarm,
-            &mut flood,
+            &mut docs_blocked,
             &mut blocked,
             &mut passed,
         ] {
@@ -167,7 +169,7 @@ fn the_key_moments_appear_in_order() {
         "the Guard refuses the edit before the gate sends the mission back"
     );
     assert!(at(&p1_alarm) < at(&blocked));
-    assert!(at(&flood) < at(&blocked));
+    assert!(at(&docs_blocked) < at(&blocked));
     assert!(at(&blocked) < at(&passed), "blocked once, then passed");
 
     // The delivered mission and its evidence are on the Ledger screen. The
@@ -220,7 +222,7 @@ mod console {
     #[test]
     fn the_demo_outcomes_are_in_the_right_groups() {
         let snap = played();
-        // The held push comes first (P1), then the run of routine asks (P2).
+        // The held push comes first (P1), then the release's asks (P2).
         let decide: Vec<(&str, Option<PriorityKind>)> = group(&snap, GroupKind::Decide)
             .iter()
             .map(|o| (o.title.as_str(), o.priority))
@@ -237,7 +239,16 @@ mod console {
                 ("Release 2.4", Some(PriorityKind::P2)),
             ]
         );
-        assert!(group(&snap, GroupKind::ReadyToLand).is_empty());
+        // The checkout agent's turn that carried the operator's message
+        // passed its gate and waits to land: verified, not landed.
+        let ready = group(&snap, GroupKind::ReadyToLand);
+        assert_eq!(ready.len(), 1);
+        assert!(
+            ready[0]
+                .title
+                .starts_with("The operator sent you a message")
+        );
+        assert!(ready[0].checks.total >= 1 && ready[0].checks.failed == 0);
         assert!(group(&snap, GroupKind::Running).is_empty());
 
         // The mission the gate sent back once is delivered, with proof.
@@ -264,14 +275,13 @@ mod console {
         assert!(m.diff.is_some());
         assert_eq!(m.spend.total_usd, 1.84);
 
-        // The two jobs nobody asked about are now the release's tasks, so
-        // no job of theirs is on no queue. The one left is the checkout
-        // agent's turn that carried the operator's message: it ended, and
-        // nothing about it needs a decision.
+        // The jobs nobody asked about are the release's tasks, so no job of
+        // theirs is on no queue; the checkout agent's turn is ready to land,
+        // so nothing is idle.
         let c = snap.header.counts;
         assert_eq!(
             (c.decide, c.ready_to_land, c.running, c.landed, c.idle),
-            (2, 0, 0, 1, 1)
+            (2, 1, 0, 1, 0)
         );
     }
 
@@ -283,8 +293,9 @@ mod console {
             .iter()
             .filter(|h| h.state == HoldState::Held)
             .collect();
-        // The push, and the run of routine checks waiting as one row.
-        assert_eq!(held.len(), 13);
+        // The push, and the two calls the docs agent waits on (the routine
+        // `cargo check`s the standing rule allows are not held).
+        assert_eq!(held.len(), 3);
         let push = held[0];
         assert_eq!(push.target, "git push origin HEAD:main");
         assert_eq!(push.tool, "Bash");
@@ -315,7 +326,7 @@ mod console {
             Some(group(&snap, GroupKind::Decide)[0].id.as_str())
         );
         assert_eq!(group(&snap, GroupKind::Decide)[0].holds[0], push.id);
-        // The routine checks are P2 and not destructive.
+        // The docs agent's two calls are P2 and not destructive.
         assert!(held[1..].iter().all(|h| !h.destructive));
         assert!(
             held[1..]
@@ -363,9 +374,9 @@ mod console {
         let snap = played();
         // The release mission is a task graph of three tasks (the jobs of
         // data-pipeline, mobile-app and docs-site); with the held push's
-        // job and the delivered mission that is five cards (the sixth is below). The third task
-        // waits for the other two: two dependency edges, both met (their
-        // producers merged).
+        // job and the delivered mission that is five cards (the sixth is
+        // below). The third task waits for the other two: two dependency
+        // edges, both met (their producers merged).
         // The checkout agent's continuation (the turn that carried the
         // operator's message) is a sixth card.
         assert_eq!(snap.deck.nodes.len(), 6);
@@ -389,8 +400,8 @@ mod console {
         assert_eq!(snap.deck.max_depth, 1);
         let on_queue = snap.deck.nodes.iter().filter(|n| n.group.is_some()).count();
         assert_eq!(
-            on_queue, 5,
-            "the release's three tasks and the held push ask, the mission landed"
+            on_queue, 6,
+            "the release's three tasks, the held push ask, the turn ready to land and the mission landed"
         );
         // The usage windows the demo's jobs reported.
         let five = snap

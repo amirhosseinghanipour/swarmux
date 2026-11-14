@@ -43,7 +43,10 @@ fn the_demo_attaches_on_the_brief_and_reads_the_night_at_180x50() {
         "LANDED",
         "GUARD WHILE AWAY",
         "routine allows, not listed",
-        "more, each held",
+        // The Guard's few held calls, each with its reason, and the
+        // standing rule's routine allows as one number.
+        "held, waiting",
+        "first-run pass 67% (4 of 6)",
         "SPEND AND CHECKS",
         "TIMELINE",
         "WHAT LANDS WHERE",
@@ -51,6 +54,9 @@ fn the_demo_attaches_on_the_brief_and_reads_the_night_at_180x50() {
     ] {
         assert!(out.contains(needle), "{needle}\n{out}");
     }
+    // The demo's gate runs its checks in a clean copy, as for real work: the
+    // brief has no worktree warning to show.
+    assert!(!out.contains("not a clean copy"), "{out}");
     no_private_use(&out);
 }
 

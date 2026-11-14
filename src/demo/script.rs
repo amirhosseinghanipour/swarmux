@@ -4,8 +4,9 @@
 //! times faster, so half a minute of watching is a quarter of an hour of
 //! agent time. Every number is made up.
 
-/// The demo's clock at tick 0, in milliseconds since the epoch.
-pub const START: i64 = 1_780_452_600_000;
+/// The demo's clock at tick 0, in milliseconds since the epoch: 2026-11-12
+/// 02:10 UTC. Only the clock of the demo; the real time is never touched.
+pub const START: i64 = 1_794_449_400_000;
 /// Milliseconds of the demo clock for each tick: half a minute per second.
 pub const CLOCK_MS_PER_TICK: i64 = 3_000;
 /// Ticks in a second of the demo.
@@ -204,7 +205,7 @@ pub fn timeline(mission: &str) -> Vec<(u64, Act)> {
         &mut v,
         "docs-site",
         1.6,
-        31.0,
+        9.0,
         &[
             ("Bash", "npm run docs:build"),
             ("Grep", "href=\"/api"),
@@ -383,26 +384,56 @@ pub fn timeline(mission: &str) -> Vec<(u64, Act)> {
         },
     ));
 
-    // A run of routine approvals that waits as one row.
+    // The docs agent runs `cargo check` on its crates: the owner's standing
+    // rule allows it, and the Guard lets these through without a word.
     for (i, subject) in [
         "cargo check -p docs-core",
         "cargo check -p docs-theme",
         "cargo check -p docs-search",
         "cargo check -p docs-api",
-        "cargo check -p docs-cli",
         "cargo check -p docs-nav",
         "cargo check -p docs-i18n",
         "cargo check -p docs-assets",
-        "cargo check -p docs-lint",
-        "cargo check -p docs-render",
-        "cargo check -p docs-index",
-        "cargo check -p docs-sitemap",
     ]
     .into_iter()
     .enumerate()
     {
         v.push((
-            at(8.0 + 0.1 * i as f64),
+            at(3.0 + 0.8 * i as f64),
+            Act::Call {
+                label: "docs-site",
+                tool: "Bash",
+                subject,
+            },
+        ));
+    }
+
+    // It says it is done; the gate builds the site and finds broken links, and
+    // sends it back. The agent then asks for two things no rule covers, and
+    // waits for the user: a held call keeps the agent where it is.
+    v.push((
+        at(8.8),
+        Act::Stop {
+            label: "docs-site",
+            message: "Reference regenerated, 14 links fixed.",
+        },
+    ));
+    v.push((
+        at(9.6),
+        Act::Text(
+            "docs-site",
+            "Three links under /api/auth still break. I need a link checker.",
+        ),
+    ));
+    for (i, subject) in [
+        "npm install --save-dev markdown-link-check",
+        "cargo install --locked mdbook-linkcheck",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        v.push((
+            at(10.0 + 0.4 * i as f64),
             Act::Call {
                 label: "docs-site",
                 tool: "Bash",
@@ -461,6 +492,13 @@ pub fn timeline(mission: &str) -> Vec<(u64, Act)> {
         ),
     ));
     v.push((
+        at(25.2),
+        Act::Stop {
+            label: "web-checkout-2",
+            message: "Moved the retry count into the settings file, as you asked.",
+        },
+    ));
+    v.push((
         at(25.6),
         Act::Finish {
             label: "web-checkout-2",
@@ -471,7 +509,8 @@ pub fn timeline(mission: &str) -> Vec<(u64, Act)> {
         },
     ));
 
-    // The rest finish one after another.
+    // The rest say they are done, pass their gates and finish one after
+    // another.
     for (secs, label, cost, turns, minutes, text) in [
         (
             23.0,
@@ -497,15 +536,14 @@ pub fn timeline(mission: &str) -> Vec<(u64, Act)> {
             46,
             "Channel setup moved after the permission check.",
         ),
-        (
-            31.0,
-            "docs-site",
-            0.68,
-            9,
-            19,
-            "Reference regenerated, 14 links fixed.",
-        ),
     ] {
+        v.push((
+            at(secs - 0.5),
+            Act::Stop {
+                label,
+                message: text,
+            },
+        ));
         v.push((
             at(secs),
             Act::Finish {

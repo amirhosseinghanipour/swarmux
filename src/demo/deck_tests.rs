@@ -38,9 +38,13 @@ fn g_d_goes_to_the_deck_and_the_demo_fills_every_panel_at_180x50() {
         "g d deck",
         // The graph: the release's tasks, with the dependency into t3.
         "TASK GRAPH",
-        "t1 DONE",
-        "t2 DONE",
+        // The tasks whose jobs passed their gates, and the one whose gate
+        // sent it back (its build found broken links) and that now waits on
+        // a held call.
+        "t1 VERIFIED",
+        "t2 VERIFIED",
         "t3 HELD",
+        "×  0/1",
         "Backfill the events table",
         "Regenerate the API reference",
         "▶",
@@ -61,7 +65,9 @@ fn g_d_goes_to_the_deck_and_the_demo_fills_every_panel_at_180x50() {
         "VERIFICATION",
         "jobs verified",
         "first-run pass",
-        "(0 of 1) · small n",
+        // Four of the six first stops passed their checks; the mission's
+        // and the docs site's were sent back.
+        "(4 of 6)",
         "claim→verified",
         "1 bundle sealed",
         // Limits and spend, as far as they are known.
@@ -87,6 +93,9 @@ fn g_d_goes_to_the_deck_and_the_demo_fills_every_panel_at_180x50() {
         !out.chars().any(|c| ('\u{E000}'..='\u{F8FF}').contains(&c)),
         "no private-use glyph"
     );
+    // Every repository of the demo configures a check, so every card has
+    // its dots.
+    assert!(!out.contains("no checks configured"), "{out}");
 }
 
 #[test]

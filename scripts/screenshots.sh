@@ -76,13 +76,13 @@ wait_for() {
 }
 
 # played: open the Deck and wait for the scenario to end: the Deck's "this
-# run" line reaches $9.27 when the last job has finished. (The status bar
+# run" line reaches $8.59 when the last job has finished. (The status bar
 # cannot say: the held tool calls keep jobs counted as running.)
 # The limit gauges climb with the demo's clock, so shoot at once.
 played() {
   wait_for "g d deck"
   keys g d
-  wait_for 'jobs $9.27'
+  wait_for 'jobs $8.59'
   sleep 1
 }
 
