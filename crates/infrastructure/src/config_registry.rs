@@ -833,6 +833,24 @@ impl Registry {
             720.0,
             "How many hours back the verification figures look.",
         ));
+        r.register(one_of(
+            "console.intervene_mode",
+            &["queue", "steer"],
+            "\"queue\"",
+            "How `m` on a running job delivers your message: at the end of its turn, or by stopping the turn first.",
+        ));
+        r.register(int(
+            "console.intervene_max_chars",
+            "2000",
+            1.0,
+            20000.0,
+            "The longest message you can send to an agent, in characters.",
+        ));
+        r.register(flag(
+            "console.intervene_confirm_steer",
+            "true",
+            "Ask a second time before a steer stops a turn.",
+        ));
         r.register(whole(
             "console.send_back_notes",
             Ty::StrList,

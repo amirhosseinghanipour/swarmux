@@ -49,6 +49,54 @@
       "additionalProperties": false,
       "description": "The Work and Deck screens.",
       "properties": {
+        "intervene_confirm_steer": {
+          "default": true,
+          "description": "Ask a second time before a steer stops a turn.",
+          "type": "boolean",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "scalar",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        },
+        "intervene_max_chars": {
+          "default": 2000,
+          "description": "The longest message you can send to an agent, in characters.",
+          "maximum": 20000,
+          "minimum": 1,
+          "type": "integer",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "scalar",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        },
+        "intervene_mode": {
+          "default": "queue",
+          "description": "How `m` on a running job delivers your message: at the end of its turn, or by stopping the turn first.",
+          "enum": [
+            "queue",
+            "steer"
+          ],
+          "type": "string",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "scalar",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        },
         "metrics_hours": {
           "default": 24,
           "description": "How many hours back the verification figures look.",
@@ -709,6 +757,9 @@
         "enum": [
           "bg",
           "board.enabled",
+          "console.intervene_confirm_steer",
+          "console.intervene_max_chars",
+          "console.intervene_mode",
           "console.metrics_hours",
           "console.send_back_notes",
           "deck",
