@@ -232,9 +232,9 @@ fn the_compact_brief_keeps_the_first_sections_and_folds_the_rest_behind_tab() {
     ] {
         assert!(out.contains(needle), "{needle}\n{out}");
     }
-    for folded in ["TIMELINE", "WHAT LANDS WHERE"] {
-        assert!(!out.contains(folded), "{folded} folds\n{out}");
-    }
+    // The timeline takes what the right column has left; what lands where folds.
+    assert!(out.contains("TIMELINE"), "{out}");
+    assert!(!out.contains("WHAT LANDS WHERE"), "folds\n{out}");
     a.brief.more = true;
     let out = text(&draw(&a, &v, 120, 33));
     assert!(

@@ -26,6 +26,7 @@
       "priority": "p1",
       "kind": "approval",
       "ask": "Bash git push origin HEAD:main",
+      "detail": "waiting for your answer",
       "since_at": 1100000,
       "deadline_at": 13000000,
       "blocks": []
@@ -36,6 +37,7 @@
       "priority": "p2",
       "kind": "job_failed",
       "ask": "Backfill the events table",
+      "detail": "claude exited with code 1",
       "since_at": 5000,
       "deadline_at": null,
       "blocks": []
@@ -46,6 +48,7 @@
       "priority": "p2",
       "kind": "plan_ready",
       "ask": "plan me",
+      "detail": "1 task over 1 files: approve, change or cancel",
       "since_at": 6000,
       "deadline_at": null,
       "blocks": []
@@ -56,6 +59,7 @@
       "priority": "p2",
       "kind": "merge",
       "ask": "split app",
+      "detail": "task t2: its merge conflicts in src/db/mod.rs",
       "since_at": 7000,
       "deadline_at": null,
       "blocks": []
