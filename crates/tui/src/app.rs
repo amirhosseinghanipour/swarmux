@@ -1026,13 +1026,15 @@ impl App {
     }
 
     /// Presses a named key, as the user would: `enter`, `esc`, `tab` or
-    /// `backspace`. Any other name is ignored.
+    /// `backspace`, `down` or `up`. Any other name is ignored.
     pub fn press_named(&mut self, name: &str) {
         let code = match name {
             "enter" => KeyCode::Enter,
             "esc" => KeyCode::Esc,
             "tab" => KeyCode::Tab,
             "backspace" => KeyCode::Backspace,
+            "down" => KeyCode::Down,
+            "up" => KeyCode::Up,
             _ => return,
         };
         self.on_key(KeyEvent::new(code, KeyModifiers::NONE));
