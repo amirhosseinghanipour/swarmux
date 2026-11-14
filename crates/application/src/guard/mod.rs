@@ -166,6 +166,8 @@ pub struct GuardService {
     fresh: Vec<DecisionRecord>,
     /// How long instant (code-only) decisions took, in microseconds.
     latencies: VecDeque<u64>,
+    /// Where each configured rule came from, for the decision record.
+    origins: std::collections::BTreeMap<String, swarmux_domain::layers::Origin>,
 }
 
 impl GuardService {
@@ -190,6 +192,7 @@ impl GuardService {
             recent: VecDeque::new(),
             fresh: Vec::new(),
             latencies: VecDeque::new(),
+            origins: Default::default(),
         }
     }
 
@@ -202,6 +205,16 @@ impl GuardService {
     /// Where "always allow" rules are kept; without one they last this run only.
     pub fn with_rule_store(mut self, store: Rc<dyn RuleStore>) -> GuardService {
         self.store = Some(store);
+        self
+    }
+
+    /// The tier and file each configured rule was read from: every decision
+    /// record names the one that decided it.
+    pub fn with_origins(
+        mut self,
+        origins: std::collections::BTreeMap<String, swarmux_domain::layers::Origin>,
+    ) -> GuardService {
+        self.origins = origins;
         self
     }
 
@@ -634,6 +647,7 @@ impl GuardService {
         rule: Option<String>,
         latency_us: u64,
     ) -> DecisionRecord {
+        let rule_text = rule.clone();
         DecisionRecord {
             job_id: request.job_id,
             tool: request.tool_name.clone(),
@@ -644,12 +658,51 @@ impl GuardService {
             ts: self.clock.now(),
             source: Source::Guard,
             confidence: None,
-            extra: DecisionExtra {
-                agent_id: request.agent_id.clone(),
-                agent_type: request.agent_type.clone(),
-                ..DecisionExtra::default()
+            extra: {
+                let origin = self.origin_of(rule_text.as_deref());
+                DecisionExtra {
+                    agent_id: request.agent_id.clone(),
+                    agent_type: request.agent_type.clone(),
+                    policy_sha256: Some(self.policy.policy_sha256()),
+                    rule_tier: origin.as_ref().map(|o| o.tier.as_str().to_string()),
+                    rule_source: origin.map(|o| o.source),
+                    ..DecisionExtra::default()
+                }
             },
         }
+    }
+
+    /// The tier and file of the rule `text` names: a stored "always allow"
+    /// rule, a configured rule, or a built-in one. Nothing when the text is
+    /// a reason no single rule explains.
+    fn origin_of(&self, text: Option<&str>) -> Option<swarmux_domain::layers::Origin> {
+        use swarmux_domain::layers::{Origin, Tier};
+        let text = text?;
+        if let Some(r) = self
+            .policy
+            .learned()
+            .into_iter()
+            .find(|r| !r.text.is_empty() && text.contains(&r.text))
+        {
+            return Some(Origin {
+                tier: Tier::User,
+                source: format!("stored rule {} ({})", r.id, r.scope.as_str()),
+            });
+        }
+        if let Some(o) = self
+            .origins
+            .iter()
+            .filter(|(k, _)| text.contains(k.as_str()))
+            .max_by_key(|(k, _)| k.len())
+            .map(|(_, o)| o.clone())
+        {
+            return Some(o);
+        }
+        swarmux_domain::BUILTIN_DENY
+            .iter()
+            .chain(swarmux_domain::BUILTIN_ALLOW.iter())
+            .any(|b| text.contains(b))
+            .then(Origin::core)
     }
 
     /// Counts, stores and remembers a record.

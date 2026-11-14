@@ -1,6 +1,7 @@
 //! Composition root: the only place that wires concrete adapters to use cases.
 
 mod audit;
+mod configcmd;
 mod contracts;
 mod daemon;
 mod deck;
@@ -45,8 +46,8 @@ use swarmux_infrastructure::{
     BoardMcp, ClaudeCli, ClaudePlanner, FilePalette, FsAgentCatalog, FsGateSource, GitCli,
     GitMergeQueue, GitRepoRoots, GitVcs, GitWorktrees, GuardHook, HaikuDiagnoser, HaikuExtractor,
     HaikuLinter, HaikuRouter, MissionFiles, Paths, SqliteLedger, SqliteStore, SysinfoMonitor,
-    SystemClock, TomlRuleStore, WindowsTerminal, build_notifier_with, load_settings, rules_file,
-    utc_offset_minutes,
+    SystemClock, TomlRuleStore, WindowsTerminal, build_notifier_with, load_effective_settings,
+    rules_file, utc_offset_minutes,
 };
 use swarmux_tui::{App, Launch};
 
@@ -60,6 +61,12 @@ struct Cli {
     /// Start without the splash screen.
     #[arg(long, global = true)]
     no_splash: bool,
+    /// Set a setting for this run only, like `--set guard.unmatched=ask`
+    /// (repeatable). The nearest tier; a managed lock still wins. Applies to
+    /// the window or command you type it on: the background service reads
+    /// the environment it was started in.
+    #[arg(long = "set", global = true, value_name = "KEY=VALUE")]
+    set: Vec<String>,
     /// Play a scripted demo in a throwaway folder: no Claude Code, no
     /// account, and none of your data is used or changed.
     #[arg(long)]
@@ -126,6 +133,12 @@ enum Command {
     Audit {
         #[command(subcommand)]
         action: AuditAction,
+    },
+    /// The configuration: every setting and where its value came from, lint,
+    /// schemas, export and the folders in use.
+    Config {
+        #[command(subcommand)]
+        action: configcmd::Action,
     },
     /// Repository trust: which repositories may run the commands they
     /// ship (`.swarmux/gates.toml`, guessed checks). None do until you
@@ -207,7 +220,7 @@ enum Command {
         print_settings: bool,
     },
     /// Put swarmux on this machine: copy it to a per-user folder, add the
-    /// folder to your PATH and create ~/.swarmux. Does not touch Claude
+    /// folder to your PATH and create the data folder (see `swarmux config paths`). Does not touch Claude
     /// Code's settings.
     Install {
         /// Where to put the executable (default: a per-user folder).
@@ -220,10 +233,10 @@ enum Command {
         #[arg(long)]
         statusline: bool,
     },
-    /// Remove what `install` set up and say what was removed. Your data in
-    /// ~/.swarmux stays unless you ask for --purge.
+    /// Remove what `install` set up and say what was removed.
+    /// Your data (the state folder, see `swarmux config paths`) stays unless you ask for --purge.
     Uninstall {
-        /// Also delete ~/.swarmux (config, database, ledger).
+        /// Also delete the state folder (database, ledger, audit key; config.toml too where it lives there).
         #[arg(long)]
         purge: bool,
         /// Leave your PATH alone.
@@ -463,6 +476,7 @@ enum AuditAction {
 
 fn main() -> anyhow::Result<ExitCode> {
     let cli = Cli::parse();
+    swarmux_infrastructure::set_run_flags(run_flags(&cli.set)?);
     if cli.demo && cli.command.is_some() {
         anyhow::bail!("--demo plays on its own: run `swarmux --demo` without a command");
     }
@@ -593,6 +607,12 @@ fn main() -> anyhow::Result<ExitCode> {
                 KeysAction::Export => keys::Action::Export,
             });
         }
+        Some(Command::Config { action }) => {
+            if !configcmd::run(action)? {
+                return Ok(ExitCode::FAILURE);
+            }
+            Ok(())
+        }
         Some(Command::Trust { action }) => match action {
             TrustAction::List => trust::list(),
             TrustAction::Show { repo } => trust::show(repo),
@@ -677,7 +697,7 @@ fn build_app(
     windows: Option<Arc<swarmux_infrastructure::daemon::WindowServer>>,
 ) -> anyhow::Result<App> {
     let paths = paths.clone();
-    let settings = load_settings(&paths.config)?;
+    let settings = load_effective_settings(&paths);
     let store = Rc::new(SqliteStore::open(&paths.db)?);
     let clock = Rc::new(SystemClock);
     // Every job change and decision that is stored is also chained into the ledger.
@@ -841,6 +861,7 @@ fn build_app(
         .with_linter(Rc::new(linter))
         .with_gates(Rc::new(keeper.clone()))
         .with_ledger(ledger.clone())
+        .with_config(settings.provenance.clone())
         .with_evidence(evidence.clone())
         .with_plan_settings(settings.missions.clone())
         .with_planner(Rc::new(planner), store.clone())?
@@ -915,6 +936,7 @@ fn build_app(
     let mut guard = GuardService::new(policy, server, decisions.clone(), clock.clone())
         .with_timeout_secs(guard_settings.approval_timeout_secs)
         .with_rule_store(rule_store)
+        .with_origins(settings.provenance.rule_origins.clone())
         .with_always(AlwaysSettings {
             scope: guard_settings.always_scope,
             expiry_days: guard_settings.always_expiry_days,
@@ -1071,4 +1093,16 @@ fn build_app(
     Ok(app
         .with_key_config(&settings.keys)
         .with_deck_config(&settings.deck))
+}
+
+/// The `--set key=value` pairs, split.
+fn run_flags(set: &[String]) -> anyhow::Result<Vec<(String, String)>> {
+    set.iter()
+        .map(|s| {
+            let (k, v) = s.split_once('=').with_context(|| {
+                format!("--set takes key=value, like guard.unmatched=ask, not {s:?}")
+            })?;
+            Ok((k.trim().to_string(), v.to_string()))
+        })
+        .collect()
 }

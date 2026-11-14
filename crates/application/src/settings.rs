@@ -76,6 +76,8 @@ pub struct Settings {
     /// (`swarmux_domain::console::resolve_deck`), so a mistake in it never
     /// stops the file from loading.
     pub deck: swarmux_domain::console::DeckConfig,
+    /// Where this configuration came from (tiers, files, a hash).
+    pub provenance: Provenance,
 }
 
 /// The `[board]` section.
@@ -507,6 +509,7 @@ impl Default for Settings {
             keys: swarmux_domain::keys::KeyConfig::default(),
             warnings: Vec::new(),
             deck: swarmux_domain::console::DeckConfig::default(),
+            provenance: Provenance::default(),
         }
     }
 }
@@ -592,4 +595,17 @@ mod tests {
         assert_eq!(p.allow_rules()[0].to_string(), "Bash(make:*)");
         assert!(p.deny_rules().len() >= swarmux_domain::BUILTIN_DENY.len());
     }
+}
+
+/// Where the effective configuration came from: the hash of the merged
+/// values, the files that were looked for, and the tier and file each Guard
+/// rule was read from. Written into the ledger beside every decision.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Provenance {
+    /// Hash of the effective configuration (hex); empty when none was loaded.
+    pub config_sha256: String,
+    /// The layers looked for: tier, file, whether it was there.
+    pub layers: Vec<(swarmux_domain::layers::Tier, String, bool)>,
+    /// A Guard rule's text to the tier and file it came from.
+    pub rule_origins: std::collections::BTreeMap<String, swarmux_domain::layers::Origin>,
 }

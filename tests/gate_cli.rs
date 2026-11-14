@@ -17,6 +17,12 @@ fn swarmux(home: &Path, cwd: &Path, args: &[&str]) -> Output {
         .unwrap()
 }
 
+/// The owner trusts the repository: its checks may run.
+fn grant(home: &Path, root: &Path) {
+    let out = swarmux(home, root, &["trust", "grant", root.to_str().unwrap()]);
+    assert!(out.status.success(), "{}", text(&out));
+}
+
 fn text(out: &Output) -> String {
     format!(
         "{}{}",
@@ -129,6 +135,13 @@ fn a_run_in_a_clean_copy_passes_and_says_where_the_checks_ran() {
     let Some(root) = repo(work.path(), GATES) else {
         return;
     };
+    // A repository nobody trusted runs none of its checks.
+    let before = swarmux(home.path(), &root, &["gate", "run"]);
+    let said = text(&before);
+    assert!(!before.status.success(), "{said}");
+    assert!(said.contains("not trusted yet"), "{said}");
+    assert!(!said.contains("gate passed"), "{said}");
+    grant(home.path(), &root);
     let run = swarmux(home.path(), &root, &["gate", "run"]);
     let said = text(&run);
     assert!(run.status.success(), "{said}");
@@ -156,6 +169,7 @@ fn the_selftest_refuses_known_bad_changes_and_fails_a_gate_that_allows_them() {
     let Some(root) = repo(work.path(), GATES) else {
         return;
     };
+    grant(home.path(), &root);
     let ok = swarmux(home.path(), &root, &["gate", "selftest"]);
     let said = text(&ok);
     assert!(ok.status.success(), "{said}");
@@ -179,6 +193,8 @@ fn the_selftest_refuses_known_bad_changes_and_fails_a_gate_that_allows_them() {
     fs::write(root.join(".swarmux/gates.toml"), lax).unwrap();
     assert!(git(&root, &["add", "."]));
     assert!(git(&root, &["commit", "-q", "-m", "lax"]));
+    // The file changed, so the owner is asked again: this time they agree.
+    grant(home.path(), &root);
     let bad = swarmux(home.path(), &root, &["gate", "selftest"]);
     let said = text(&bad);
     assert!(!bad.status.success(), "{said}");

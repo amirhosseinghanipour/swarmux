@@ -39,6 +39,9 @@ const PIN_BYTES_MAX: u64 = 64 << 20;
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawFile {
+    /// The version of this file's format.
+    #[allow(dead_code)]
+    schema_version: Option<toml::Value>,
     #[serde(default)]
     gate: RawGate,
     #[serde(default)]
@@ -501,7 +504,7 @@ fn facts_of(root: &Path) -> RepoFacts {
 fn load_at(root: &Path) -> LoadedGate {
     let file = root.join(GATES_FILE);
     let facts = facts_of(root);
-    let (spec, origin, problem) = match fs::read_to_string(&file) {
+    let (mut spec, origin, problem) = match fs::read_to_string(&file) {
         Ok(text) => match parse_gates(&text, &facts) {
             Ok(spec) => (spec, GateOrigin::File, None),
             Err(e) => (
@@ -519,6 +522,15 @@ fn load_at(root: &Path) -> LoadedGate {
             None,
         ),
     };
+    // The project tier of the configuration: what only restricts counts at
+    // once, trusted or not (protected paths).
+    let project = crate::config_layers::project_restrictions(root);
+    for glob in project.protected {
+        if !spec.protected.contains(&glob) {
+            spec.protected.push(glob);
+        }
+    }
+    spec.warnings.extend(project.warnings);
     LoadedGate {
         root: root.to_path_buf(),
         spec,
@@ -530,7 +542,11 @@ fn load_at(root: &Path) -> LoadedGate {
 impl GateSource for FsGateSource {
     fn load(&self, dir: &Path) -> LoadedGate {
         let root = root_of(dir);
-        let stamp = (modified(&root.join(GATES_FILE)), modified(&root));
+        let stamp = (
+            modified(&root.join(GATES_FILE))
+                .max(modified(&root.join(".swarmux").join("config.toml"))),
+            modified(&root),
+        );
         let mut cache = self.cache.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some((at, gate)) = cache.get(&root)
             && *at == stamp

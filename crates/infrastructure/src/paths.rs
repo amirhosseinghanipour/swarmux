@@ -109,6 +109,8 @@ fn config_dir_for(
     platform: Platform,
     exists: &dyn Fn(&Path) -> bool,
 ) -> Located {
+    // COMPAT(legacy-home, 0.1.0, 2026-11-14): an install that has ~/.swarmux keeps
+    // using it for config and state, for good (not a deprecation).
     let legacy = home.join(".swarmux");
     if let Some(dir) = non_empty(env, "SWARMUX_CONFIG_DIR") {
         return Located {

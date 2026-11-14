@@ -27,6 +27,8 @@ fn text(out: &Output) -> String {
 #[test]
 fn hidden_checks_are_added_listed_and_removed() {
     let home = tempfile::tempdir().unwrap();
+    // An existing install: its data is where it always was.
+    std::fs::create_dir_all(home.path().join(".swarmux")).unwrap();
     let work = tempfile::tempdir().unwrap();
     std::fs::write(work.path().join("hidden.rs"), "#[test] fn h() {}\n").unwrap();
 

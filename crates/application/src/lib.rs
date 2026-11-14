@@ -113,8 +113,8 @@ pub use sendback::{SentBack, send_back_prompt};
 pub use sessions::SessionService;
 pub use settings::{
     BoardSettings, ConsoleSettings, FailMode, GovernorSettings, GuardSettings, LayoutSettings,
-    MAX_SEND_BACK_NOTES, MotionSetting, OnUnreachable, ReviewSettings, ReviewWhen, RowSettings,
-    Settings, TelemetrySettings, UiSettings, WorktreeSettings,
+    MAX_SEND_BACK_NOTES, MotionSetting, OnUnreachable, Provenance, ReviewSettings, ReviewWhen,
+    RowSettings, Settings, TelemetrySettings, UiSettings, WorktreeSettings,
 };
 pub use telemetry::{
     ActivityView, AgentsPoll, Battery, CacheView, CiRun, Collected, CombinedStatusline, Commit,

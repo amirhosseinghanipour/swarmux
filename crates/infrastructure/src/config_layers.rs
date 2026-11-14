@@ -168,6 +168,24 @@ impl Resolved {
         self.entries.get(path)
     }
 
+    /// The configuration as TOML (without `schema_version`): everything
+    /// merged, or only what `tier` sets.
+    pub fn export(&self, tier: Option<Tier>) -> Result<String, String> {
+        let table = match tier {
+            None => self.merged.clone(),
+            Some(want) => {
+                let mut table = Table::new();
+                for e in self.entries.values().filter(|e| !e.is_default) {
+                    for c in e.chain.iter().filter(|c| c.tier == want) {
+                        set_path(&mut table, &e.path, c.value.clone());
+                    }
+                }
+                table
+            }
+        };
+        toml::to_string(&table).map_err(|e| e.to_string())
+    }
+
     /// The findings that make `lint` fail: errors, and with `strict` every
     /// warning.
     pub fn failing(&self, strict: bool) -> Vec<&Finding> {
@@ -1251,6 +1269,33 @@ pub fn resolve(reg: &Registry, inputs: &Inputs) -> Resolved {
     ));
     let mut infos_out = infos;
     infos_out.sort_by_key(|i| i.tier);
+    // Where each Guard rule came from, highest tier last so it wins.
+    let mut rule_origins = std::collections::BTreeMap::new();
+    for path in ["guard.allow", "guard.deny", "guard.protected_paths"] {
+        if let Some(e) = entries.get(path) {
+            for c in e.chain.iter().filter(|c| c.tier != Tier::Core) {
+                if let Value::Array(items) = &c.value {
+                    for item in items.iter().filter_map(Value::as_str) {
+                        rule_origins.insert(
+                            item.to_string(),
+                            swarmux_domain::layers::Origin {
+                                tier: c.tier,
+                                source: c.source.clone(),
+                            },
+                        );
+                    }
+                }
+            }
+        }
+    }
+    settings.provenance = swarmux_application::Provenance {
+        config_sha256: sha.clone(),
+        layers: infos_out
+            .iter()
+            .map(|l| (l.tier, l.source.clone(), l.found))
+            .collect(),
+        rule_origins,
+    };
     Resolved {
         settings,
         entries,
@@ -1426,3 +1471,49 @@ pub fn load_effective_settings(paths: &crate::Paths) -> Settings {
 
 #[cfg(test)]
 mod tests;
+
+/// What a repository's `.swarmux/config.toml` restricts, read for the gate:
+/// these keys count whether or not the repository is trusted.
+#[derive(Clone, Debug, Default)]
+pub struct ProjectRestrictions {
+    /// Globs agents may not write (`guard.protected_paths`).
+    pub protected: Vec<String>,
+    /// Problems with the file, for the gate's warnings.
+    pub warnings: Vec<String>,
+}
+
+/// Reads `root/.swarmux/config.toml` as the project tier and returns the
+/// restrictions in it. A missing file restricts nothing. Globs that climb out
+/// of the repository are dropped and said.
+pub fn project_restrictions(root: &Path) -> ProjectRestrictions {
+    if !root.join(".swarmux").join("config.toml").is_file() {
+        return ProjectRestrictions::default();
+    }
+    let r = resolve(
+        &Registry::core(),
+        &Inputs {
+            project: Some(Project {
+                root: root.to_path_buf(),
+                trusted: false,
+            }),
+            ..Inputs::default()
+        },
+    );
+    let mut out = ProjectRestrictions::default();
+    for glob in r.settings.guard.protected_paths {
+        if glob.split(['/', '\\']).any(|s| s == "..") {
+            out.warnings.push(format!(
+                ".swarmux/config.toml: guard.protected_paths {glob:?} may not contain ..; it is left out"
+            ));
+        } else {
+            out.protected.push(glob);
+        }
+    }
+    out.warnings.extend(
+        r.findings
+            .iter()
+            .filter(|f| f.level >= Level::Warn)
+            .map(|f| f.to_string()),
+    );
+    out
+}

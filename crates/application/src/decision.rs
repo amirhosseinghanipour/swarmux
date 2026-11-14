@@ -120,6 +120,11 @@ pub struct DecisionExtra {
     /// `timeout` (`model` on records made while JEV existed); unset for
     /// calls decided at once.
     pub resolver: Option<String>,
+    /// The hash of the rule set in force when it was decided.
+    pub policy_sha256: Option<String>,
+    /// The tier and file of the rule that decided it, when one did.
+    pub rule_tier: Option<String>,
+    pub rule_source: Option<String>,
 }
 
 /// One line of the decision log.

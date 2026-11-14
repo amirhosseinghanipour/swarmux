@@ -58,6 +58,9 @@ use swarmux_domain::{Millis, iso_utc, parse_rfc3339_millis};
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawContract {
+    /// The version of the contract format; read, not yet needed.
+    #[allow(dead_code)]
+    schema_version: Option<toml::Value>,
     #[serde(default)]
     title: String,
     goal: String,
@@ -220,7 +223,10 @@ fn list(items: &[String]) -> String {
 
 /// Writes a contract as TOML that [`parse_contract`] reads back.
 pub fn render_contract(c: &Contract) -> String {
-    let mut out = String::new();
+    let mut out = String::from(
+        "schema_version = 1
+",
+    );
     out.push_str(&format!("title = {}\n", quote(&c.title)));
     out.push_str(&format!("goal = {}\n", quote(&c.goal)));
     if !c.repos.is_empty() {

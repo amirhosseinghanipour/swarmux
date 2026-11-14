@@ -19,6 +19,7 @@ pub mod config_layers;
 mod config_missions;
 mod config_notify;
 pub mod config_registry;
+pub mod config_schema;
 mod config_telemetry;
 mod config_watchdog;
 mod config_worktree;
@@ -59,8 +60,8 @@ pub use claude_cli::{
 pub use clean_checkout::{GitCleanCheckout, holdout_key};
 pub use clock::SystemClock;
 pub use config::{ConfigError, load_settings};
-pub use config_layers::{Resolved, load_effective, load_effective_settings, set_run_flags};
 pub use config_edit::ConfigRuleWriter;
+pub use config_layers::{Resolved, load_effective, load_effective_settings, set_run_flags};
 pub use contracts::FsSourceTree;
 pub use evidence::EvidenceFiles;
 pub use gate::{FsGateSource, ProcessChecker};

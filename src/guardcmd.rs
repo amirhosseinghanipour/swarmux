@@ -13,7 +13,7 @@ use swarmux_application::{Protection, Settings};
 use swarmux_domain::{DAY_MS, StoredRule, iso_minute};
 use swarmux_infrastructure::hook::spool_file;
 use swarmux_infrastructure::{
-    Paths, SqliteLedger, SystemClock, TomlRuleStore, load_settings, rules_file,
+    Paths, SqliteLedger, SystemClock, TomlRuleStore, load_effective_settings, rules_file,
 };
 
 #[derive(Subcommand)]
@@ -70,7 +70,7 @@ fn rules(paths: &Paths, action: RulesAction) -> anyhow::Result<bool> {
     let now = SystemClock.now();
     match action {
         RulesAction::List => {
-            let settings = load_settings(&paths.config)?;
+            let settings = load_effective_settings(paths);
             let kept = store.list()?;
             if kept.is_empty() && settings.guard.allow.is_empty() {
                 println!("no allow rules besides the built-in ones");
@@ -131,7 +131,7 @@ fn describe(r: &StoredRule, now: i64) -> String {
 }
 
 fn lint(paths: &Paths) -> anyhow::Result<bool> {
-    let settings = load_settings(&paths.config)?;
+    let settings = load_effective_settings(paths);
     let store = TomlRuleStore::new(rules_file(&paths.data_dir));
     let mut problems = settings.warnings.clone();
     problems.extend(store.problems());

@@ -34,6 +34,9 @@ impl std::error::Error for ConfigError {}
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawConfig {
+    /// The version of the file's format; read by the layering, accepted here.
+    #[allow(dead_code)]
+    schema_version: Option<toml::Value>,
     max_concurrent: Option<i64>,
     min_free_ram_mb: Option<i64>,
     default_model: Option<String>,
@@ -457,6 +460,8 @@ fn parse_review(raw: RawReview, text: &str, path: &Path) -> Result<ReviewSetting
     Ok(review)
 }
 
+// COMPAT(jev-section, 0.1.0, 2026-11-14): a `[jev]` section is read, ignored and
+// named in a warning; remove after 2027-11-14.
 /// What is said about an old `[jev]` section (the hosted decision model,
 /// removed): that it is ignored, where it is, and what is left to do. Never
 /// shows a value from it.

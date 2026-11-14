@@ -141,6 +141,7 @@ fn an_existing_config_gives_the_same_settings_as_before_and_no_findings() {
     );
     let mut got = layered.settings.clone();
     got.warnings.clear();
+    got.provenance = Default::default();
     let mut want = direct;
     want.warnings.clear();
     assert_eq!(got, want);
@@ -846,4 +847,23 @@ fn a_registered_extension_key_goes_through_the_same_layers() {
         Some(Value::from(100)),
         "the stricter of user and env"
     );
+}
+
+#[test]
+fn a_repository_fences_its_own_paths_through_the_gate_before_any_trust() {
+    use swarmux_application::GateSource;
+    let (_home, root) = repo_with(
+        "[guard]\nprotected_paths = [\"vendor/**\", \"../outside/**\"]\nallow = [\"Bash(curl *)\"]\n",
+    );
+    let found = project_restrictions(&root);
+    assert_eq!(found.protected, ["vendor/**"]);
+    assert!(
+        found.warnings.iter().any(|w| w.contains("..")),
+        "{:?}",
+        found.warnings
+    );
+    // The gate carries them as protected globs, with nobody's trust.
+    let gate = crate::FsGateSource::new().load(&root);
+    assert!(gate.spec.protected.contains(&"vendor/**".to_string()));
+    assert!(gate.spec.allow_test_changes.is_empty());
 }

@@ -14,8 +14,26 @@ fn swarmux(exe: &Path, home: &Path, args: &[&str]) -> Output {
         .env("HOME", home)
         .env("USERPROFILE", home)
         .env("LOCALAPPDATA", home.join("local"))
+        .env_remove("XDG_STATE_HOME")
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("SWARMUX_STATE_DIR")
+        .env_remove("SWARMUX_CONFIG_DIR")
         .output()
         .expect("run swarmux")
+}
+
+/// Where a home with no `~/.swarmux` keeps its data: the platform's state folder.
+fn state_dir(home: &Path) -> std::path::PathBuf {
+    if cfg!(windows) {
+        home.join("local").join("swarmux")
+    } else if cfg!(target_os = "macos") {
+        home.join("Library")
+            .join("Application Support")
+            .join("swarmux")
+            .join("state")
+    } else {
+        home.join(".local").join("state").join("swarmux")
+    }
 }
 
 fn text(out: &Output) -> String {
@@ -50,7 +68,7 @@ fn clean_install_then_uninstall_leaves_no_trace() {
     assert!(said.contains("statusLine"), "{said}");
     let installed = bin.join(Path::new(EXE).file_name().unwrap());
     assert!(installed.is_file());
-    assert!(home.path().join(".swarmux").is_dir());
+    assert!(state_dir(home.path()).is_dir());
     // Claude Code's settings are never touched.
     assert!(!home.path().join(".claude").exists());
 
@@ -72,12 +90,12 @@ fn uninstall_keeps_data_unless_asked() {
         home.path(),
         &["install", "--dir", bin_arg, "--no-path"],
     );
-    std::fs::write(home.path().join(".swarmux").join("config.toml"), "x = 1").unwrap();
+    std::fs::write(state_dir(home.path()).join("keep.txt"), "x = 1").unwrap();
 
     let out = swarmux(Path::new(EXE), home.path(), &["uninstall", "--no-path"]);
     assert!(out.status.success(), "{}", text(&out));
     assert!(text(&out).contains("kept"));
-    assert!(home.path().join(".swarmux").join("config.toml").is_file());
+    assert!(state_dir(home.path()).join("keep.txt").is_file());
     assert!(!bin.exists());
 
     swarmux(

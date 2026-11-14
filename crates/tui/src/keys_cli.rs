@@ -99,7 +99,9 @@ pub fn export(found: &Effective) -> String {
     let mut out = String::from(
         "# The keys swarmux uses now, defaults included: paste this into config.toml.\n\
          # An action with [] has no key. Esc, Ctrl+C and the answers to approvals\n\
-         # (y, n, a, c) are fixed and not listed.\n",
+         # (y, n, a, c) are fixed and not listed. Leave out the schema_version\n\
+         # line when config.toml has one already.\n\
+         schema_version = 1\n",
     );
     for context in found.catalog.contexts() {
         let defs: Vec<_> = found.catalog.of(context).filter(|d| !d.locked).collect();

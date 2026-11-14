@@ -11,7 +11,7 @@ use swarmux_domain::HookEvent;
 use swarmux_infrastructure::hook::{self, ENV_JOB, ENV_PIPE, HookServer};
 use swarmux_infrastructure::process::hide_std;
 use swarmux_infrastructure::{
-    Paths, SqliteLedger, SqliteStore, SysinfoMonitor, SystemClock, legacy_jev, load_settings,
+    Paths, SqliteLedger, SqliteStore, SysinfoMonitor, SystemClock, legacy_jev, load_effective,
 };
 
 const GB: f64 = (1u64 << 30) as f64;
@@ -44,8 +44,10 @@ pub fn run() -> anyhow::Result<()> {
         Ok(ledger) => crate::audit::doctor(&ledger),
         Err(e) => println!("fail ledger: {e}"),
     }
-    match load_settings(&paths.config) {
-        Ok(s) => {
+    let resolved = load_effective(&paths);
+    {
+        let s = resolved.settings.clone();
+        {
             let source = if paths.config.exists() {
                 paths.config.display().to_string()
             } else {
@@ -61,7 +63,7 @@ pub fn run() -> anyhow::Result<()> {
             }
             crate::telemetry::doctor(&s, &paths, SystemClock.now());
         }
-        Err(e) => println!("fail config {e}"),
+        crate::configcmd::doctor(&paths, &resolved);
     }
     hook_checks();
     crate::trust::doctor(&paths);

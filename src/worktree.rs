@@ -71,7 +71,7 @@ fn open() -> anyhow::Result<Open> {
     let paths = Paths::default_home()?;
     std::fs::create_dir_all(&paths.data_dir)
         .with_context(|| format!("cannot create {}", paths.data_dir.display()))?;
-    let settings = swarmux_infrastructure::load_settings(&paths.config)?;
+    let settings = swarmux_infrastructure::load_effective_settings(&paths);
     let store = Rc::new(SqliteStore::open(&paths.db)?);
     let clock: Rc<dyn Clock> = Rc::new(SystemClock);
     let ledger = Rc::new(LedgerService::new(

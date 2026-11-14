@@ -4,7 +4,7 @@
 use std::process::ExitCode;
 
 use anyhow::anyhow;
-use swarmux_infrastructure::{Paths, load_settings};
+use swarmux_infrastructure::{Paths, load_effective_settings};
 use swarmux_tui::keys::{Effective, effective};
 use swarmux_tui::keys_cli;
 
@@ -20,7 +20,7 @@ pub enum Action {
 /// the config is.
 fn load() -> anyhow::Result<(Effective, bool, String)> {
     let paths = Paths::default_home()?;
-    let settings = load_settings(&paths.config)?;
+    let settings = load_effective_settings(&paths);
     let found = effective(&settings.keys).map_err(|e| anyhow!("{e}"))?;
     Ok((
         found,
@@ -37,7 +37,10 @@ pub fn run(action: Action) -> anyhow::Result<ExitCode> {
         Action::Lint => {
             let (report, failed) = keys_cli::lint(&found, &source, configured);
             print!("{report}");
-            if failed {
+            let unreadable = Paths::default_home()
+                .map(|p| crate::configcmd::report_syntax(&p))
+                .unwrap_or(false);
+            if failed || unreadable {
                 return Ok(ExitCode::FAILURE);
             }
         }

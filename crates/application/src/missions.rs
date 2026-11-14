@@ -92,6 +92,8 @@ pub struct MissionService {
     store: Rc<dyn MissionStore>,
     clock: Rc<dyn Clock>,
     ledger: Option<Rc<LedgerService>>,
+    /// The configuration missions start under, written to the ledger.
+    config: Option<crate::Provenance>,
     linter: Option<Rc<dyn MissionLinter>>,
     gates: Option<Rc<dyn JobGates>>,
     /// Told about launches and deliveries (knowledge).
@@ -126,6 +128,7 @@ impl MissionService {
             store,
             clock,
             ledger: None,
+            config: None,
             linter: None,
             gates: None,
             watch: None,
@@ -178,6 +181,13 @@ impl MissionService {
     /// Like [`MissionService::with_evidence`], for a service already built.
     pub fn set_evidence(&mut self, evidence: Rc<EvidenceService>) {
         self.evidence = Some(evidence);
+    }
+
+    /// Writes `config_loaded` to the ledger at every mission start: the hash
+    /// of the effective configuration and the layers it came from.
+    pub fn with_config(mut self, config: crate::Provenance) -> MissionService {
+        self.config = Some(config);
+        self
     }
 
     /// Records every change of state in the ledger.
@@ -456,6 +466,9 @@ impl MissionService {
         self.plan_build_started(slug);
         self.store.save(&self.missions[i])?;
         self.record(slug, from)?;
+        if let (Some(ledger), Some(config)) = (&self.ledger, &self.config) {
+            ledger.record_config_loaded(config, Some(slug), Some(job), now)?;
+        }
         Ok(job)
     }
 

@@ -111,6 +111,13 @@ fn is_false(b: &bool) -> bool {
     !*b
 }
 
+/// The knowledge file's format version.
+pub const SCHEMA_VERSION: i64 = 1;
+
+fn one() -> i64 {
+    SCHEMA_VERSION
+}
+
 fn owner() -> String {
     "owner".into()
 }
@@ -351,6 +358,10 @@ pub fn change_from_json(text: &str) -> Result<Change, String> {
 
 #[derive(Serialize, Deserialize)]
 struct FileDto {
+    /// The version of this format. Written first; any number is read (what
+    /// an older swarmux does not know in an item is left out).
+    #[serde(default = "one")]
+    schema_version: i64,
     /// What the file is; the home is the one it is imported into.
     #[serde(default)]
     about: String,
@@ -365,6 +376,7 @@ pub struct TomlKnowledge;
 impl KnowledgeCodec for TomlKnowledge {
     fn encode(&self, items: &[Item]) -> String {
         let file = FileDto {
+            schema_version: SCHEMA_VERSION,
             about: "swarmux knowledge: rules, facts and decisions. Edit, then `swarmux knowledge import`.".into(),
             items: items.iter().map(|i| to_dto(i, false)).collect(),
         };

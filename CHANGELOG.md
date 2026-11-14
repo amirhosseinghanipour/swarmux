@@ -8,6 +8,28 @@ follows [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Config foundation and compatibility policy. Settings now come from layers
+  (core, the organisation's `managed.toml`, user, workspace, a repository's
+  `.swarmux/config.toml`, run), each key with a merge kind (scalar, list, lock,
+  allowlist) and the organisation's file able to lock keys. Environment variables
+  `SWARMUX_<SECTION>__<KEY>` and `--set key=value` set a key for one run.
+  `swarmux config list | get | explain | lint | export | schema | paths |
+  migrate-paths` show what a value is, where it came from and what it overrode.
+  JSON Schemas for every file are in `schema/` (see
+  [Configuration](guide/configuration.md)). Keys are registered as data, so a
+  future pack registers its own the same way.
+- `swarmux trust list | show | grant | revoke` and the trust item in the inbox
+  (see Changed above). Grants and revocations are ledger entries.
+- Policy provenance: every Guard decision entry carries `policy_sha256` and, when
+  one rule decided, `rule_tier` and `rule_source`; gate verdicts carry
+  `policy_tier` and `policy_source` next to `policy_sha256`; every mission start
+  writes `config_loaded` with the hash of the effective configuration and its
+  layers.
+- [COMPATIBILITY.md](COMPATIBILITY.md) (versioned contracts, additive-only within
+  a version, 12 months of deprecation, `COMPAT(...)` tags) and
+  [SECURITY-MODEL.md](SECURITY-MODEL.md) (failure semantics, trust tiers, what is
+  not a security boundary, the integrity invariants).
+
 - Verifier and gate hardening. The verifier now checks what runs the tests as
   well as the tests, and says so when it could not check something.
   - The harness is a finding. Created, changed, moved or deleted, any file of a
@@ -348,6 +370,29 @@ follows [Semantic Versioning](https://semver.org/).
   and pull request templates, and the user guide in `guide/`.
 
 ### Changed
+
+- **Action needed: a repository's checks do not run until you trust it.** A
+  repository with `.swarmux/gates.toml` (and, for jobs nobody watches, checks
+  swarmux guesses from its files) now runs none of its commands until you run
+  `swarmux trust grant <folder>`. Before this, a cloned repository could name any
+  command and swarmux ran it. After you update, each repository you already use
+  gets **one** non-blocking prompt: an item in the inbox (and a line in
+  `swarmux doctor`) that lists the exact commands. Until you grant it, its checks
+  do not run and the done-gate escalates instead of passing; what only restricts
+  (protected paths) keeps applying. A grant covers the repository and the hash of
+  each file, so a changed file asks again. See [Repository trust](guide/trust.md).
+- A configuration file that is wrong no longer stops swarmux from starting.
+  `config.toml` (and the other layers) are read line by line: a bad line or value is
+  reported with its file and line and replaced by the default (a restrictive key by
+  its restrictive reading), unknown keys warn, and `swarmux config lint [--strict]`
+  lists them. `gates.toml` and mission contracts stay strict on unknown keys, on
+  purpose (a typo there would loosen a policy): the gate escalates, the contract is
+  refused.
+- `swarmux keys export` and `swarmux theme export` start with `schema_version = 1`,
+  mission contracts are written with it, and the knowledge file has it.
+- Fresh installs keep configuration and state apart by platform convention
+  (`~/.config/swarmux` and `~/.local/state/swarmux` on Linux). **An existing
+  `~/.swarmux` keeps working where it is; nothing moves.**
 
 - Hidden checks are kept per repository by its folder name and what it is (its
   remote and root commit), like `shop.id-3fa9c1d2e4b7`, so two folders of one

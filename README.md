@@ -151,6 +151,8 @@ Single Rust binary. Windows, macOS, Linux. Works with Claude Code only.
 
 - [Install, update and uninstall](guide/install.md)
 - [Configuration](guide/configuration.md)
+- [Repository trust: what a cloned repository may run](guide/trust.md)
+- [Compatibility](COMPATIBILITY.md) and the [security model](SECURITY-MODEL.md)
 - [Telemetry sources](guide/telemetry.md)
 - [Mission control](guide/mission-control.md) and the [inbox](guide/mission-control.md#the-inbox-as-an-alarm-panel)
 - [The Deck: the task graph and what the work needs](guide/deck.md)

@@ -468,6 +468,9 @@ fn decisions_carry_their_rule_hash_resolver_and_attribution() {
             agent_id: Some("agent-7".into()),
             agent_type: Some("Explore".into()),
             resolver: Some("human-key".into()),
+            policy_sha256: Some("ab".repeat(32)),
+            rule_tier: Some("user".into()),
+            rule_source: Some("/home/u/.config/swarmux/config.toml".into()),
         },
     };
     f.service.record_decision(&record).unwrap();
@@ -478,6 +481,9 @@ fn decisions_carry_their_rule_hash_resolver_and_attribution() {
         "\"resolver\":\"human-key\"",
         "\"agent_id\":\"agent-7\"",
         "\"agent_type\":\"Explore\"",
+        "\"rule_tier\":\"user\"",
+        "\"rule_source\":\"/home/u/.config/swarmux/config.toml\"",
+        "\"policy_sha256\":\"abab",
     ] {
         assert!(p.contains(part), "{part} in {p}");
     }
@@ -635,4 +641,39 @@ fn a_manual_run_that_found_nothing_wrong_but_could_not_vouch_is_never_recorded_a
         "{}",
         entries[0]
     );
+}
+
+#[test]
+fn a_mission_start_records_the_effective_config_and_its_layers() {
+    use swarmux_domain::layers::Tier;
+    let f = fixture();
+    let config = crate::Provenance {
+        config_sha256: "c0ffee".repeat(10),
+        layers: vec![
+            (Tier::Managed, "/etc/swarmux/managed.toml".into(), false),
+            (
+                Tier::User,
+                "/home/u/.config/swarmux/config.toml".into(),
+                true,
+            ),
+        ],
+        ..crate::Provenance::default()
+    };
+    f.service
+        .record_config_loaded(&config, Some("fast-search"), Some(JobId(3)), 1_000)
+        .unwrap();
+    let last = f.ledger.entries().pop().unwrap();
+    assert_eq!(last.draft.kind, LedgerKind::Policy);
+    assert_eq!(last.draft.job, Some(JobId(3)));
+    let p = &last.draft.payload_json;
+    for part in [
+        "\"event\":\"config_loaded\"",
+        "\"mission\":\"fast-search\"",
+        "\"config_sha256\":\"c0ffee",
+        "\"tier\":\"user\"",
+        "\"found\":true",
+        "\"found\":false",
+    ] {
+        assert!(p.contains(part), "{part} in {p}");
+    }
 }

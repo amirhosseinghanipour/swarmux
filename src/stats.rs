@@ -96,9 +96,11 @@ pub fn verification(hours: Option<u32>) -> anyhow::Result<()> {
     let paths = Paths::default_home()?;
     let hours = match hours {
         Some(h) => h,
-        None => swarmux_infrastructure::load_settings(&paths.config)
-            .map(|s| s.console.metrics_hours)
-            .unwrap_or(swarmux_application::metrics::DEFAULT_HOURS),
+        None => Ok::<_, std::convert::Infallible>(swarmux_infrastructure::load_effective_settings(
+            &paths,
+        ))
+        .map(|s| s.console.metrics_hours)
+        .unwrap_or(swarmux_application::metrics::DEFAULT_HOURS),
     }
     .clamp(1, swarmux_application::metrics::MAX_HOURS);
     let ledger = swarmux_infrastructure::SqliteLedger::open(&paths.db)?;

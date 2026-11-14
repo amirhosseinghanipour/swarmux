@@ -820,7 +820,8 @@ impl Registry {
                 "auto lands a mission when the gate passes; manual waits for you.",
             )
             .lock(order(&["manual", "auto"]))
-            .restricts(),
+            .restricts()
+            .invalid_as("\"manual\""),
         );
 
         // [console]

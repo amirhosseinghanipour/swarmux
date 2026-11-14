@@ -245,3 +245,15 @@ fn trust_state_of(reader: &dyn TrustReader, supplied: &Supplied) -> TrustState {
         swarmux_application::trust::latest(&events, &supplied.repo_id).as_ref(),
     )
 }
+
+/// Whether the owner trusts what the repository at `root` supplies (or it
+/// supplies nothing that needs trust).
+pub fn is_trusted(root: &Path) -> bool {
+    let Ok(paths) = Paths::default_home() else {
+        return false;
+    };
+    let Ok((_, supplied)) = supplied_of(root) else {
+        return false;
+    };
+    trust_state_of(&LedgerTrustReader::new(&paths.db), &supplied).allows()
+}
