@@ -214,6 +214,8 @@ const WORK_KEYS: &[(&str, &str, &str)] = &[
     ("work", "R", "work.resume"),
     ("work", "e", "work.evidence"),
     ("work", "s", "work.send_back"),
+    ("work", "m", "work.message"),
+    ("work", "M", "work.message_mode"),
     ("work", "enter", "list.open"),
 ];
 

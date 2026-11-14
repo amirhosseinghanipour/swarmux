@@ -22,6 +22,7 @@ pub mod governor;
 mod guard;
 mod history;
 pub mod hookbus;
+pub mod intervene;
 mod jobs;
 pub mod knowledge;
 pub mod ledger;

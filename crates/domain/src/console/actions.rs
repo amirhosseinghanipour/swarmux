@@ -35,11 +35,14 @@ pub enum ActionKind {
     /// or verified job resumes its session with the note as its next
     /// instruction; a held call is denied and the note says why.
     SendBack,
+    /// Tell a running job's agent something: queued until its turn ends,
+    /// or the turn is stopped and the session continued with the message.
+    Intervene,
 }
 
 impl ActionKind {
     /// Every kind, in the order they are answered.
-    pub const ALL: [ActionKind; 9] = [
+    pub const ALL: [ActionKind; 10] = [
         ActionKind::Kill,
         ActionKind::Retry,
         ActionKind::Resume,
@@ -49,6 +52,7 @@ impl ActionKind {
         ActionKind::ApprovePlan,
         ActionKind::RejectPlan,
         ActionKind::SendBack,
+        ActionKind::Intervene,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -62,6 +66,7 @@ impl ActionKind {
             ActionKind::ApprovePlan => "approve_plan",
             ActionKind::RejectPlan => "reject_plan",
             ActionKind::SendBack => "send_back",
+            ActionKind::Intervene => "intervene",
         }
     }
 }
@@ -85,6 +90,17 @@ pub struct ActionFacts {
     pub landing: LandFacts,
     /// The mission runs as a task graph: its tasks run in jobs of their own.
     pub task_graph: bool,
+    /// What decides whether a running job can be messaged.
+    pub intervene: InterveneFacts,
+}
+
+/// What the rules need to know to offer a message to a running job.
+///
+/// The default is the safe answer: swarmux does not run the session.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct InterveneFacts {
+    /// This run of swarmux started the job's session and follows it.
+    pub controlled: bool,
 }
 
 /// What the rules need to know to offer landing on request.
@@ -191,8 +207,34 @@ pub fn allowed(f: &ActionFacts) -> Vec<Allowed> {
                 when(kind, f.plan_proposed, "no plan waits for a decision")
             }
             ActionKind::SendBack => send_back(f),
+            ActionKind::Intervene => intervene(f),
         })
         .collect()
+}
+
+/// Whether the user can tell a running job's agent something.
+///
+/// Only a job that runs, in a session this swarmux follows, and that is not
+/// one task of a graph. The mode (queue or steer) is chosen when sending;
+/// a held call only limits steering, so it does not disable the action.
+fn intervene(f: &ActionFacts) -> Allowed {
+    let kind = ActionKind::Intervene;
+    match f.job {
+        None => no(kind, "no job has run"),
+        Some(JobStatus::Queued) => no(kind, "the job has not started: its prompt is still waiting"),
+        Some(s) if s.is_finished() => {
+            no(kind, "the job has ended: send it back with a note instead")
+        }
+        Some(_) if f.task_graph => no(
+            kind,
+            "this mission runs as a task graph: its tasks are not messaged one by one",
+        ),
+        Some(_) if !f.intervene.controlled => no(
+            kind,
+            "swarmux does not run this job's session: open it in a terminal to take over",
+        ),
+        Some(_) => yes(kind),
+    }
 }
 
 /// Whether the user can send work back with a note, and why not when they
@@ -444,6 +486,73 @@ mod tests {
         });
         assert!(a.enabled);
         assert_eq!(a.reason, None);
+    }
+
+    fn intervene_of(facts: ActionFacts) -> Allowed {
+        get(&allowed(&facts), ActionKind::Intervene).clone()
+    }
+
+    #[test]
+    fn a_running_job_swarmux_follows_can_be_messaged() {
+        let a = intervene_of(ActionFacts {
+            job: Some(JobStatus::Running),
+            live_jobs: 1,
+            intervene: InterveneFacts { controlled: true },
+            ..ActionFacts::default()
+        });
+        assert!(a.enabled, "{:?}", a.reason);
+        // A held call only limits steering; the action stays on.
+        let held = intervene_of(ActionFacts {
+            job: Some(JobStatus::Running),
+            live_jobs: 1,
+            held_calls: 1,
+            intervene: InterveneFacts { controlled: true },
+            ..ActionFacts::default()
+        });
+        assert!(held.enabled);
+    }
+
+    #[test]
+    fn work_that_cannot_be_messaged_says_why() {
+        let reason = |facts: ActionFacts| {
+            let a = intervene_of(facts);
+            assert!(!a.enabled);
+            a.reason.unwrap()
+        };
+        let on = InterveneFacts { controlled: true };
+        assert!(reason(ActionFacts::default()).contains("no job"));
+        let queued = reason(ActionFacts {
+            job: Some(JobStatus::Queued),
+            intervene: on,
+            ..ActionFacts::default()
+        });
+        assert!(queued.contains("not started"), "{queued}");
+        for s in [
+            JobStatus::Done,
+            JobStatus::Failed,
+            JobStatus::Interrupted,
+            JobStatus::Cancelled,
+        ] {
+            let ended = reason(ActionFacts {
+                job: Some(s),
+                intervene: on,
+                ..ActionFacts::default()
+            });
+            assert!(ended.contains("send it back"), "{s:?}: {ended}");
+        }
+        let graph = reason(ActionFacts {
+            mission: Some(MissionState::Running),
+            job: Some(JobStatus::Running),
+            task_graph: true,
+            intervene: on,
+            ..ActionFacts::default()
+        });
+        assert!(graph.contains("task graph"), "{graph}");
+        let foreign = reason(ActionFacts {
+            job: Some(JobStatus::Running),
+            ..ActionFacts::default()
+        });
+        assert!(foreign.contains("does not run"), "{foreign}");
     }
 
     #[test]

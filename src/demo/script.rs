@@ -56,6 +56,18 @@ pub enum Act {
         label: &'static str,
         message: &'static str,
     },
+    /// The operator types a message to the running job (queue mode, the
+    /// default), through the same service the Work screen's line uses.
+    Message {
+        label: &'static str,
+        text: &'static str,
+    },
+    /// The job that carries `label`'s message, once the session continued
+    /// with it, is known by `then` from now on.
+    Follow {
+        label: &'static str,
+        then: &'static str,
+    },
     /// The job ends with this result.
     Finish {
         label: &'static str,
@@ -420,6 +432,44 @@ pub fn timeline(mission: &str) -> Vec<(u64, Act)> {
             },
         ));
     }
+
+    // The operator tells the checkout agent something while it works (it is
+    // not a task of the release graph, so it can be messaged). The message
+    // waits for the end of its turn; the session then continues with it,
+    // through the same service the Work screen uses, and the new turn
+    // confirms it.
+    v.push((
+        at(9.0),
+        Act::Message {
+            label: "web-checkout",
+            text: "Also keep the retry count in the settings file, not hard-coded.",
+        },
+    ));
+    v.push((
+        at(23.8),
+        Act::Follow {
+            label: "web-checkout",
+            then: "web-checkout-2",
+        },
+    ));
+    v.push((at(24.2), Act::Init("web-checkout-2")));
+    v.push((
+        at(24.8),
+        Act::Text(
+            "web-checkout-2",
+            "Moved the retry count into the settings file, as you asked.",
+        ),
+    ));
+    v.push((
+        at(25.6),
+        Act::Finish {
+            label: "web-checkout-2",
+            cost_usd: 0.11,
+            turns: 3,
+            minutes: 2,
+            text: "Retry count now comes from the settings file.",
+        },
+    ));
 
     // The rest finish one after another.
     for (secs, label, cost, turns, minutes, text) in [

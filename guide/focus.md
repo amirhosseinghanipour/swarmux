@@ -28,7 +28,7 @@ to bottom:
 | `[` / `]` | step through the job's checkpoints |
 | `d` | working-tree diff in place of the answer |
 | `t` | open the session in a new Windows Terminal tab (`wt -w 0 nt -d <folder> claude --resume <id>`) |
-| `p` / `P` | prompt the session / let swarmux pick one |
+| `p` / `P` | prompt the session / let swarmux pick one (a new job; to tell a job that is running something, use `m` on [Work](work.md#message-a-running-agent)) |
 | `v` | review the next jobs |
 | `D` | the classic panel grid below, and back |
 

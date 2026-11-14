@@ -21,6 +21,16 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
+Some test suites only build with the `fake-claude` feature (they drive the real
+job, mission, worktree and workspace code against a fake `claude`), so the
+commands above do not run them. **Run them before merging a change to missions,
+gates, jobs, worktrees or the verifier**, and fix what they find:
+
+```sh
+cargo test -p swarmux-infrastructure --features fake-claude --no-fail-fast
+cargo test -p swarmux --features fake-claude --no-fail-fast
+```
+
 Windows, Linux and macOS are all supported; CI runs the same checks. Write
 code that does not assume a shell, a path separator or a tmux.
 

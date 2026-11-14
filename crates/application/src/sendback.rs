@@ -64,22 +64,7 @@ impl Engine {
     pub fn send_back(&mut self, job: JobId, note: &str) -> AppResult<SentBack> {
         let note = need_words(note)?;
         let stored = self.jobs.stored(job)?.ok_or(AppError::JobNotFound)?;
-        let prompt = send_back_prompt(note);
-        let slug = self
-            .missions
-            .as_ref()
-            .and_then(|m| m.missions().iter().find(|m| m.job == Some(job)))
-            .map(|m| (m.slug.clone(), m.state));
-        let (new, mission, outcome) = match (slug, &mut self.missions) {
-            (Some((slug, state)), Some(missions)) => {
-                let new = missions.send_back(&slug, &mut self.jobs, &prompt)?;
-                (new, Some(slug), state.as_str())
-            }
-            _ => {
-                let new = self.jobs.send_back(job, &prompt)?;
-                (new, None, stored.status.as_str())
-            }
-        };
+        let (new, mission, outcome) = self.resume_with_prompt(job, &send_back_prompt(note))?;
         let seq = self.record_note(&OperatorNote {
             action: "send_back",
             note,
@@ -97,6 +82,34 @@ impl Engine {
             job: new,
             mission,
             seq,
+        })
+    }
+
+    /// Continues `job`'s Claude session with `prompt` as its next instruction,
+    /// the way a send back does: through its mission when it belongs to one
+    /// (which must be escalated or verifying), else straight through the
+    /// job service. Returns the new job, the mission that follows it and
+    /// where the job or mission stood (`escalated`, `verifying`, `done` ...).
+    pub(crate) fn resume_with_prompt(
+        &mut self,
+        job: JobId,
+        prompt: &str,
+    ) -> AppResult<(JobId, Option<String>, &'static str)> {
+        let stored = self.jobs.stored(job)?.ok_or(AppError::JobNotFound)?;
+        let slug = self
+            .missions
+            .as_ref()
+            .and_then(|m| m.missions().iter().find(|m| m.job == Some(job)))
+            .map(|m| (m.slug.clone(), m.state));
+        Ok(match (slug, &mut self.missions) {
+            (Some((slug, state)), Some(missions)) => {
+                let new = missions.send_back(&slug, &mut self.jobs, prompt)?;
+                (new, Some(slug), state.as_str())
+            }
+            _ => {
+                let new = self.jobs.send_back(job, prompt)?;
+                (new, None, stored.status.as_str())
+            }
         })
     }
 

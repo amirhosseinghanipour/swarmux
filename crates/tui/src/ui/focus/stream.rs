@@ -194,6 +194,16 @@ pub(crate) fn row_line_of(
                 Style::new().fg(t.muted).add_modifier(Modifier::BOLD),
             ));
         }
+        RowKind::Operator => {
+            spans.push(Span::styled(
+                "» you ",
+                Style::new().fg(t.lead).add_modifier(Modifier::BOLD),
+            ));
+            spans.push(Span::styled(
+                fit(&row.text, room.saturating_sub(6)),
+                Style::new().fg(t.title),
+            ));
+        }
         RowKind::Note => spans.push(Span::styled(fit(&row.text, room), Style::new().fg(t.dim))),
     }
     Line::from(spans)

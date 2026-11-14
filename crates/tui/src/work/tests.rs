@@ -177,6 +177,7 @@ fn a_held_call_offers_the_answers_and_names_what_an_irreversible_one_needs() {
             ("always allow", false),
             ("deny", true),
             ("send back", true),
+            ("message", true),
             ("kill", true)
         ]
     );

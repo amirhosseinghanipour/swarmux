@@ -192,6 +192,14 @@
       "job": 2,
       "mission": null,
       "request": 7
+    },
+    {
+      "kind": "intervene",
+      "enabled": true,
+      "reason": null,
+      "job": 2,
+      "mission": null,
+      "request": 7
     }
   ]
 }

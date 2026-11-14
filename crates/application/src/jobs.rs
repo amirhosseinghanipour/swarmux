@@ -996,6 +996,29 @@ impl JobService {
         }
     }
 
+    /// The time this service works by.
+    pub fn now(&self) -> Millis {
+        self.clock.now()
+    }
+
+    /// Adds the operator's own line to a job's log (this run only).
+    pub fn operator_line(&mut self, id: JobId, kind: &str, text: &str) {
+        if let Some(i) = self.find(id) {
+            self.tracked[i].progress.operator(kind, text);
+        }
+    }
+
+    /// Whether the job's `claude` has reported that its session began: the
+    /// first thing a turn says. A job still waiting to start, or whose
+    /// process has said nothing yet, has not.
+    pub fn has_reported(&self, id: JobId) -> bool {
+        self.progress(id).is_some_and(|p| {
+            p.log
+                .iter()
+                .any(|l| l.split_whitespace().nth(2) == Some("init"))
+        })
+    }
+
     /// The most recently dispatched job (reviews aside).
     pub fn latest(&self) -> Option<&JobProgress> {
         self.tracked

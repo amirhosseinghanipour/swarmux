@@ -337,6 +337,10 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App, t: &Theme) {
                     Some(n) => format!("send {} back with a note", n.about),
                     None => "note".to_string(),
                 },
+                InputPurpose::WorkMessage => match &app.work_screen.message {
+                    Some(m) => format!("message job #{} · {}", m.job, m.mode.as_str()),
+                    None => "message".to_string(),
+                },
                 InputPurpose::BoardAnswer => format!(
                     "answer · {}",
                     app.answering_question().unwrap_or_else(|| "—".into())
@@ -360,6 +364,8 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App, t: &Theme) {
                 "   enter keep · esc clear"
             } else if *purpose == InputPurpose::SendBackNote && picks {
                 "   enter send · tab suggestions · esc cancel"
+            } else if *purpose == InputPurpose::WorkMessage {
+                "   enter send · tab mode · esc drop"
             } else {
                 "   enter send · esc cancel"
             };

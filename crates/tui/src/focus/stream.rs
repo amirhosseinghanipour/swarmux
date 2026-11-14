@@ -48,6 +48,8 @@ pub enum RowKind {
     Diff(DiffLine),
     /// The session start and the final report.
     Milestone,
+    /// What the operator said to the agent.
+    Operator,
     /// Anything else (swarmux's own notes, rate limits, todos).
     Note,
 }
@@ -84,7 +86,7 @@ pub fn rows(log: &VecDeque<String>) -> Vec<Row> {
             continue;
         };
         let depth = match actor {
-            "lead" | "swarmux" | "reviewer" => 0,
+            "lead" | "swarmux" | "reviewer" | "operator" => 0,
             _ => 1,
         };
         let kind = match kind {
@@ -102,6 +104,7 @@ pub fn rows(log: &VecDeque<String>) -> Vec<Row> {
                 Some(d) => RowKind::Diff(d),
                 None => RowKind::Say,
             },
+            "message" if actor == "operator" => RowKind::Operator,
             "init" | "result" | "cancelled" | "error" => RowKind::Milestone,
             _ => RowKind::Note,
         };

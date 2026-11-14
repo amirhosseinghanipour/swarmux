@@ -436,6 +436,12 @@ impl JobProgress {
         self.push_log(self.last_tick, "swarmux", kind, text);
     }
 
+    /// Adds a line that is the operator's own: a message to the agent,
+    /// shown in the stream as theirs, not the agent's.
+    pub fn operator(&mut self, kind: &str, text: &str) {
+        self.push_log(self.last_tick, "operator", kind, text);
+    }
+
     fn mark(&mut self, actor: &Actor, tick: u32) {
         let label = self.label_for(actor);
         match self.lanes.iter_mut().find(|l| &l.actor == actor) {
