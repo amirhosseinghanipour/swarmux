@@ -66,6 +66,15 @@
     }
   ],
   "decisions_total": 4,
+  "running": [
+    {
+      "id": "job:4",
+      "title": "job 4: web-checkout",
+      "lifecycle": "queued",
+      "since_at": 1000000
+    }
+  ],
+  "running_total": 1,
   "stopped": [],
   "stopped_total": 0,
   "spend": null,
