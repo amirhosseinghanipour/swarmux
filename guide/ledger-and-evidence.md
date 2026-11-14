@@ -191,6 +191,18 @@ with one, the note is recorded as an entry of kind `operator` (the actor is
 call itself. It is chained like every other entry, so verifying the ledger
 covers it, and a mission's bundle range includes it when it falls inside.
 
+A [message to a running agent](work.md#message-a-running-agent) is an
+`operator` entry too, with `action` `intervene`. It is written before anything
+is sent, and a message that cannot be written is not sent. The first entry
+(`outcome` `queued`, or `stopping` for a steer) carries the `mode`, the text
+(cut at 8 KiB like a note, with its SHA-256 and length when cut), the `job`, the
+`mission` if there is one, and the message's number in the run (`message`). A
+second entry says how it ended: `delivered` (with `resumed_as`, the job that
+carries it, and `delivered_at`, when the agent's turn with it was seen to start)
+or `undelivered` (with the `reason`, and `queued_seq` pointing at the first
+entry). A message refused before it was taken (empty, too long, the job not
+running) is not recorded: nothing was sent.
+
 ## Changes to the policy and gaps in it
 
 Entries of kind `policy` record what changes what the [Guard](guard.md)
