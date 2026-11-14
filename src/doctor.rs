@@ -111,8 +111,15 @@ fn runtime_summary(s: &Settings, probes: &Probes) {
             "fail the version of claude could not be read: unattended missions are refused"
         ),
     }
+    let who = match r.profile {
+        swarmux_domain::runtime::ProfileSetting::Auto => {
+            "unattended jobs in a folder you have not trusted run controlled, the rest inherit"
+        }
+        swarmux_domain::runtime::ProfileSetting::Inherit => "every job inherits",
+        swarmux_domain::runtime::ProfileSetting::Controlled => "every job runs controlled",
+    };
     println!(
-        "ok   runtime: profile = {} (unattended jobs in a repository you have not trusted run controlled, reviewers always), canary = {}, on_error = {}",
+        "ok   runtime: profile = {} ({who}; reviewers are always controlled), canary = {}, on_error = {}",
         r.profile.as_str(),
         r.canary.as_str(),
         r.on_error.as_str()
