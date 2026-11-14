@@ -14,6 +14,8 @@ const MANIFEST_FILE: &str = "install.json";
 /// Files and the user's `PATH`, under a given home folder.
 pub struct FsInstallHost {
     home: PathBuf,
+    /// Where swarmux keeps its data; `~/.swarmux` unless told.
+    data: Option<PathBuf>,
     /// Whether the user's `PATH` may be read and changed (tests turn it off
     /// so they never touch the real one).
     path_enabled: bool,
@@ -23,8 +25,15 @@ impl FsInstallHost {
     pub fn new(home: PathBuf) -> Self {
         Self {
             home,
+            data: None,
             path_enabled: true,
         }
+    }
+
+    /// Keeps the data in `dir` (the state folder swarmux resolved).
+    pub fn with_data_dir(mut self, dir: PathBuf) -> Self {
+        self.data = Some(dir);
+        self
     }
 
     /// Leaves the user's `PATH` alone, whatever is asked.
@@ -58,7 +67,9 @@ impl InstallHost for FsInstallHost {
     }
 
     fn data_dir(&self) -> PathBuf {
-        self.home.join(".swarmux")
+        self.data
+            .clone()
+            .unwrap_or_else(|| self.home.join(".swarmux"))
     }
 
     fn exists(&self, path: &Path) -> bool {

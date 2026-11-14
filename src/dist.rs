@@ -15,8 +15,8 @@ use swarmux_infrastructure::dist::{
 use swarmux_infrastructure::hook;
 
 fn host(no_path: bool) -> anyhow::Result<FsInstallHost> {
-    let home = Paths::default_home()?.home;
-    let host = FsInstallHost::new(home);
+    let paths = Paths::default_home()?;
+    let host = FsInstallHost::new(paths.home).with_data_dir(paths.data_dir);
     Ok(if no_path { host.without_path() } else { host })
 }
 

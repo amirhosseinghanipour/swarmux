@@ -1,5 +1,5 @@
 //! `swarmux guard`: the rules added with "always allow", and a check of the
-//! Guard's settings; and the wiring of what the Guard protects.
+//! Guard's settings; and the wiring of what the Guard XXrotects.
 
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -187,6 +187,14 @@ pub fn fenced_paths(paths: &Paths) -> Vec<String> {
         paths.verify.clone(),
         d.join("statusline"),
     ]);
+    // A configuration folder of its own (a fresh install, or
+    // SWARMUX_CONFIG_DIR) is fenced whole: the files a person edits, the
+    // organisation's file and the layers are not for an agent to change. The
+    // old shared `~/.swarmux` is not: agents work in worktrees below it.
+    if paths.config_dir != paths.data_dir {
+        out.push(paths.config_dir.clone());
+    }
+    out.push(paths.managed.clone());
     out.into_iter()
         .map(|p| p.to_string_lossy().replace('\\', "/"))
         .collect()
