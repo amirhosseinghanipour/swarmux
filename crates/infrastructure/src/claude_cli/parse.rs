@@ -106,6 +106,7 @@ fn parse_environment(v: &Value) -> Environment {
         plugins: names("plugins"),
         skills: names("skills"),
         agents: names("agents"),
+        capabilities: names("capabilities"),
     }
 }
 
@@ -547,6 +548,7 @@ mod tests {
         assert_eq!(env.tools, ["Task", "Bash", "Read"]);
         assert_eq!(env.mcp_up(), (1, 3));
         assert_eq!(env.plugins, ["scholar"]);
+        assert_eq!(env.capabilities, ["x"]);
         assert_eq!((env.skills.len(), env.agents.len()), (2, 2));
     }
 

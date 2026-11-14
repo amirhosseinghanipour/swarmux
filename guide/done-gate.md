@@ -42,6 +42,10 @@ vouch](verifier.md#when-the-gate-cannot-vouch)). When a plain job (a session
 you were watching) ends, the gate runs once more unless its last stop passed on
 the tree it left, and a job that cannot be verified is shown as `unverified`.
 
+A pass means these checks passed as described, on the files that were there. It
+is not a review of the code and not proof that it is correct; what it does not
+establish is in [the verifier's limits](verifier.md#what-this-does-not-establish).
+
 Anything wrong blocks the stop: the agent continues with a short digest (the
 failing check, its first failing lines verbatim, the changed protected files,
 the claims nothing backs). After `max_blocks` blocks the agent is let go and
@@ -52,7 +56,8 @@ Writes to **protected paths** are refused by the Guard before any rule is
 looked at: `Edit`/`Write`/`MultiEdit`/`NotebookEdit` on them, and shell
 commands that redirect into them or remove, move, copy over or edit them in
 place. Reading and running them is fine. `.swarmux/**` (the gate's own
-configuration) is always protected.
+configuration) is always protected. This is the Guard's text matching on the
+calls Claude Code reports, not a sandbox (see [Guard limits](guard.md#limits)).
 
 Without a `.swarmux/gates.toml` the checks are guessed from the files at the
 repository root:

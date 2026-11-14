@@ -20,6 +20,15 @@
 //! the working folder), made through swarmux's hook client in order before
 //! the fixture is printed; what each printed goes to FAKE_CLAUDE_HOOKS_OUT,
 //! one line per call (`-` for nothing).
+//! `--version` prints FAKE_CLAUDE_VERSION (default `2.1.323 (Claude Code)`), and
+//! `hook canary <mode> [--log <file>]` runs swarmux's canary hook, so the
+//! fake can stand in for both `claude` and the `swarmux` the canaries run.
+//! FAKE_CLAUDE_HOOK_HOST=honor makes the fake behave as Claude Code does
+//! toward a PreToolUse hook (what was seen on 2.1.323): it reads `--settings`,
+//! makes the Bash call the prompt asks for (`touch <file>`, as the lead or as
+//! a subagent), asks the hook, and makes the call unless the hook denied it
+//! or failed with `onFailure: "block"` set. `=ignore` never asks the hook, as
+//! when managed settings drop it.
 
 use std::io::{Read, Write};
 
@@ -65,7 +74,157 @@ fn run_hooks(path: &str) {
     }
 }
 
+/// What the hook said, as Claude Code reads it.
+enum HookSaid {
+    Deny(String),
+    /// Exit 1, a crash or no answer in time.
+    Failed(String),
+    /// Anything else lets the call through (no output, other output).
+    Silent,
+}
+
+/// Runs the PreToolUse hook of the `--settings` file for one Bash call.
+fn ask_hook(settings: &serde_json::Value, input: &str) -> HookSaid {
+    let hook = &settings["hooks"]["PreToolUse"][0]["hooks"][0];
+    let Some(command) = hook["command"].as_str() else {
+        return HookSaid::Silent;
+    };
+    let args: Vec<String> = hook["args"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    let timeout = hook["timeout"].as_u64().unwrap_or(600);
+    let mut child = std::process::Command::new(command)
+        .args(args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(input.as_bytes())
+        .unwrap();
+    let started = std::time::Instant::now();
+    loop {
+        match child.try_wait().unwrap() {
+            Some(status) => {
+                let mut out = String::new();
+                let _ = child.stdout.take().unwrap().read_to_string(&mut out);
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(out.trim()) {
+                    let d = &v["hookSpecificOutput"];
+                    if d["permissionDecision"] == "deny" {
+                        return HookSaid::Deny(
+                            d["permissionDecisionReason"]
+                                .as_str()
+                                .unwrap_or("")
+                                .to_string(),
+                        );
+                    }
+                }
+                return if status.success() {
+                    HookSaid::Silent
+                } else {
+                    HookSaid::Failed("failed".into())
+                };
+            }
+            None if started.elapsed().as_secs() >= timeout => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return HookSaid::Failed("timed out".into());
+            }
+            None => std::thread::sleep(std::time::Duration::from_millis(20)),
+        }
+    }
+}
+
+/// Plays one run of Claude Code against the hook (see the module docs).
+fn hook_host(mode: &str) {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let after = |flag: &str| {
+        args.iter()
+            .position(|a| a == flag)
+            .and_then(|i| args.get(i + 1))
+            .cloned()
+    };
+    let prompt = after("-p").unwrap_or_default();
+    let file = prompt
+        .split("touch ")
+        .nth(1)
+        .and_then(|rest| rest.split_whitespace().next())
+        .unwrap_or("canary.txt")
+        .to_string();
+    let settings: serde_json::Value = after("--settings")
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default();
+    let by_subagent = prompt.contains("Task tool");
+    let on_failure_block = settings["hooks"]["PreToolUse"][0]["hooks"][0]["onFailure"] == "block";
+    let mut input = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "tool_input": { "command": format!("touch {file}") },
+    });
+    if by_subagent {
+        input["agent_id"] = "agent-1".into();
+        input["agent_type"] = "general-purpose".into();
+    }
+    let said = if mode == "ignore" {
+        HookSaid::Silent
+    } else {
+        ask_hook(&settings, &input.to_string())
+    };
+    let (blocked, why) = match said {
+        HookSaid::Deny(reason) => (true, format!("PreToolUse:Bash hook error: {reason}")),
+        HookSaid::Failed(how) if on_failure_block => (
+            true,
+            format!("PreToolUse:Bash hook error: {how}; blocking because onFailure is \"block\""),
+        ),
+        _ => (false, String::new()),
+    };
+    if !blocked {
+        let _ = std::fs::write(&file, "");
+    }
+    let mut out = std::io::stdout().lock();
+    let call = serde_json::json!({"type":"assistant","message":{"content":[
+        {"type":"tool_use","id":"t1","name":"Bash","input":{"command":format!("touch {file}")}}]}});
+    let back = if blocked {
+        serde_json::json!({"type":"user","message":{"content":[
+            {"type":"tool_result","tool_use_id":"t1","is_error":true,"content":why}]}})
+    } else {
+        serde_json::json!({"type":"user","message":{"content":[
+            {"type":"tool_result","tool_use_id":"t1","is_error":false,"content":"(Bash completed with no output)"}]}})
+    };
+    let _ = writeln!(out, "{call}");
+    let _ = writeln!(out, "{back}");
+    let _ = writeln!(
+        out,
+        r#"{{"type":"result","subtype":"success","is_error":false}}"#
+    );
+}
+
 fn main() {
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    if argv.first().is_some_and(|a| a == "--version") {
+        let v =
+            std::env::var("FAKE_CLAUDE_VERSION").unwrap_or_else(|_| "2.1.323 (Claude Code)".into());
+        println!("{v}");
+        return;
+    }
+    if argv.len() >= 2 && argv[0] == "hook" && argv[1] == "canary" {
+        swarmux_infrastructure::hook::canary_main(&argv[2..]);
+        return;
+    }
+    if let Ok(mode) = std::env::var("FAKE_CLAUDE_HOOK_HOST") {
+        hook_host(&mode);
+        return;
+    }
     if std::env::var_os("FAKE_CLAUDE_START_FILE").is_some() {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

@@ -18,6 +18,7 @@ mod config_guard;
 mod config_keys;
 mod config_missions;
 mod config_notify;
+mod config_runtime;
 mod config_telemetry;
 mod config_watchdog;
 mod config_worktree;
@@ -51,8 +52,8 @@ pub mod worktree;
 pub use agents::FsAgentCatalog;
 pub use anchor::MinisignSigner;
 pub use claude_cli::{
-    BoardMcp, ClaudeCli, ClaudePlanner, GuardHook, HaikuDiagnoser, HaikuExtractor, HaikuLinter,
-    HaikuRouter,
+    BoardMcp, ClaudeCli, ClaudePlanner, ClaudeRuntime, GuardHook, HaikuDiagnoser, HaikuExtractor,
+    HaikuLinter, HaikuRouter,
 };
 pub use clean_checkout::{GitCleanCheckout, holdout_key};
 pub use clock::SystemClock;

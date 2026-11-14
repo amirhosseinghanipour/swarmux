@@ -5,6 +5,7 @@
 //! that process forwards the event to [`HookServer`] and prints the answer.
 //! PreToolUse is decided by the Guard; the other events are recorded.
 
+mod canary;
 mod client;
 mod fallback;
 mod protocol;
@@ -16,6 +17,7 @@ use std::path::Path;
 
 use swarmux_domain::HookEvent;
 
+pub use canary::{CANARY_REASON, CanaryAnswer, canary_answer, canary_main};
 pub use client::{HookEnv, board_call, hook_main, pre_tool, pre_tool_in, pre_tool_main, run_hook};
 pub use fallback::{ENV_FAIL, ENV_SPOOL, FileSpool, append as append_fallback, spool_file};
 pub use protocol::{BOARD_EVENT, WireReply, WireRequest, subject_of};
@@ -52,6 +54,42 @@ pub fn hook_settings(exe: &Path, timeout_secs: u64) -> String {
 /// Versions that don't know the key ignore it. Which versions know it is
 /// not detected here: the key is added only when asked for.
 pub fn hook_settings_with(exe: &Path, timeout_secs: u64, on_failure_block: bool) -> String {
+    hook_settings_opts(
+        exe,
+        timeout_secs,
+        &SettingsOptions {
+            on_failure_block,
+            ..SettingsOptions::default()
+        },
+    )
+}
+
+/// What the generated `--settings` contains besides the hooks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SettingsOptions {
+    /// The PreToolUse hook carries `"onFailure": "block"`.
+    pub on_failure_block: bool,
+    /// swarmux's status line is set (replacing the user's).
+    pub statusline: bool,
+    /// `"disableAllHooks": false` is set, so a lower settings tier that
+    /// switched hooks off does not (Claude Code's documentation says
+    /// `--settings` takes precedence over project and local settings).
+    pub pin_hooks_on: bool,
+}
+
+impl Default for SettingsOptions {
+    fn default() -> SettingsOptions {
+        SettingsOptions {
+            on_failure_block: false,
+            statusline: true,
+            pin_hooks_on: false,
+        }
+    }
+}
+
+/// The `--settings` JSON for `opts`; see [`hook_settings`].
+pub fn hook_settings_opts(exe: &Path, timeout_secs: u64, opts: &SettingsOptions) -> String {
+    let on_failure_block = opts.on_failure_block;
     let mut hooks = serde_json::Map::new();
     for event in HookEvent::ALL {
         let mut command = serde_json::json!({
@@ -72,11 +110,15 @@ pub fn hook_settings_with(exe: &Path, timeout_secs: u64, on_failure_block: bool)
         }
         hooks.insert(event.as_str().to_string(), serde_json::json!([group]));
     }
-    serde_json::json!({
-        "hooks": hooks,
-        "statusLine": { "type": "command", "command": statusline_command(exe) },
-    })
-    .to_string()
+    let mut settings = serde_json::json!({ "hooks": hooks });
+    if opts.statusline {
+        settings["statusLine"] =
+            serde_json::json!({ "type": "command", "command": statusline_command(exe) });
+    }
+    if opts.pin_hooks_on {
+        settings["disableAllHooks"] = false.into();
+    }
+    settings.to_string()
 }
 
 /// The status line command: the executable quoted, with forward slashes so

@@ -86,10 +86,15 @@ pub enum LedgerKind {
     /// or expired, or a hook call that fell back because swarmux could not
     /// be reached.
     Policy,
+    /// What a run's runtime turned out to be: the agent's own report of its
+    /// version, tools, servers and capabilities, and the canaries that
+    /// tried the policy against it. (How it was launched is in the
+    /// `runtime` object of `job_started`.)
+    Runtime,
 }
 
 impl LedgerKind {
-    pub const ALL: [LedgerKind; 20] = [
+    pub const ALL: [LedgerKind; 21] = [
         LedgerKind::Genesis,
         LedgerKind::JobQueued,
         LedgerKind::JobStarted,
@@ -110,6 +115,7 @@ impl LedgerKind {
         LedgerKind::Knowledge,
         LedgerKind::Operator,
         LedgerKind::Policy,
+        LedgerKind::Runtime,
     ];
 
     /// The stable name stored and hashed.
@@ -135,6 +141,7 @@ impl LedgerKind {
             LedgerKind::Knowledge => "knowledge",
             LedgerKind::Operator => "operator",
             LedgerKind::Policy => "policy",
+            LedgerKind::Runtime => "runtime",
         }
     }
 
@@ -513,6 +520,7 @@ mod tests {
                 "knowledge",
                 "operator",
                 "policy",
+                "runtime",
             ]
         );
     }

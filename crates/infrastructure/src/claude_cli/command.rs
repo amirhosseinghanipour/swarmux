@@ -3,6 +3,8 @@
 use swarmux_application::ports::RunRequest;
 use swarmux_domain::REVIEW_SYSTEM;
 
+use super::runtime::launch::{LaunchConfig, is_controlled, setting_sources};
+
 /// Tools a reviewer may use: reading only.
 pub const REVIEW_TOOLS: &str = "Read,Grep,Glob";
 /// Turns a reviewer gets to read files before answering.
@@ -14,9 +16,17 @@ const SHOWN_ARG_MAX: usize = 40;
 /// by default.
 pub const ENV_ADDED_DIRS_CLAUDE_MD: &str = "CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD";
 
+/// The arguments for `req` with the default settings sources.
 pub fn build_args(req: &RunRequest) -> Vec<String> {
+    build_args_with(req, &LaunchConfig::default())
+}
+
+/// The arguments for `req`: its launch profile decides which settings
+/// files `claude` loads and whether only swarmux's MCP servers are used
+/// (see [`super::runtime::launch`]).
+pub fn build_args_with(req: &RunRequest, cfg: &LaunchConfig) -> Vec<String> {
     if req.review {
-        return review_args(req);
+        return review_args(req, cfg);
     }
     let mut args: Vec<String> = [
         "-p",
@@ -41,10 +51,14 @@ pub fn build_args(req: &RunRequest) -> Vec<String> {
     }
     args.extend(["--model".into(), req.model.clone()]);
     args.extend(["--permission-mode".into(), req.permission_mode.clone()]);
-    if req.lean {
-        // Skips the user's own settings (their hooks and plugins); swarmux's
-        // own `--settings` still apply.
-        args.extend(["--setting-sources".into(), "project,local".into()]);
+    // A lean inherit run skips the user's own settings (their hooks and
+    // plugins); a controlled run skips the repository's. swarmux's own
+    // `--settings` apply either way.
+    if let Some(sources) = setting_sources(req, cfg) {
+        args.extend(["--setting-sources".into(), sources]);
+    }
+    if is_controlled(req) {
+        args.push("--strict-mcp-config".into());
     }
     push_budget(&mut args, req);
     push_dirs(&mut args, req);
@@ -76,9 +90,11 @@ fn push_budget(args: &mut Vec<String>, req: &RunRequest) {
     }
 }
 
-/// A review run: read-only tools, no session file, none of the user's
-/// settings or MCP servers, and the reviewer's system prompt.
-fn review_args(req: &RunRequest) -> Vec<String> {
+/// A review run: read-only tools, no session file, only the settings
+/// sources the reviewer is given (none by default: what the agent wrote
+/// into the repository never loads) and no MCP servers but swarmux's, and
+/// the reviewer's system prompt.
+fn review_args(req: &RunRequest, cfg: &LaunchConfig) -> Vec<String> {
     let mut args: Vec<String> = [
         "-p",
         "--output-format",
@@ -95,7 +111,7 @@ fn review_args(req: &RunRequest) -> Vec<String> {
         "--max-turns",
         REVIEW_TURNS,
         "--setting-sources",
-        "project,local",
+        &cfg.reviewer_sources.join(","),
         "--strict-mcp-config",
         "--no-session-persistence",
         "--system-prompt",
@@ -139,6 +155,7 @@ pub fn user_message(prompt: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use swarmux_domain::runtime::RuntimeProfile;
     use swarmux_domain::{JobId, SessionId};
     use uuid::Uuid;
 
@@ -158,6 +175,7 @@ mod tests {
             max_budget_usd: None,
             board: false,
             add_dirs: Vec::new(),
+            profile: RuntimeProfile::Inherit,
         }
     }
 
@@ -274,7 +292,9 @@ mod tests {
         let args = build_args(&review);
         assert!(has_pair(&args, "--tools", "Read,Grep,Glob"));
         assert!(has_pair(&args, "--model", "haiku"));
-        assert!(has_pair(&args, "--setting-sources", "project,local"));
+        // The reviewer loads no settings file: what the agent wrote into the
+        // repository (`.claude/settings*.json`) never reaches it.
+        assert!(has_pair(&args, "--setting-sources", ""));
         assert!(has_pair(&args, "--system-prompt", REVIEW_SYSTEM));
         assert!(args.contains(&"--no-session-persistence".to_string()));
         assert!(args.contains(&"--strict-mcp-config".to_string()));
@@ -285,6 +305,121 @@ mod tests {
             "--forward-subagent-text",
         ] {
             assert!(!args.contains(&absent.to_string()), "{absent}");
+        }
+    }
+
+    fn strs(args: &[&str]) -> Vec<String> {
+        args.iter().map(|a| a.to_string()).collect()
+    }
+
+    const STREAM: [&str; 7] = [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--input-format",
+        "stream-json",
+        "--verbose",
+        "--forward-subagent-text",
+    ];
+
+    fn session_and_model() -> Vec<&'static str> {
+        vec![
+            "--session-id",
+            "00000000-0000-0000-0000-000000000000",
+            "--model",
+            "sonnet",
+            "--permission-mode",
+            "default",
+        ]
+    }
+
+    #[test]
+    fn golden_argv_inherit() {
+        let mut want: Vec<&str> = STREAM.to_vec();
+        want.extend(session_and_model());
+        assert_eq!(build_args(&req(false, false)), strs(&want));
+    }
+
+    #[test]
+    fn golden_argv_inherit_lean() {
+        let mut want: Vec<&str> = STREAM.to_vec();
+        want.extend(session_and_model());
+        want.extend(["--setting-sources", "project,local"]);
+        let lean = RunRequest {
+            lean: true,
+            ..req(false, false)
+        };
+        assert_eq!(build_args(&lean), strs(&want));
+    }
+
+    #[test]
+    fn golden_argv_controlled() {
+        let mut want: Vec<&str> = STREAM.to_vec();
+        want.extend(session_and_model());
+        want.extend(["--setting-sources", "user", "--strict-mcp-config"]);
+        let controlled = RunRequest {
+            profile: RuntimeProfile::Controlled,
+            ..req(false, false)
+        };
+        assert_eq!(build_args(&controlled), strs(&want));
+    }
+
+    #[test]
+    fn golden_argv_controlled_with_the_users_sources_changed() {
+        let cfg = LaunchConfig {
+            controlled_sources: vec!["user".into(), "local".into()],
+            ..LaunchConfig::default()
+        };
+        let controlled = RunRequest {
+            profile: RuntimeProfile::Controlled,
+            ..req(false, false)
+        };
+        assert!(has_pair(
+            &build_args_with(&controlled, &cfg),
+            "--setting-sources",
+            "user,local"
+        ));
+        // A lean session loads none of the user's, so nothing is left.
+        let lean = RunRequest {
+            lean: true,
+            ..controlled
+        };
+        let args = build_args_with(&lean, &LaunchConfig::default());
+        assert!(has_pair(&args, "--setting-sources", ""));
+        assert!(args.contains(&"--strict-mcp-config".to_string()));
+    }
+
+    #[test]
+    fn golden_argv_reviewer_is_controlled_whatever_the_profile() {
+        let want = strs(&[
+            "-p",
+            "--output-format",
+            "stream-json",
+            "--input-format",
+            "stream-json",
+            "--verbose",
+            "--model",
+            "sonnet",
+            "--tools",
+            "Read,Grep,Glob",
+            "--permission-mode",
+            "default",
+            "--max-turns",
+            "12",
+            "--setting-sources",
+            "",
+            "--strict-mcp-config",
+            "--no-session-persistence",
+            "--system-prompt",
+            REVIEW_SYSTEM,
+        ]);
+        for profile in [RuntimeProfile::Inherit, RuntimeProfile::Controlled] {
+            let review = RunRequest {
+                review: true,
+                profile,
+                ..req(false, false)
+            };
+            assert_eq!(build_args(&review), want, "{profile:?}");
         }
     }
 

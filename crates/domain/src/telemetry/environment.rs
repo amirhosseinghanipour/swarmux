@@ -28,6 +28,8 @@ pub struct Environment {
     pub plugins: Vec<String>,
     pub skills: Vec<String>,
     pub agents: Vec<String>,
+    /// What the agent says it can do (`capabilities`), for feature detection.
+    pub capabilities: Vec<String>,
 }
 
 impl Environment {
@@ -73,7 +75,7 @@ impl Environment {
         format!(
             "{{\"session_id\":{},\"version\":{},\"model\":{},\"permission_mode\":{},\
              \"output_style\":{},\"tools\":{},\"mcp_servers\":[{}],\"plugins\":{},\
-             \"skills\":{},\"agents\":{}}}",
+             \"skills\":{},\"agents\":{},\"capabilities\":{}}}",
             quote(&self.session_id),
             opt(&self.claude_code_version),
             quote(&self.model),
@@ -84,6 +86,7 @@ impl Environment {
             list(&self.plugins),
             list(&self.skills),
             list(&self.agents),
+            list(&self.capabilities),
         )
     }
 
@@ -122,6 +125,7 @@ impl Environment {
             plugins: list("plugins"),
             skills: list("skills"),
             agents: list("agents"),
+            capabilities: list("capabilities"),
         })
     }
 }
@@ -151,6 +155,7 @@ mod tests {
             plugins: vec!["claude-scholar".into()],
             skills: vec![],
             agents: vec!["explorer".into()],
+            capabilities: vec!["interrupt_receipt_v1".into()],
         }
     }
 

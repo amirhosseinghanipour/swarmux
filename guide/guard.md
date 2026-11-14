@@ -1,14 +1,16 @@
 # Guard
 
-Every tool call a swarmux job makes goes through the Guard first. swarmux adds
+The Guard checks the tool calls Claude Code reports, before they run. swarmux adds
 a `PreToolUse` hook to each `claude` run (with `--settings`, never by editing
 your own settings files). The hook runs `swarmux hook pre-tool`, which asks the
 running swarmux over a local socket (a named pipe on Windows, a Unix socket
 elsewhere) and prints the answer. Allowed and denied calls are answered at
 once, in about a millisecond plus process start-up.
 
-What the Guard sees is the tool calls Claude Code reports to that hook. What
-it does when swarmux can't be reached is a setting ([below](#when-swarmux-cant-be-reached)).
+What the Guard sees is the tool calls Claude Code reports to that hook, and
+nothing else. What it does when swarmux can't be reached is a setting
+([below](#when-swarmux-cant-be-reached)). What it cannot do is listed under
+[Limits](#limits).
 
 Rules use Claude Code's syntax:
 
@@ -38,7 +40,7 @@ on_unreachable = "auto"      # "auto", "deny", "ask" or "pass": see below
 always_scope = "repo"        # "repo", "workspace" or "global": where "always allow" applies
 always_expiry_days = 30      # 1 to 3650, or "never"
 protected_paths = ["deploy/**"]  # more files whose writes are held, besides the built-in ones
-hook_on_failure_block = false    # see "onFailure" below
+hook_on_failure_block = false    # old switch, see "onFailure" below
 ```
 
 The last five keys are read line by line: a value that isn't valid is replaced
@@ -143,11 +145,20 @@ only after that restart, and a spool the hook couldn't write is not.
 `swarmux doctor` shows the mode and runs the hook against an unreachable app in
 each mode. swarmux says at every start what the default means.
 
-**`onFailure`.** Recent Claude Code versions accept `"onFailure": "block"` on a
-hook, which makes a hook that crashes or times out block the call. With
-`hook_on_failure_block = true` the key is added to the PreToolUse hook. swarmux
-does not check which Claude Code versions know it (that arrives with the
-version check); versions that don't know the key ignore it. Off by default.
+**`onFailure`.** Claude Code 2.1.295 and later accept `"onFailure": "block"` on a
+hook, which makes a hook that crashes, exits 1 or times out block the call
+instead of letting it run (*observed* on 2.1.323, see [Claude
+Code](claude-code.md#what-was-found-out)). swarmux adds it to the PreToolUse hook
+unless the version it found is older than 2.1.295 or `[runtime] hook_failure`
+is `"off"`; `"block"` adds it whatever the version, and the old
+`hook_on_failure_block = true` still means that. A hook that prints text that
+is not JSON is not stopped by it: the call runs. The Guard's hook therefore
+prints only valid JSON, or exits with a code.
+
+**Before an unattended mission starts** swarmux calls `claude` once with a hook
+that denies and an allow rule that would let the call through, and refuses the
+mission when the call ran; `swarmux doctor --conformance` runs the whole set. See
+[Claude Code](claude-code.md#before-an-unattended-mission-starts-the-deny-canary).
 
 ## What the Guard keeps from agents
 
@@ -173,8 +184,11 @@ version check); versions that don't know the key ignore it. Off by default.
 This is text matching on the calls Claude Code reports, not a sandbox. Agents
 run as your operating-system user: a determined one finds another spelling of a
 command or a path, and a tool Claude Code doesn't report to the hook is not
-seen at all. The point is that the plain ways are refused and that every
-decision, and every gap the Guard knows about, is in the ledger.
+seen at all. The rules and the protected paths are matched as text, so a path
+or command the matching does not recognise is not held. What the Guard gives
+you is that the plain ways are refused, and that the decisions it makes and the
+fallbacks the hook can record are in the ledger (a fallback only after the next
+start of swarmux, see above). Rules that match shell text are a safety net.
 
 **Loop breaker.** When an agent makes the same tool call and it fails with the
 same error `loop_repeats` times in a row, swarmux stops the job and records

@@ -145,8 +145,8 @@ task graph (its tasks are not messaged one by one).
 Your words reach the agent the way a note does: the job's Claude session
 **continues**, in the same working folder, with your message as its next
 prompt. swarmux does not write into a running `claude`: a job is one turn, and
-its input is closed after the prompt. That is what makes both modes safe and
-testable, and it limits what they can promise.
+its input is closed after the prompt. That is what makes both modes simple to
+test, and it limits what they can promise.
 
 | Mode | What it does | What it does not guarantee |
 | --- | --- | --- |
