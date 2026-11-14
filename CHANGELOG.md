@@ -370,6 +370,14 @@ follows [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Honest wording: the README and guides now say what the code does. "Proves
+  done" became "decides done with checks it runs itself"; hidden checks are "kept
+  outside the repository and out of the agent's tools", shown as counts, and `not
+  run (reason)` when they could not run; the Guard is described as checking the
+  tool calls Claude Code reports, with its fail modes and a Limits section;
+  budgets name where they are enforced; the tagline gets a definition of
+  "verify". New pages: what leaves your machine, and when you do not need
+  swarmux. No behaviour changed.
 - Hidden checks are kept per repository by its folder name and what it is (its
   remote and root commit), like `shop.id-3fa9c1d2e4b7`, so two folders of one
   name no longer share them. Checks kept under the plain folder name move to the
