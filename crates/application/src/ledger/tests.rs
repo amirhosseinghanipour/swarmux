@@ -636,3 +636,326 @@ fn a_manual_run_that_found_nothing_wrong_but_could_not_vouch_is_never_recorded_a
         entries[0]
     );
 }
+
+// ---- the launch profile, the canaries and the runtime record ----
+
+mod runtime {
+    use std::cell::RefCell;
+    use std::path::PathBuf;
+
+    use super::*;
+    use crate::runtime::{Clearance, ConfiguredTrust, LaunchIntent, RuntimeGate, RuntimeSettings};
+    use swarmux_domain::JobStatus;
+    use swarmux_domain::runtime::{
+        CanaryCheck, CanaryReport, CheckStatus, HostPolicy, RuntimeLaunch, RuntimeObserved,
+        RuntimeProfile, VersionStanding,
+    };
+    use swarmux_domain::telemetry::Environment;
+
+    /// A gate that answers what the test says and remembers what it was asked.
+    struct FakeGate {
+        answer: RefCell<Clearance>,
+        asked: RefCell<Vec<RuntimeProfile>>,
+    }
+
+    impl FakeGate {
+        fn new(answer: Clearance) -> Rc<FakeGate> {
+            Rc::new(FakeGate {
+                answer: RefCell::new(answer),
+                asked: RefCell::default(),
+            })
+        }
+    }
+
+    impl RuntimeGate for FakeGate {
+        fn clearance(&self, profile: RuntimeProfile) -> Clearance {
+            self.asked.borrow_mut().push(profile);
+            self.answer.borrow().clone()
+        }
+
+        fn launch(&self, intent: &LaunchIntent) -> Option<RuntimeLaunch> {
+            Some(RuntimeLaunch {
+                runtime: "fake".into(),
+                profile: intent.profile,
+                profile_reason: String::new(),
+                version: Some("1.2.3".into()),
+                standing: VersionStanding::Tested,
+                sources: "user".into(),
+                strict_mcp: intent.profile == RuntimeProfile::Controlled,
+                on_failure_block: true,
+                settings_hash: "abc".into(),
+                host: HostPolicy::default(),
+                policy_sha256: "fake".into(),
+                canary_seq: None,
+            })
+        }
+
+        fn observe(&self, _: Option<&RuntimeLaunch>, env: &Environment) -> RuntimeObserved {
+            RuntimeObserved {
+                version: env.claude_code_version.clone(),
+                capabilities: env.capabilities.clone(),
+                mismatches: vec!["a server nobody asked for".into()],
+                ..RuntimeObserved::default()
+            }
+        }
+    }
+
+    fn report(passed: bool) -> CanaryReport {
+        CanaryReport {
+            version: Some("1.2.3".into()),
+            profile: Some(RuntimeProfile::Controlled),
+            policy_sha256: "fake".into(),
+            checks: vec![CanaryCheck {
+                name: "deny".into(),
+                status: if passed {
+                    CheckStatus::Pass
+                } else {
+                    CheckStatus::Fail
+                },
+                detail: if passed {
+                    "the hook ran and the call was stopped".into()
+                } else {
+                    "the call ran although the hook denied it".into()
+                },
+                required: true,
+            }],
+        }
+    }
+
+    struct Rig {
+        f: Fixture,
+        runner: Rc<FakeRunner>,
+        svc: JobService,
+        gate: Rc<FakeGate>,
+    }
+
+    fn rig(answer: Clearance, trusted: &[&str]) -> Rig {
+        let f = fixture();
+        let runner = Rc::new(FakeRunner::default());
+        let gate = FakeGate::new(answer);
+        let trust = ConfiguredTrust::new(trusted.iter().map(PathBuf::from).collect());
+        let svc = JobService::new(
+            f.store.clone(),
+            f.jobs.clone(),
+            runner.clone(),
+            f.clock.clone(),
+        )
+        .with_runtime(
+            gate.clone(),
+            f.service.clone(),
+            RuntimeSettings::default(),
+            Rc::new(trust),
+        );
+        Rig {
+            f,
+            runner,
+            svc,
+            gate,
+        }
+    }
+
+    fn payloads(f: &Fixture, kind: LedgerKind) -> Vec<String> {
+        f.ledger
+            .entries()
+            .into_iter()
+            .filter(|e| e.draft.kind == kind)
+            .map(|e| e.draft.payload_json)
+            .collect()
+    }
+
+    #[test]
+    fn an_unattended_mission_is_refused_when_the_canary_fails() {
+        let mut r = rig(
+            Clearance::Refused {
+                why: "deny fail: the call ran although the hook denied it".into(),
+                report: report(false),
+            },
+            &[],
+        );
+        let job = r
+            .svc
+            .dispatch_capped(r.f.session.id, "fix the bug", Some(1.0))
+            .unwrap();
+        let rep = r.svc.pump();
+        assert!(rep.errors.is_empty(), "{:?}", rep.errors);
+        // Nothing was started: the runner never saw it, and no job_started.
+        assert_eq!(r.runner.started(), 0);
+        assert!(payloads(&r.f, LedgerKind::JobStarted).is_empty());
+        assert_eq!(r.f.store.status(job).unwrap(), JobStatus::Failed);
+        let finished = payloads(&r.f, LedgerKind::JobFinished);
+        assert!(
+            finished[0].contains("refused before starting: deny fail"),
+            "{}",
+            finished[0]
+        );
+        // The failed canary is in the ledger, with its report.
+        let canary = payloads(&r.f, LedgerKind::Runtime);
+        assert_eq!(canary.len(), 1);
+        assert!(canary[0].contains(r#""event":"canary""#), "{}", canary[0]);
+        assert!(canary[0].contains(r#""passed":false"#), "{}", canary[0]);
+        assert!(canary[0].contains(r#""status":"fail""#), "{}", canary[0]);
+    }
+
+    #[test]
+    fn a_job_waits_while_the_canary_runs_and_starts_when_it_passes() {
+        let mut r = rig(Clearance::Pending, &[]);
+        let job = r
+            .svc
+            .dispatch_capped(r.f.session.id, "fix the bug", None)
+            .unwrap();
+        r.svc.pump();
+        r.svc.pump();
+        assert_eq!(r.runner.started(), 0, "still waiting");
+        assert_eq!(r.f.store.status(job).unwrap(), JobStatus::Queued);
+        assert!(payloads(&r.f, LedgerKind::JobStarted).is_empty());
+
+        *r.gate.answer.borrow_mut() = Clearance::Cleared(Some(report(true)));
+        r.svc.pump();
+        assert_eq!(r.runner.started(), 1);
+        let canary_seq =
+            r.f.ledger
+                .entries()
+                .iter()
+                .find(|e| e.draft.kind == LedgerKind::Runtime)
+                .map(|e| e.seq)
+                .unwrap();
+        let started = &payloads(&r.f, LedgerKind::JobStarted)[0];
+        assert!(
+            started.contains(&format!(r#""canary_seq":{canary_seq}"#)),
+            "{started}"
+        );
+        // Cleared once: the next job that shares the result adds no entry.
+        *r.gate.answer.borrow_mut() = Clearance::Cleared(None);
+        r.svc
+            .dispatch_capped(r.f.session.id, "second", None)
+            .unwrap();
+        r.svc.pump();
+        assert_eq!(payloads(&r.f, LedgerKind::Runtime).len(), 1);
+    }
+
+    #[test]
+    fn job_started_carries_the_runtime_record_and_why_the_profile() {
+        let mut r = rig(Clearance::Cleared(Some(report(true))), &[]);
+        r.svc
+            .dispatch_capped(r.f.session.id, "mission work", None)
+            .unwrap();
+        r.svc.pump();
+        let started = &payloads(&r.f, LedgerKind::JobStarted)[0];
+        assert!(started.starts_with(r#"{"status":"running","runtime":{"runtime":"fake""#));
+        assert!(started.contains(r#""profile":"controlled""#), "{started}");
+        assert!(
+            started
+                .contains(r#""profile_reason":"unattended in a repository that is not trusted""#),
+            "{started}"
+        );
+        assert!(started.contains(r#""version":"1.2.3""#), "{started}");
+        assert!(started.contains(r#""settings_hash":"abc""#), "{started}");
+        assert_eq!(r.runner.request(0).profile, RuntimeProfile::Controlled);
+    }
+
+    #[test]
+    fn an_attended_job_inherits_and_needs_no_canary() {
+        let mut r = rig(Clearance::Pending, &[]);
+        r.svc.dispatch(r.f.session.id, "by hand").unwrap();
+        r.svc.pump();
+        assert_eq!(r.runner.started(), 1);
+        assert!(
+            r.gate.asked.borrow().is_empty(),
+            "a hand-started job asks nobody"
+        );
+        assert_eq!(r.runner.request(0).profile, RuntimeProfile::Inherit);
+        let started = &payloads(&r.f, LedgerKind::JobStarted)[0];
+        assert!(started.contains(r#""profile":"inherit""#), "{started}");
+        assert!(
+            started.contains(r#""profile_reason":"attended""#),
+            "{started}"
+        );
+    }
+
+    #[test]
+    fn a_trusted_folder_keeps_its_own_settings_for_unattended_work() {
+        // The session's folder is /w.
+        let mut r = rig(Clearance::Cleared(None), &["/w"]);
+        r.svc
+            .dispatch_capped(r.f.session.id, "mission work", None)
+            .unwrap();
+        r.svc.pump();
+        assert_eq!(r.runner.request(0).profile, RuntimeProfile::Inherit);
+        let started = &payloads(&r.f, LedgerKind::JobStarted)[0];
+        assert!(
+            started.contains(r#""profile_reason":"unattended in a trusted repository""#),
+            "{started}"
+        );
+    }
+
+    #[test]
+    fn a_profile_chosen_for_one_job_beats_the_setting() {
+        let mut r = rig(Clearance::Cleared(None), &[]);
+        r.svc
+            .dispatch_with_profile(r.f.session.id, "by hand", RuntimeProfile::Controlled)
+            .unwrap();
+        r.svc.pump();
+        assert_eq!(r.runner.request(0).profile, RuntimeProfile::Controlled);
+        let started = &payloads(&r.f, LedgerKind::JobStarted)[0];
+        assert!(
+            started.contains(r#""profile_reason":"chosen for the job or its mission""#),
+            "{started}"
+        );
+    }
+
+    #[test]
+    fn what_the_agent_reports_is_recorded_next_to_what_was_asked() {
+        let mut r = rig(Clearance::Cleared(None), &[]);
+        r.svc.dispatch(r.f.session.id, "by hand").unwrap();
+        r.svc.pump();
+        let env = Environment {
+            session_id: r.f.session.id.to_string(),
+            claude_code_version: Some("1.2.3".into()),
+            capabilities: vec!["interrupt_receipt_v1".into()],
+            ..Environment::default()
+        };
+        r.runner
+            .emit(0, RunnerMsg::Event(AgentEvent::Environment(Box::new(env))));
+        r.svc.pump();
+        let observed: Vec<String> = payloads(&r.f, LedgerKind::Runtime)
+            .into_iter()
+            .filter(|p| p.contains(r#""event":"observed""#))
+            .collect();
+        assert_eq!(observed.len(), 1);
+        assert!(
+            observed[0].contains(r#""version":"1.2.3""#),
+            "{}",
+            observed[0]
+        );
+        assert!(
+            observed[0].contains(r#""capabilities":["interrupt_receipt_v1"]"#),
+            "{}",
+            observed[0]
+        );
+        assert!(
+            observed[0].contains(r#""mismatches":["a server nobody asked for"]"#),
+            "{}",
+            observed[0]
+        );
+    }
+
+    #[test]
+    fn a_job_started_without_a_gate_has_no_runtime_record() {
+        let f = fixture();
+        let runner = Rc::new(FakeRunner::default());
+        let mut svc = JobService::new(
+            f.store.clone(),
+            f.jobs.clone(),
+            runner.clone(),
+            f.clock.clone(),
+        );
+        svc.dispatch_capped(f.session.id, "mission work", None)
+            .unwrap();
+        svc.pump();
+        assert_eq!(runner.started(), 1);
+        let started = &payloads(&f, LedgerKind::JobStarted)[0];
+        assert_eq!(started, r#"{"status":"running"}"#);
+        // The profile still resolves: a mission job nobody trusted is controlled.
+        assert_eq!(runner.request(0).profile, RuntimeProfile::Controlled);
+    }
+}

@@ -263,6 +263,8 @@ pub struct RuntimeLaunch {
     /// SHA-256 (hex) of the settings swarmux generated for the run.
     pub settings_hash: String,
     pub host: HostPolicy,
+    /// SHA-256 (hex) of the `[runtime]` settings that decided it.
+    pub policy_sha256: String,
     /// The ledger entry of the canary that cleared this run, if one did.
     pub canary_seq: Option<u64>,
 }
@@ -280,6 +282,7 @@ impl RuntimeLaunch {
             .bool("on_failure_block", self.on_failure_block)
             .str("settings_hash", &self.settings_hash)
             .json("host_policy", &self.host.payload().build())
+            .str("policy_sha256", &self.policy_sha256)
             .opt_int("canary_seq", self.canary_seq.map(|s| s as i64))
     }
 }
@@ -361,6 +364,9 @@ pub struct CanaryCheck {
 pub struct CanaryReport {
     pub version: Option<String>,
     pub profile: Option<RuntimeProfile>,
+    /// SHA-256 (hex) of the `[runtime]` settings that decided what to do
+    /// with the result.
+    pub policy_sha256: String,
     pub checks: Vec<CanaryCheck>,
 }
 
@@ -409,6 +415,7 @@ impl CanaryReport {
             .opt_str("version", self.version.as_deref())
             .opt_str("profile", self.profile.map(RuntimeProfile::as_str))
             .bool("passed", self.passed())
+            .str("policy_sha256", &self.policy_sha256)
             .objects("checks", checks)
     }
 }
@@ -546,6 +553,7 @@ mod tests {
             strict_mcp: true,
             on_failure_block: true,
             settings_hash: "ab".into(),
+            policy_sha256: "cd".into(),
             host: HostPolicy {
                 locks: vec!["allowManagedHooksOnly".into()],
                 blocks: vec!["allowManagedHooksOnly".into()],
@@ -556,7 +564,7 @@ mod tests {
         let json = launch.payload().build();
         assert_eq!(
             json,
-            r#"{"runtime":"claude-code","profile":"controlled","profile_reason":"reviewer: always controlled","version":"2.1.323","version_standing":"tested","sources":"user","strict_mcp":true,"on_failure_block":true,"settings_hash":"ab","host_policy":{"sources":[],"locks":["allowManagedHooksOnly"],"unreadable":[],"blocks":["allowManagedHooksOnly"]},"canary_seq":7}"#
+            r#"{"runtime":"claude-code","profile":"controlled","profile_reason":"reviewer: always controlled","version":"2.1.323","version_standing":"tested","sources":"user","strict_mcp":true,"on_failure_block":true,"settings_hash":"ab","host_policy":{"sources":[],"locks":["allowManagedHooksOnly"],"unreadable":[],"blocks":["allowManagedHooksOnly"]},"policy_sha256":"cd","canary_seq":7}"#
         );
     }
 
@@ -593,7 +601,7 @@ mod tests {
             "hook_exit_1 fail: d; hook_timeout inconclusive: d"
         );
         let json = report.payload("canary").build();
-        assert!(json.starts_with(r#"{"event":"canary","version":null,"profile":null,"passed":false,"checks":[{"name":"deny","status":"pass","required":true,"detail":"d"}"#));
+        assert!(json.starts_with(r#"{"event":"canary","version":null,"profile":null,"passed":false,"policy_sha256":"","checks":[{"name":"deny","status":"pass","required":true,"detail":"d"}"#));
     }
 
     #[test]

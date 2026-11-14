@@ -52,6 +52,8 @@ struct RawConfig {
     console: Option<crate::config_console::RawConsole>,
     board: Option<crate::config_board::RawBoard>,
     followups: Option<crate::config_followups::RawFollowups>,
+    /// Read key by key: see `config_runtime`.
+    runtime: Option<toml::Value>,
     theme: Option<String>,
     layout: Option<String>,
     icons: Option<String>,
@@ -175,6 +177,11 @@ pub fn parse_settings(text: &str, path: &Path) -> Result<Settings, ConfigError> 
         settings.warnings.push(removed_jev_warning(jev, text));
     }
     crate::config_guard::apply(extras, text, &mut settings);
+    if let Some(runtime) = raw.runtime {
+        crate::config_runtime::apply(runtime, text, &mut settings);
+    } else if settings.guard.hook_on_failure_block {
+        settings.runtime.hook_failure = swarmux_application::HookFailure::Block;
+    }
     if let Some(review) = raw.review {
         settings.review = parse_review(review, text, path)?;
     }

@@ -5,13 +5,20 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+use swarmux_application::ports::HookRequest;
 use swarmux_application::ports::{Clock, SystemMonitor};
-use swarmux_application::{GuardSettings, Settings, SharedPolicy};
-use swarmux_domain::HookEvent;
+use swarmux_application::{GuardSettings, Settings, SharedPolicy, UnattendedJobs};
+use swarmux_domain::runtime::{
+    CanaryCheck, CanaryReport, CheckStatus, RuntimeProfile, VersionStanding,
+};
+use swarmux_domain::{HookEvent, JobId, Verdict};
+use swarmux_infrastructure::claude_cli::runtime::range;
+use swarmux_infrastructure::claude_cli::{LaunchSpec, Probes};
 use swarmux_infrastructure::hook::{self, ENV_JOB, ENV_PIPE, HookServer};
 use swarmux_infrastructure::process::hide_std;
 use swarmux_infrastructure::{
-    Paths, SqliteLedger, SqliteStore, SysinfoMonitor, SystemClock, legacy_jev, load_settings,
+    ClaudeRuntime, Paths, SqliteLedger, SqliteStore, SysinfoMonitor, SystemClock, legacy_jev,
+    load_settings,
 };
 
 const GB: f64 = (1u64 << 30) as f64;
@@ -23,7 +30,10 @@ pub fn claude_bin() -> PathBuf {
         .unwrap_or_else(|| "claude".into())
 }
 
-pub fn run() -> anyhow::Result<()> {
+/// `swarmux doctor`; with `conformance` it also runs the canary set against
+/// the installed Claude Code (a few tiny calls to the model) and fails when a
+/// required canary does not pass.
+pub fn run(conformance: bool, profile: RuntimeProfile) -> anyhow::Result<()> {
     let bin = claude_bin();
     match claude_version(&bin) {
         Some(v) => println!("ok   claude {v}"),
@@ -32,6 +42,7 @@ pub fn run() -> anyhow::Result<()> {
             bin.display()
         ),
     }
+    let probes = Probes::run(&bin);
 
     let paths = Paths::default_home()?;
     println!("ok   data dir {}", paths.data_dir.display());
@@ -56,6 +67,7 @@ pub fn run() -> anyhow::Result<()> {
             println!("       min_free_ram_mb = {}", s.min_free_ram_mb);
             println!("       default_model   = \"{}\"", s.default_model);
             guard_summary(&s);
+            runtime_summary(&s, &probes);
             for line in legacy_jev::doctor_lines() {
                 println!("{line}");
             }
@@ -69,7 +81,211 @@ pub fn run() -> anyhow::Result<()> {
         Some(free) => println!("ok   free memory {:.1} GB", free as f64 / GB),
         None => println!("warn free memory unknown: the RAM guard is off"),
     }
+    if conformance {
+        return run_conformance(&bin, probes, profile);
+    }
     Ok(())
+}
+
+/// What the settings, the version and the host's policy mean for a run.
+fn runtime_summary(s: &Settings, probes: &Probes) {
+    let r = &s.runtime;
+    let range = range::range();
+    let version = probes
+        .version
+        .map_or_else(|| "unknown".to_string(), |v| v.to_string());
+    match range.standing(probes.version) {
+        VersionStanding::Tested => println!(
+            "ok   claude {version} is in the tested range {}..{} (floor {})",
+            range.tested_min, range.tested_max, range.floor
+        ),
+        VersionStanding::AboveTested | VersionStanding::BelowTested => println!(
+            "warn claude {version} is outside the tested range {}..{}: only `swarmux doctor --conformance` and the canary before each mission check it",
+            range.tested_min, range.tested_max
+        ),
+        VersionStanding::BelowFloor => println!(
+            "fail claude {version} is older than {}, the first version whose hooks can fail closed: unattended missions are refused",
+            range.floor
+        ),
+        VersionStanding::Unknown => println!(
+            "fail the version of claude could not be read: unattended missions are refused"
+        ),
+    }
+    println!(
+        "ok   runtime: profile = {} (unattended jobs in a repository you have not trusted run controlled, reviewers always), canary = {}, on_error = {}",
+        r.profile.as_str(),
+        r.canary.as_str(),
+        r.on_error.as_str()
+    );
+    println!(
+        "       controlled runs load the settings sources [{}], reviewers [{}]; MCP servers they may use besides the Board: {}; hook onFailure = {}; status line = {}",
+        r.controlled_sources.join(", "),
+        r.reviewer_sources.join(", "),
+        if r.mcp.is_empty() {
+            "none".to_string()
+        } else {
+            r.mcp
+                .iter()
+                .map(|m| m.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        },
+        r.hook_failure.as_str(),
+        r.statusline.as_str(),
+    );
+    if !r.trusted_repos.is_empty() {
+        println!(
+            "       trusted folders (their own Claude Code settings apply to unattended jobs): {}",
+            r.trusted_repos
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+    if r.canary == swarmux_application::CanaryMode::Off {
+        println!("warn runtime.canary = off: the deny canary does not run before missions");
+    }
+    if r.on_error == swarmux_application::OnError::Warn {
+        println!(
+            "warn runtime.on_error = warn: a mission starts even when a canary fails or cannot be made"
+        );
+    }
+    let host = &probes.host;
+    if host.blocks.is_empty() {
+        let found = if host.sources.is_empty() {
+            "no managed settings found".to_string()
+        } else {
+            format!("managed settings found: {}", host.sources.join(", "))
+        };
+        println!("ok   host policy: {found}");
+    } else {
+        for block in &host.blocks {
+            println!("fail host policy: {block}");
+        }
+    }
+    if !host.locks.is_empty() {
+        println!("       managed locks: {}", host.locks.join(", "));
+    }
+    for note in &host.unreadable {
+        println!("       not read: {note}");
+    }
+}
+
+fn print_check(c: &CanaryCheck) {
+    let tag = match (c.status, c.required) {
+        (CheckStatus::Pass, _) => "ok  ",
+        (CheckStatus::Fail, _) | (CheckStatus::Inconclusive, true) => "fail",
+        (CheckStatus::Inconclusive, false) => "warn",
+        (CheckStatus::Note, _) => "note",
+        (CheckStatus::Skipped, _) => "skip",
+    };
+    println!("{tag} {} ({}): {}", c.name, c.status.as_str(), c.detail);
+}
+
+/// The canaries of the Guard itself: what it decides for a tool it does not
+/// know, and whether a subagent's call is judged like the lead's. They need
+/// no model.
+fn guard_canaries(s: &Settings) -> Vec<CanaryCheck> {
+    let unattended = UnattendedJobs::new();
+    unattended.mark(JobId(1));
+    let policy = SharedPolicy::new(s.guard.policy()).with_unattended(unattended);
+    let call = |agent: Option<&str>| HookRequest {
+        request_id: 1,
+        job_id: Some(JobId(1)),
+        tool_name: "mcp__swarmux_canary__unknown".to_string(),
+        input: "{}".to_string(),
+        cwd: ".".to_string(),
+        agent_id: agent.map(str::to_string),
+        agent_type: agent.map(|_| "general-purpose".to_string()),
+        ..HookRequest::default()
+    };
+    let lead = policy.decide(&call(None)).0;
+    let sub = policy.decide(&call(Some("agent-1"))).0;
+    let (status, detail) = match lead.verdict {
+        Verdict::Deny | Verdict::Ask => (
+            CheckStatus::Pass,
+            format!(
+                "an unattended job's call to a tool no rule knows is {}",
+                lead.verdict.as_str()
+            ),
+        ),
+        Verdict::Allow | Verdict::Pass => (
+            CheckStatus::Fail,
+            format!(
+                "an unattended job's call to a tool no rule knows is {} (guard.unmatched = \"{}\")",
+                lead.verdict.as_str(),
+                format!("{:?}", s.guard.unmatched).to_lowercase()
+            ),
+        ),
+    };
+    let same = lead.verdict == sub.verdict;
+    vec![
+        CanaryCheck {
+            name: "unknown_tool".into(),
+            status,
+            detail,
+            required: true,
+        },
+        CanaryCheck {
+            name: "guard_subagent".into(),
+            status: if same {
+                CheckStatus::Pass
+            } else {
+                CheckStatus::Fail
+            },
+            detail: if same {
+                "a subagent's call is judged like the lead's".into()
+            } else {
+                format!(
+                    "the lead's call is {} and a subagent's is {}",
+                    lead.verdict.as_str(),
+                    sub.verdict.as_str()
+                )
+            },
+            required: true,
+        },
+    ]
+}
+
+/// `swarmux doctor --conformance`: the real `claude`'s canaries and the
+/// Guard's own, each with its result.
+fn run_conformance(bin: &Path, probes: Probes, profile: RuntimeProfile) -> anyhow::Result<()> {
+    let paths = Paths::default_home()?;
+    let settings = load_settings(&paths.config)?;
+    println!();
+    println!(
+        "conformance, profile {profile}: {} calls to claude (--model haiku, a few turns each), then the Guard's own canaries",
+        swarmux_infrastructure::claude_cli::runtime::canary::Scenario::ALL.len()
+    );
+    let exe = std::env::current_exe()?;
+    let spec = LaunchSpec::default().resolve(&settings.runtime, &probes);
+    let runtime = ClaudeRuntime::new(
+        bin.to_path_buf(),
+        exe,
+        settings.runtime.clone(),
+        spec,
+        probes,
+    );
+    let mut report: CanaryReport = runtime.conformance(profile);
+    report.checks.extend(guard_canaries(&settings));
+    for c in &report.checks {
+        print_check(c);
+    }
+    let blocking = report.blocking();
+    if blocking.is_empty() {
+        println!("ok   conformance: every required canary passed");
+        Ok(())
+    } else {
+        anyhow::bail!(
+            "conformance failed: {}",
+            blocking
+                .iter()
+                .map(|c| c.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    }
 }
 
 fn mode_words(m: swarmux_application::FailMode) -> &'static str {
@@ -120,7 +336,7 @@ fn guard_summary(s: &Settings) {
     );
     if g.hook_on_failure_block {
         println!(
-            "       hook_on_failure_block = true: PreToolUse carries onFailure=block (needs a Claude Code that knows it; the version is not checked)"
+            "       hook_on_failure_block = true: the old switch for runtime.hook_failure = \"block\": PreToolUse always carries onFailure=block"
         );
     }
     println!(

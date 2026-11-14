@@ -33,18 +33,20 @@ use swarmux_application::ledger::{
 };
 use swarmux_application::ports::Clock;
 use swarmux_application::{
-    AlwaysSettings, Board, BoardDigest, BoardService, CombinedStatusline, GateKeeper, GateService,
-    Governor, GuardService, HandoffBoard, HistoryService, HookBus, HookMessenger, JobService,
-    MissionService, NotifyService, NudgeBoard, PromptService, RoutingService, ScopeClaims,
-    SessionService, SharedPolicy, StatuslineFeed, TruthBoard, UnattendedJobs, Watchdog,
+    AlwaysSettings, Board, BoardDigest, BoardService, CombinedStatusline, ConfiguredTrust,
+    GateKeeper, GateService, Governor, GuardService, HandoffBoard, HistoryService, HookBus,
+    HookMessenger, JobService, MissionService, NotifyService, NudgeBoard, PromptService,
+    RoutingService, ScopeClaims, SessionService, SharedPolicy, StatuslineFeed, TruthBoard,
+    UnattendedJobs, Watchdog,
 };
+use swarmux_infrastructure::claude_cli::{LaunchSpec, Probes};
 use swarmux_infrastructure::hook::{self, HookServer, Responders};
 use swarmux_infrastructure::{
-    BoardMcp, ClaudeCli, ClaudePlanner, FilePalette, FsAgentCatalog, FsGateSource, GitCli,
-    GitMergeQueue, GitRepoRoots, GitVcs, GitWorktrees, GuardHook, HaikuDiagnoser, HaikuExtractor,
-    HaikuLinter, HaikuRouter, MissionFiles, Paths, SqliteLedger, SqliteStore, SysinfoMonitor,
-    SystemClock, TomlRuleStore, WindowsTerminal, build_notifier_with, load_settings, rules_file,
-    utc_offset_minutes,
+    BoardMcp, ClaudeCli, ClaudePlanner, ClaudeRuntime, FilePalette, FsAgentCatalog, FsGateSource,
+    GitCli, GitMergeQueue, GitRepoRoots, GitVcs, GitWorktrees, GuardHook, HaikuDiagnoser,
+    HaikuExtractor, HaikuLinter, HaikuRouter, MissionFiles, Paths, SqliteLedger, SqliteStore,
+    SysinfoMonitor, SystemClock, TomlRuleStore, WindowsTerminal, build_notifier_with,
+    load_settings, rules_file, utc_offset_minutes,
 };
 use swarmux_tui::{App, Launch};
 
@@ -86,7 +88,21 @@ enum Command {
         action: daemon::Action,
     },
     /// Check that Claude Code is installed and swarmux's data is healthy.
-    Doctor,
+    Doctor {
+        /// Also run the conformance canaries against the installed Claude Code:
+        /// a few tiny calls to the model that try the Guard's hook, a failing
+        /// hook and a subagent's call.
+        #[arg(long)]
+        conformance: bool,
+        /// The launch profile the conformance run tries.
+        #[arg(
+            long,
+            value_name = "PROFILE",
+            default_value = "controlled",
+            requires = "conformance"
+        )]
+        profile: String,
+    },
     /// The Guard's rules: list or remove the allow rules added with "always
     /// allow", and check the Guard's settings.
     Guard {
@@ -243,8 +259,12 @@ enum Command {
     /// Hooks Claude Code runs inside swarmux jobs (not for direct use).
     #[command(hide = true)]
     Hook {
-        /// The hook event: pre-tool, stop, session-start, … (or Claude Code's own name).
+        /// The hook event: pre-tool, stop, session-start, … (or Claude Code's own name);
+        /// `canary` is the hook the conformance canaries run.
         event: String,
+        /// What follows `canary`: its mode and log file.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        rest: Vec<String>,
     },
 }
 
@@ -554,7 +574,14 @@ fn main() -> anyhow::Result<ExitCode> {
         None if cli.no_daemon => run_tui(cli.no_splash),
         None => return daemon::attach(cli.no_splash),
         Some(Command::Daemon { action }) => return daemon::run(action),
-        Some(Command::Doctor) => doctor::run(),
+        Some(Command::Doctor {
+            conformance,
+            profile,
+        }) => {
+            let profile = swarmux_domain::runtime::RuntimeProfile::parse(&profile)
+                .ok_or_else(|| anyhow::anyhow!("--profile is \"inherit\" or \"controlled\""))?;
+            doctor::run(conformance, profile)
+        }
         Some(Command::Guard { action }) => {
             if !guardcmd::run(action)? {
                 return Ok(ExitCode::FAILURE);
@@ -591,8 +618,12 @@ fn main() -> anyhow::Result<ExitCode> {
             swarmux_infrastructure::board::board_mcp_main(job).context("board-mcp failed")?;
             Ok(())
         }
-        Some(Command::Hook { event }) => {
-            hook::hook_main(&event);
+        Some(Command::Hook { event, rest }) => {
+            if event == "canary" {
+                hook::canary_main(&rest);
+            } else {
+                hook::hook_main(&event);
+            }
             Ok(())
         }
     }?;
@@ -740,13 +771,27 @@ fn build_app(
         pipe,
         timeout_secs: guard_settings.approval_timeout_secs + HOOK_GRACE_SECS,
     };
-    let mut cli = ClaudeCli::new(doctor::claude_bin(), rt.handle().clone())
-        .with_guard(guard_hook)
-        .with_guard_spool(hook::spool_file(&paths.data_dir))
-        .with_on_failure_block(guard_settings.hook_on_failure_block);
-    if board_hub.is_some() {
-        cli = cli.with_board(board_mcp);
+    // How a run launches (its profile) and what clears it to start: the
+    // runner and the runtime are given the same spec, so what the ledger
+    // records is what was run.
+    let claude_exe = std::env::current_exe().context("cannot find the swarmux executable")?;
+    let probes = Probes::run(&doctor::claude_bin());
+    let spec = LaunchSpec {
+        guard: Some(guard_hook),
+        board: board_hub.is_some().then_some(board_mcp),
+        ..LaunchSpec::default()
     }
+    .resolve(&settings.runtime, &probes);
+    let claude_runtime = Rc::new(ClaudeRuntime::new(
+        doctor::claude_bin(),
+        claude_exe,
+        settings.runtime.clone(),
+        spec.clone(),
+        probes,
+    ));
+    let cli = ClaudeCli::new(doctor::claude_bin(), rt.handle().clone())
+        .with_guard_spool(hook::spool_file(&paths.data_dir))
+        .with_spec(spec);
     let runner = Rc::new(cli);
     let worktree::Services {
         worktrees,
@@ -945,6 +990,12 @@ fn build_app(
     let workspaces = workspace::service(store.clone());
     let mut jobs = JobService::new(store.clone(), jobs_log, runner, clock)
         .with_unattended(unattended, guard_settings.on_unreachable)
+        .with_runtime(
+            claude_runtime,
+            ledger.clone(),
+            settings.runtime.clone(),
+            Rc::new(ConfiguredTrust::new(settings.runtime.trusted_repos.clone())),
+        )
         .with_workspaces(store.clone())
         .with_telemetry_store(store)
         .with_limits(settings.limits())

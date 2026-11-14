@@ -16,6 +16,7 @@ use swarmux_domain::ledger::{
     ChainBreak, ChainVerifier, Hash, LedgerDraft, LedgerEntry, LedgerKind, Payload,
 };
 use swarmux_domain::ledger::{hex, sha256};
+use swarmux_domain::runtime::{CanaryReport, RuntimeLaunch, RuntimeObserved};
 use swarmux_domain::{
     Job, JobId, JobResult, JobStatus, Millis, ReviewState, SessionId, StoredRule,
 };
@@ -509,13 +510,19 @@ impl LedgerService {
         )
     }
 
+    /// A job started. `runtime` is how it was launched (profile, version,
+    /// settings hash, host policy); a job started without one has none.
     pub fn record_job_started(
         &self,
         id: JobId,
         session: Option<SessionId>,
+        runtime: Option<&RuntimeLaunch>,
         now: Millis,
     ) -> AppResult<()> {
-        let payload = Payload::new().str("status", JobStatus::Running.as_str());
+        let mut payload = Payload::new().str("status", JobStatus::Running.as_str());
+        if let Some(launch) = runtime {
+            payload = payload.json("runtime", &launch.payload().build());
+        }
         self.append(
             now,
             LedgerKind::JobStarted,
@@ -523,6 +530,43 @@ impl LedgerService {
             Some(id),
             session,
             payload,
+        )
+    }
+
+    /// The canaries ran before an unattended run (`job` is the run they
+    /// cleared or refused); returns the entry's `seq`.
+    pub fn record_canary(
+        &self,
+        job: Option<JobId>,
+        session: Option<SessionId>,
+        report: &CanaryReport,
+        now: Millis,
+    ) -> AppResult<u64> {
+        self.append_entry(
+            now,
+            LedgerKind::Runtime,
+            SWARMUX,
+            job,
+            session,
+            report.payload("canary"),
+        )
+    }
+
+    /// What the agent reported about its runtime when the run started.
+    pub fn record_runtime_observed(
+        &self,
+        job: JobId,
+        session: Option<SessionId>,
+        observed: &RuntimeObserved,
+        now: Millis,
+    ) -> AppResult<()> {
+        self.append(
+            now,
+            LedgerKind::Runtime,
+            SWARMUX,
+            Some(job),
+            session,
+            observed.payload(),
         )
     }
 
@@ -923,6 +967,8 @@ pub struct LedgeredJobs {
     ledger: Rc<LedgerService>,
     /// Which session each job of this run belongs to.
     sessions: RefCell<HashMap<JobId, SessionId>>,
+    /// How each job about to start is launched, for its `job_started` entry.
+    runtime: RefCell<HashMap<JobId, RuntimeLaunch>>,
 }
 
 impl LedgeredJobs {
@@ -931,6 +977,7 @@ impl LedgeredJobs {
             inner,
             ledger,
             sessions: RefCell::default(),
+            runtime: RefCell::default(),
         }
     }
 
@@ -966,7 +1013,9 @@ impl JobRepository for LedgeredJobs {
         self.inner.set_status(id, status, now)?;
         let session = self.session_of(id)?;
         if status == JobStatus::Running {
-            self.ledger.record_job_started(id, session, now)
+            let launch = self.runtime.borrow_mut().remove(&id);
+            self.ledger
+                .record_job_started(id, session, launch.as_ref(), now)
         } else if status.is_finished() {
             let result = self.inner.result(id)?;
             self.ledger
@@ -978,6 +1027,10 @@ impl JobRepository for LedgeredJobs {
 
     fn status(&self, id: JobId) -> AppResult<JobStatus> {
         self.inner.status(id)
+    }
+
+    fn stage_runtime(&self, id: JobId, launch: &RuntimeLaunch) {
+        self.runtime.borrow_mut().insert(id, launch.clone());
     }
 
     fn set_priority(&self, id: JobId, priority: i32) -> AppResult<()> {

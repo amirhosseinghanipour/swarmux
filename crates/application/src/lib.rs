@@ -33,6 +33,7 @@ mod palette;
 pub mod ports;
 mod prompts;
 mod routing;
+pub mod runtime;
 mod sendback;
 mod sessions;
 mod settings;
@@ -109,6 +110,10 @@ pub use palette::{
 };
 pub use prompts::{BUILTIN_VARIABLES, PromptService, RenderedPrompt};
 pub use routing::{ROUTE_PROMPT_MAX, RouteReport, Routed, RoutingService};
+pub use runtime::{
+    CanaryMode, Clearance, ConfiguredTrust, HookFailure, LaunchIntent, McpServerDef, OnError,
+    RepoTrust, RuntimeGate, RuntimeSettings, StatuslineMode,
+};
 pub use sendback::{SentBack, send_back_prompt};
 pub use sessions::SessionService;
 pub use settings::{

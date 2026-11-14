@@ -183,16 +183,23 @@ fn adapter_never_changes_or_removes_rows() {
 /// The agent runner gets no handle on the ledger.
 #[test]
 fn claude_adapter_has_no_ledger_access() {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/claude_cli");
-    for entry in std::fs::read_dir(dir).unwrap() {
-        let path = entry.unwrap().path();
-        let src = std::fs::read_to_string(&path).unwrap().to_ascii_lowercase();
-        assert!(
-            !src.contains("ledger"),
-            "{} mentions the ledger",
-            path.display()
-        );
+    // Every file below it, the runtime module's folder included.
+    fn check(dir: &Path) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                check(&path);
+                continue;
+            }
+            let src = std::fs::read_to_string(&path).unwrap().to_ascii_lowercase();
+            assert!(
+                !src.contains("ledger"),
+                "{} mentions the ledger",
+                path.display()
+            );
+        }
     }
+    check(&Path::new(env!("CARGO_MANIFEST_DIR")).join("src/claude_cli"));
 }
 
 /// Appends 5k entries to a file database and prints the latency spread.

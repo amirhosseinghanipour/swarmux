@@ -55,6 +55,10 @@ pub trait JobRepository {
     fn queued(&self) -> AppResult<Vec<Job>>;
     fn set_status(&self, id: JobId, status: JobStatus, now: Millis) -> AppResult<()>;
     fn status(&self, id: JobId) -> AppResult<JobStatus>;
+    /// How `id` is launched, told just before it is set running so the
+    /// record of its start can carry it. Repositories that keep no record
+    /// ignore it.
+    fn stage_runtime(&self, _id: JobId, _launch: &swarmux_domain::runtime::RuntimeLaunch) {}
     fn set_priority(&self, id: JobId, priority: i32) -> AppResult<()>;
     /// Moves the job to another session (a fork's job belongs to the new session).
     fn set_session(&self, id: JobId, session: SessionId) -> AppResult<()>;
@@ -143,6 +147,8 @@ pub struct RunRequest {
     /// Folders beyond `cwd` the run works in, with their own instructions
     /// loaded: the repositories of a workspace job.
     pub add_dirs: Vec<PathBuf>,
+    /// How much of the agent's own configuration the run loads.
+    pub profile: swarmux_domain::runtime::RuntimeProfile,
 }
 
 /// What a running job reports back.
