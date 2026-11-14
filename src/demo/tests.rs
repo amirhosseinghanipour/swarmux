@@ -46,6 +46,52 @@ fn two_runs_draw_the_same_screens() {
     }
 }
 
+/// The operator's message to the checkout agent goes through the services
+/// the Work screen's line uses: queued while its turn runs, handed to the
+/// session when the turn ends, delivered once the next turn starts, and
+/// the ledger holds both entries.
+#[test]
+fn the_demos_queued_message_is_delivered_through_the_services() {
+    use swarmux_domain::JobId;
+    use swarmux_domain::intervene::State;
+
+    let mut app = build(&Options::default()).unwrap();
+    let checkout = JobId(4);
+    let state_now = |app: &App| {
+        app.message_receipts(checkout)
+            .first()
+            .map(|r| r.state.clone())
+    };
+    let mut seen: Vec<&'static str> = Vec::new();
+    for _ in 0..TICKS {
+        tick(&mut app);
+        if let Some(s) = state_now(&app) {
+            let name = s.as_str();
+            if seen.last() != Some(&name) {
+                seen.push(name);
+            }
+        }
+    }
+    assert_eq!(seen, ["queued", "handed_over", "delivered"]);
+    let receipt = app.message_receipts(checkout).remove(0);
+    assert_eq!(
+        receipt.text,
+        "Also keep the retry count in the settings file, not hard-coded."
+    );
+    let State::Delivered { job, .. } = receipt.state else {
+        panic!("{:?}", receipt.state);
+    };
+    assert_eq!(job, JobId(6), "the session continued as a new job");
+    // The ledger has it, chained with the rest.
+    app.press_char('5');
+    tick(&mut app);
+    let ledger = app.render_text(WIDTH, HEIGHT);
+    assert!(
+        ledger.contains("The operator sent you a message while you were working"),
+        "{ledger}"
+    );
+}
+
 #[test]
 fn a_different_seed_changes_the_made_up_numbers() {
     let mut a = build(&Options::default()).unwrap();
@@ -124,8 +170,12 @@ fn the_key_moments_appear_in_order() {
     assert!(at(&flood) < at(&blocked));
     assert!(at(&blocked) < at(&passed), "blocked once, then passed");
 
-    // The delivered mission and its evidence are on the Ledger screen.
+    // The delivered mission and its evidence are on the Ledger screen. The
+    // newest row is the checkout agent's turn that carries the operator's
+    // message; the delivered mission is the one under it.
     app.press_char('5');
+    tick(&mut app);
+    app.press_named("down");
     tick(&mut app);
     let ledger = app.render_text(WIDTH, HEIGHT);
     assert!(
@@ -215,11 +265,13 @@ mod console {
         assert_eq!(m.spend.total_usd, 1.84);
 
         // The two jobs nobody asked about are now the release's tasks, so
-        // no job is on no queue.
+        // no job of theirs is on no queue. The one left is the checkout
+        // agent's turn that carried the operator's message: it ended, and
+        // nothing about it needs a decision.
         let c = snap.header.counts;
         assert_eq!(
             (c.decide, c.ready_to_land, c.running, c.landed, c.idle),
-            (2, 0, 0, 1, 0)
+            (2, 0, 0, 1, 1)
         );
     }
 
@@ -311,16 +363,19 @@ mod console {
         let snap = played();
         // The release mission is a task graph of three tasks (the jobs of
         // data-pipeline, mobile-app and docs-site); with the held push's
-        // job and the delivered mission that is five cards. The third task
+        // job and the delivered mission that is five cards (the sixth is below). The third task
         // waits for the other two: two dependency edges, both met (their
         // producers merged).
-        assert_eq!(snap.deck.nodes.len(), 5);
+        // The checkout agent's continuation (the turn that carried the
+        // operator's message) is a sixth card.
+        assert_eq!(snap.deck.nodes.len(), 6);
         let ids: Vec<&str> = snap.deck.nodes.iter().map(|n| n.id.as_str()).collect();
         for id in [
             "task:release-2-4:t1",
             "task:release-2-4:t2",
             "task:release-2-4:t3",
             "job:4",
+            "job:6",
             "mission:fix-invoice-rounding",
         ] {
             assert!(ids.contains(&id), "{id} in {ids:?}");

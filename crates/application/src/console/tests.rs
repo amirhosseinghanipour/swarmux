@@ -1006,7 +1006,7 @@ fn actions_follow_the_state_and_say_why_when_they_do_not() {
     let snap = evening().snapshot();
     // The held push: the call can be answered, the job stopped.
     let push = outcome(&snap, "job:2");
-    assert_eq!(push.actions.len(), 9);
+    assert_eq!(push.actions.len(), 10);
     assert!(action(push, ActionKind::AnswerHeldCall).enabled);
     assert_eq!(action(push, ActionKind::AnswerHeldCall).request, Some(7));
     assert!(action(push, ActionKind::Kill).enabled);
@@ -1039,6 +1039,18 @@ fn actions_follow_the_state_and_say_why_when_they_do_not() {
     assert!(!delivered.enabled);
     assert!(delivered.reason.as_deref().unwrap().contains("delivered"));
     assert!(!action(plan, ActionKind::SendBack).enabled);
+    // Intervene: only a job that runs can be messaged, and a disabled
+    // action always says why.
+    let msg = action(push, ActionKind::Intervene);
+    assert!(msg.enabled, "{:?}", msg.reason);
+    assert_eq!(msg.job, Some(2));
+    for ended in [failed, done] {
+        let a = action(ended, ActionKind::Intervene);
+        assert!(!a.enabled, "{}", ended.id);
+        assert!(a.reason.as_deref().unwrap().contains("send it back"));
+    }
+    assert!(!action(plan, ActionKind::Intervene).enabled);
+    assert!(action(plan, ActionKind::Intervene).reason.is_some());
     // Landing on request does not exist: never enabled, always explained.
     for o in snap.groups.iter().flat_map(|g| &g.outcomes) {
         let land = action(o, ActionKind::LandToIntegration);

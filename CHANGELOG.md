@@ -22,6 +22,27 @@ follows [Semantic Versioning](https://semver.org/).
   day budget, a missing figure is unknown and never zero. `[brief]` config with
   `swarmux return-brief lint`; `swarmux --demo --demo-away 60` shows it. See
   [the guide](guide/brief.md).
+- Intervene: message a running agent from Work. `m` on a running job opens a
+  line (and the stream tab, the conversation so far) and sends your words to its
+  agent in one of two modes, `Tab` or `M` to switch: **queue** (the default) keeps
+  the message until the job's turn ends and then continues the Claude session
+  with it; **steer** stops the turn (the same stop as Kill) and continues the
+  session with the message at once, after a second confirmation
+  (`intervene_confirm_steer`). Steering is refused while the Guard holds one of
+  the job's calls, and no message approves anything. swarmux does not write
+  into a running `claude`: a message never arrives mid-turn, and a steer cuts the
+  step in flight short (the agent is told). Every message is an `operator` entry
+  in the ledger (action `intervene`: mode, text, job, outcome, delivery time),
+  written before anything is sent. A receipt says *queued*, *handed over* or
+  *delivered*, and only calls it delivered once the agent's turn with it
+  started. The same operation is `Engine::intervene` in the application layer and
+  the console model gains the `intervene` action kind (enabled, or disabled with
+  its reason) and a `ReceiptView`, so a daemon API or a phone can offer it. New
+  `[console]` keys `intervene_mode`, `intervene_max_chars` (default 2000) and
+  `intervene_confirm_steer`, which warn and keep the default when wrong; actions
+  `work.message` (`m`) and `work.message_mode` (`M`). The demo shows a queued
+  message delivered. The console JSON gains the `intervene` action
+  (`schema_version` unchanged: additive).
 - Verifier and gate hardening. The verifier now checks what runs the tests as
   well as the tests, and says so when it could not check something.
   - The harness is a finding. Created, changed, moved or deleted, any file of a
@@ -369,6 +390,10 @@ follows [Semantic Versioning](https://semver.org/).
   identity key the first time that repository is looked at (recorded in
   `holdout/.migrated` and in the ledger as `holdout_migrated`); a name is handed
   out once.
+- A workspace mission's checks run in the task folder, so by default its gate
+  now says Escalate and nothing lands. Put `[verifier] worktree_checks = "allow"`
+  in `.swarmux/gates.toml` at the workspace root (now copied into each task
+  folder) to let it land; the record still says the checks ran in the worktree.
 - The base suite and the hidden checks no longer run in the copy the visible
   checks ran in. `swarmux gate run` prints `gate cannot pass this: escalate` when
   the gate could not vouch for work in which nothing was wrong.

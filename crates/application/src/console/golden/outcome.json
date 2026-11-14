@@ -262,6 +262,14 @@
       "job": 1,
       "mission": "fix-invoice",
       "request": null
+    },
+    {
+      "kind": "intervene",
+      "enabled": false,
+      "reason": "the job has ended: send it back with a note instead",
+      "job": 1,
+      "mission": "fix-invoice",
+      "request": null
     }
   ]
 }

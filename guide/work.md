@@ -80,7 +80,10 @@ Four tabs, `1` to `4`:
    signature); and what landing does: each repository into
    `swarmux/<mission>/integration`, producers first, all or none, your own
    branches untouched.
-2. **stream**: the job's action stream, the same rows as [Focus](focus.md).
+2. **stream**: the job's action stream, the same rows as [Focus](focus.md),
+   and the conversation with its agent: what you said to it appears in the
+   stream as `» you` rows, and under it **YOUR MESSAGES** lists each message
+   with where it stands. See [Message a running agent](#message-a-running-agent).
 3. **diff**: the sealed diff's totals and the files behind them with their
    counts (`A` added, `M` modified, `D` deleted; a binary file says `binary`
    instead of counts), and the session's uncommitted changes read when you
@@ -106,6 +109,7 @@ has it. An action that can't be taken now is shown dim, with the reason.
 | `y` / `n` | on a proposed plan: approve it, or send it back with a note |
 | `l` | land the work in `swarmux/<mission>/integration` (needs `landing = "manual"`, see [Configuration](configuration.md#landing)) |
 | `s` | send the work back with a note, or deny a held call with one, see [Send back](#send-back) |
+| `m` / `M` | message the running agent, see [Message a running agent](#message-a-running-agent); `M` switches the mode between queue and steer |
 | `x` | stop the outcome's running job |
 | `r` / `R` | queue the job's prompt again / continue an interrupted or failed job |
 | `e` | open the evidence in the Ledger, on this job |
@@ -117,11 +121,72 @@ has it. An action that can't be taken now is shown dim, with the reason.
 On Work, `y`, `n` and `a` answer the call or plan of the **selected** outcome
 only, never another; with nothing held on it they say so. Every key is an
 action in the keymap (`work.land`, `work.kill`, `work.retry`, `work.resume`,
-`work.evidence`, `work.send_back`, `work.tab_product`, ...) and can be rebound
+`work.evidence`, `work.send_back`, `work.message`, `work.message_mode`, `work.tab_product`, ...) and can be rebound
 in [`[keys.work]`](configuration.md#keys).
 
 There is no pause, and no merge to main: landing is only ever into the
 mission's integration branch.
+
+## Message a running agent
+
+`m` tells the agent of the selected outcome's **running** job something, from
+inside swarmux, without leaving Work. It opens the stream tab (the transcript so
+far, as in Focus) and a line at the bottom of the screen. Type the message and
+press `Enter` to send it, `Esc` to drop it; nothing is sent before `Enter`. A
+panel above the line shows the mode, what the mode does, and what you typed.
+`Tab` switches between the two modes while you type, and `M` switches the mode
+for the messages after (`intervene_mode` in [`[console]`](configuration.md#console)
+sets the one the line opens in). The row is dim, or `m` says why, when the job
+is not running (an ended job is [sent back](#send-back) with a note instead),
+when swarmux did not start its session (it began in an earlier run: open it in
+a terminal with `t` in Focus to take over), for a reviewer, and for a task of a
+task graph (its tasks are not messaged one by one).
+
+Your words reach the agent the way a note does: the job's Claude session
+**continues**, in the same working folder, with your message as its next
+prompt. swarmux does not write into a running `claude`: a job is one turn, and
+its input is closed after the prompt. That is what makes both modes safe and
+testable, and it limits what they can promise.
+
+| Mode | What it does | What it does not guarantee |
+| --- | --- | --- |
+| **queue** (default) | keeps the message until the job's turn has ended, then continues the session with it | that the agent reads it *during* the turn: it does not. If the job fails, is interrupted or is escalated, the message goes with the resume. If you stop the job yourself (`x`) the message is **not** sent, and says so |
+| **steer** | stops the turn now (the same stop as `x`: the `claude` process and what it started are killed) and continues the session with your message at once | that the agent's last step finished: a file edit or a shell command in flight is cut short, and the agent is told so and told to check the working folder. It asks for a second `Enter` first (`intervene_confirm_steer`) |
+
+**A call held by the Guard** stays held, in both modes: a message approves
+nothing. Steering is *refused* while a call of that job is held, since stopping
+the agent would strand the call; answer it first (a denial can carry a note,
+`s`), or queue the message. Queueing leaves the call as it is.
+
+**Two or more queued messages** on one job go as one continuation, in order.
+At most five wait on a job.
+
+**What the receipt says.** After `Enter` the notice says what happened, and the
+**YOUR MESSAGES** block keeps it up to date:
+
+- *queued*: taken and recorded, waits for the turn to end;
+- *handed to the agent as job #N*: the session continued; the agent has said
+  nothing yet, so this is **not** called delivered;
+- *delivered*: the agent's turn with your message started (swarmux saw its
+  first report; the time is recorded);
+- *not delivered*: with the reason (you stopped the job; the continuation
+  ended before it reported; the mission was delivered first, or is no longer
+  where a message can follow it). Your text is kept in the ledger to send again.
+
+A mission's job is followed by the mission: when the turn ends the message waits
+until the mission has taken that in (escalated or verifying), as a send back
+does, and the gate judges the agent's next claim with the checks run again.
+
+**What is not kept.** The queue and the receipts live in this run of swarmux. A
+message still waiting when swarmux stops is not delivered (the job is marked
+interrupted: resume it, or send it back with a note). The `» you` rows and the
+receipts are shown for this run only; the ledger has the record.
+
+Each message is an `operator` entry in the [ledger](ledger-and-evidence.md#what-you-told-an-agent),
+written **before** anything is sent: a message that cannot be recorded is not
+taken and nothing happens. It is your authority, not the agent's output; the
+Guard is unchanged and keeps judging the agent's tool calls. Prompting a
+session from Focus (`p`) is unchanged: it queues a new job.
 
 ## Send back
 
@@ -150,7 +215,7 @@ to set: `send_back_notes` in [`[console]`](configuration.md#console) (an
 empty list turns them off).
 
 Where it can't work, the row is dim with the reason: the job is still running
-(stop it first), the work is delivered (it has landed: start a new mission),
+(stop it first, or [message it](#message-a-running-agent)), the work is delivered (it has landed: start a new mission),
 the mission runs as a task graph (its tasks are not sent back one by one), or
 its budget is spent (raise it in the contract first, or the agent would only be
 stopped again).

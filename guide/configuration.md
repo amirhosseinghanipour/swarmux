@@ -21,7 +21,7 @@ The other settings live next to the feature they control:
 | `[missions]` | plan-first, drift, and `landing` | [Missions](missions.md), [Landing](#landing) below |
 | `[deck]` | which panels the Deck shows, their order, the graph's direction, the sessions strip | [The Deck](deck.md#customizing-deck) |
 | `[brief]` | when the Return brief opens by itself, how long away counts, where `Esc` skips to | [The Return brief](brief.md#customizing-brief) |
-| `[console]` | the Work screen's verification window and suggested notes | [Console](#console) below |
+| `[console]` | the Work screen's verification window, suggested notes and messages to running agents | [Console](#console) below |
 | `[governor]` | budgets, forecasts, auto-resume | [Usage governor](governor.md) |
 | `[notify]` | toasts, bell and `ntfy` | [Notifications](notifications.md) |
 | `[keys]` | hotkeys | [Keys](#keys) below |
@@ -189,3 +189,18 @@ send_back_notes = [
   the line, you edit it or send it as it is. Up to 9 notes of at most 400
   characters each. An empty list (`send_back_notes = []`) turns the
   suggestions off.
+- `intervene_mode` (`"queue"` or `"steer"`, default `"queue"`): the mode the
+  message line opens in when you press `m` on Work (`Tab` switches it for one
+  message, `M` for the ones after). `queue` delivers when the agent's turn
+  ends; `steer` stops the turn and continues the session with the message.
+  See [Message a running agent](work.md#message-a-running-agent).
+- `intervene_max_chars` (1 to 20000, default 2000): the longest message, in
+  characters. A longer one is refused with its length and the cap.
+- `intervene_confirm_steer` (`true` or `false`, default `true`): steering asks
+  for a second `Enter` before it stops the agent's turn. Turning it off makes
+  one `Enter` enough; queueing never asks.
+
+The three `intervene_*` keys are tolerant: a value that cannot be used (an
+unknown mode, a number out of range, a string where a flag is expected) does
+not keep swarmux from starting. It is reported as a configuration warning,
+with the key and its line, and the default is used.

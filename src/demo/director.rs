@@ -10,6 +10,7 @@ use std::sync::Arc;
 use swarmux_application::hookbus::{StopContext, StopPolicy};
 use swarmux_application::ports::{HookRequest, RunnerMsg};
 use swarmux_application::{GateKeeper, SharedPolicy};
+use swarmux_domain::intervene::{Mode, State};
 use swarmux_domain::telemetry::RateLimit;
 use swarmux_domain::{Actor, AgentEvent, HookEvent, JobId};
 use swarmux_infrastructure::demo::{DemoChecker, DemoClock, ScriptedInbox, ScriptedRunner};
@@ -114,7 +115,8 @@ impl Director {
         self.parts
             .cwds
             .iter()
-            .find(|(name, _)| *name == label)
+            // A continuation of a session (`docs-site-2`) works in its folder.
+            .find(|(name, _)| *name == label.strip_suffix("-2").unwrap_or(label))
             .map(|(_, p)| p.clone())
             .unwrap_or_default()
     }
@@ -136,6 +138,33 @@ impl Director {
                     self.jobs.insert(label, job);
                 }
                 true
+            }
+            Act::Message { label, text } => {
+                let Some(job) = self.job(label) else {
+                    return false;
+                };
+                // The service the Work screen's line goes through.
+                let receipt = app.send_message(job, text, Mode::Queue, false);
+                receipt.state == State::Queued
+            }
+            Act::Follow { label, then } => {
+                let Some(from) = self.jobs.get(label).copied() else {
+                    return false;
+                };
+                let carried = app
+                    .message_receipts(from)
+                    .into_iter()
+                    .find_map(|r| match r.state {
+                        State::Handed { job } | State::Delivered { job, .. } => Some(job),
+                        _ => None,
+                    });
+                match carried {
+                    Some(job) => {
+                        self.jobs.insert(then, job);
+                        true
+                    }
+                    None => false,
+                }
             }
             Act::Init(label) => self.emit(
                 label,

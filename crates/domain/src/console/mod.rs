@@ -17,7 +17,7 @@ mod graph;
 mod metrics;
 mod rank;
 
-pub use actions::{ActionFacts, ActionKind, Allowed, LandFacts, allowed};
+pub use actions::{ActionFacts, ActionKind, Allowed, InterveneFacts, LandFacts, allowed};
 pub use brief::{
     CallState, Digest as BriefDigest, Fallback as GuardFallback, GuardCall, GuardDigest,
     HiddenNotRun, Moment as BriefMoment, RuleAdded, Spend as BriefSpend, TIMELINE_KEPT,

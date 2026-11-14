@@ -206,7 +206,8 @@ pub fn parse_settings(text: &str, path: &Path) -> Result<Settings, ConfigError> 
         settings.missions = crate::config_missions::parse_missions(missions, text, path)?;
     }
     if let Some(console) = raw.console {
-        settings.console = crate::config_console::parse_console(console, text, path)?;
+        settings.console =
+            crate::config_console::parse_console(console, text, path, &mut settings.warnings)?;
     }
     if let Some(followups) = raw.followups {
         settings.followups = crate::config_followups::parse_followups(followups, text, path)?;
@@ -900,6 +901,71 @@ unknown = 1
         for text in bad {
             assert!(parse(&text).is_err(), "{text}");
         }
+    }
+
+    #[test]
+    fn messages_to_agents_queue_by_default_and_steering_asks_first() {
+        use swarmux_domain::intervene::{DEFAULT_MAX_CHARS, Mode};
+        let c = parse("").unwrap().console.intervene;
+        assert_eq!(c.mode, Mode::Queue);
+        assert_eq!(c.max_chars, DEFAULT_MAX_CHARS);
+        assert!(c.confirm_steer);
+        let s = parse(
+            "[console]\nintervene_mode = \"steer\"\nintervene_max_chars = 500\nintervene_confirm_steer = false\n",
+        )
+        .unwrap();
+        assert!(s.warnings.is_empty(), "{:?}", s.warnings);
+        let c = s.console.intervene;
+        assert_eq!(
+            (c.mode, c.max_chars, c.confirm_steer),
+            (Mode::Steer, 500, false)
+        );
+    }
+
+    #[test]
+    fn a_wrong_intervene_key_is_reported_and_the_default_kept() {
+        use swarmux_domain::intervene::{DEFAULT_MAX_CHARS, MAX_MAX_CHARS, Mode};
+        for (text, key) in [
+            ("[console]\nintervene_mode = \"now\"\n", "intervene_mode"),
+            ("[console]\nintervene_mode = 3\n", "intervene_mode"),
+            (
+                "[console]\nintervene_max_chars = 0\n",
+                "intervene_max_chars",
+            ),
+            (
+                "[console]\nintervene_max_chars = -5\n",
+                "intervene_max_chars",
+            ),
+            (
+                "[console]\nintervene_max_chars = \"big\"\n",
+                "intervene_max_chars",
+            ),
+            (
+                &format!("[console]\nintervene_max_chars = {}\n", MAX_MAX_CHARS + 1),
+                "intervene_max_chars",
+            ),
+            (
+                "[console]\nintervene_confirm_steer = \"yes\"\n",
+                "intervene_confirm_steer",
+            ),
+        ] {
+            let s = parse(text).unwrap_or_else(|e| panic!("{text}: {e}"));
+            assert_eq!(s.warnings.len(), 1, "{text}: {:?}", s.warnings);
+            let w = &s.warnings[0];
+            assert!(
+                w.contains(key) && w.contains("line 2") && w.contains("using"),
+                "{w}"
+            );
+            let c = s.console.intervene;
+            assert_eq!(c.mode, Mode::Queue, "{text}");
+            assert_eq!(c.max_chars, DEFAULT_MAX_CHARS, "{text}");
+            assert!(c.confirm_steer, "{text}");
+        }
+        // The rest of the section still loads.
+        let s = parse("[console]\nintervene_mode = \"now\"\nmetrics_hours = 8\n").unwrap();
+        assert_eq!(s.console.metrics_hours, 8);
+        // An unknown key is still an error, as everywhere else.
+        assert!(parse("[console]\nintervene_mood = \"queue\"\n").is_err());
     }
 
     #[test]

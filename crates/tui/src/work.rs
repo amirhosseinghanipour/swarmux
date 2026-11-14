@@ -13,10 +13,11 @@ use swarmux_application::console::{
     OutcomeView,
 };
 use swarmux_domain::Millis;
+use swarmux_domain::intervene::Mode;
 use swarmux_domain::keys::Action;
 
 use crate::keys::{DECIDE_ALWAYS, DECIDE_NO, DECIDE_YES};
-use crate::screens::work::{EVIDENCE, KILL, LAND, RESUME, RETRY, SEND_BACK};
+use crate::screens::work::{EVIDENCE, KILL, LAND, MESSAGE, RESUME, RETRY, SEND_BACK};
 
 /// The tabs of the right pane.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -111,9 +112,28 @@ impl NoteComposer {
     }
 }
 
+/// A message being written to a running agent: which job, the mode it
+/// goes in, and whether steering was asked to be confirmed. Nothing is
+/// sent until the user confirms with Enter.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MessageComposer {
+    pub job: i64,
+    /// What the message is about, for the heading: `job #12 docs-site`.
+    pub about: String,
+    pub mode: Mode,
+    /// Steering was asked to be confirmed: the next Enter is the
+    /// confirmation.
+    pub armed: bool,
+}
+
 /// What the Work screen remembers between frames.
 #[derive(Default)]
 pub struct WorkScreen {
+    /// The message being written, while its line is open.
+    pub message: Option<MessageComposer>,
+    /// The mode the next message opens in (`[console] intervene_mode`, then
+    /// whatever the user switched to).
+    pub mode: Mode,
     /// The note being written, while its line is open.
     pub note: Option<NoteComposer>,
     /// The selected outcome, by id: the list re-ranks as work moves, so
@@ -273,6 +293,7 @@ pub enum Do {
     Resume,
     Evidence,
     SendBack,
+    Message,
 }
 
 /// One line of the ACTIONS panel.
@@ -391,6 +412,20 @@ pub fn action_rows(o: &OutcomeView, hold: Option<&HoldView>) -> Vec<ActionRow> {
             };
             rows.push(row(Do::SendBack, SEND_BACK, "send back", detail, a.enabled));
         }
+    }
+    // Offered while the job runs; for work that ended the reason would only
+    // be noise (pressing the key says it).
+    if let Some(a) = find(o, ActionKind::Intervene).filter(|a| a.enabled) {
+        rows.push(row(
+            Do::Message,
+            MESSAGE,
+            "message",
+            format!(
+                "tell job #{}'s agent something: it reads it when its turn ends, or you stop the turn first",
+                a.job.unwrap_or_default()
+            ),
+            true,
+        ));
     }
     if let Some(a) = find(o, ActionKind::Resume).filter(|a| a.enabled) {
         rows.push(row(
