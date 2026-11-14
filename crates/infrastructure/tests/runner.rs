@@ -34,6 +34,7 @@ fn request(cwd: PathBuf, prompt: &str) -> RunRequest {
         max_budget_usd: None,
         board: false,
         add_dirs: Vec::new(),
+        profile: swarmux_domain::runtime::RuntimeProfile::Inherit,
     }
 }
 

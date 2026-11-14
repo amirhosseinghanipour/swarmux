@@ -37,6 +37,7 @@ fn real_claude_job_reports_init_and_result() {
             max_budget_usd: None,
             board: false,
             add_dirs: Vec::new(),
+            profile: swarmux_domain::runtime::RuntimeProfile::Inherit,
         },
         Box::new(move |m| {
             let _ = tx.send(m);

@@ -1559,6 +1559,7 @@ mod erased {
 }
 
 mod c3;
+mod c5;
 
 #[test]
 fn hidden_checks_that_exist_and_did_not_run_say_so_with_why_never_a_bare_none() {

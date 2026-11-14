@@ -33,6 +33,7 @@ pub mod plan;
 mod progress;
 mod prompt;
 mod review;
+pub mod runtime;
 mod schedule;
 mod session;
 mod subagent;

@@ -1,12 +1,15 @@
 mod review;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
 use swarmux_domain::budget::{Admission, JobClass, is_limit_error};
+use swarmux_domain::runtime::{
+    ProfileInput, ProfileSetting, RuntimeLaunch, RuntimeProfile, resolve_profile,
+};
 use swarmux_domain::telemetry::{
     AgentNode, JobActivity, LimitState, RateLimit, SwarmActivity, TodoStatus, agent_tree,
     context_window,
@@ -19,10 +22,12 @@ use swarmux_domain::{
 
 use crate::gate::ExecutionLog;
 use crate::governor::Governor;
+use crate::ledger::LedgerService;
 use crate::ports::{
     AgentCatalog, AgentRunner, Clock, JobRepository, NewJob, RunRequest, RunSink, RunnerMsg,
     SessionRepository, SystemMonitor, TelemetryStore, Workspace,
 };
+use crate::runtime::{Clearance, LaunchIntent, RepoTrust, RuntimeGate, RuntimeSettings};
 use crate::workspace::WorkspaceStore;
 use crate::worktree::WorktreeService;
 use crate::{
@@ -232,6 +237,31 @@ pub struct JobService {
     on_unreachable: OnUnreachable,
     /// Told about each job as it starts (knowledge).
     starts: Option<Rc<dyn JobStarts>>,
+    /// The agent adapter's launch checks and records.
+    runtime: Option<RuntimeHooks>,
+    /// Profiles chosen for single jobs (`dispatch_with_profile`).
+    chosen: HashMap<JobId, RuntimeProfile>,
+    /// The profile of the job being queued right now.
+    next_profile: Option<RuntimeProfile>,
+    /// The jobs that start a mission's work: the canaries run before them.
+    mission_starts: HashSet<JobId>,
+    /// How each running job was launched, to compare with what it reports.
+    launches: HashMap<JobId, RuntimeLaunch>,
+    /// The ledger entry of the canary that last cleared a start.
+    canary_seq: Option<u64>,
+    /// Why each queued job got the profile it did.
+    profile_reasons: HashMap<JobId, &'static str>,
+    /// The canary entry that cleared each mission start.
+    cleared_by: HashMap<JobId, Option<u64>>,
+}
+
+/// What the service needs to describe, check and record how runs launch.
+#[derive(Clone)]
+struct RuntimeHooks {
+    gate: Rc<dyn RuntimeGate>,
+    ledger: Rc<LedgerService>,
+    settings: RuntimeSettings,
+    trust: Rc<dyn RepoTrust>,
 }
 
 /// A job that just started, as [`JobStarts`] sees it.
@@ -275,6 +305,9 @@ struct Lineage {
     repos: Option<Vec<String>>,
     /// Nobody watches it: a mission's job, or one continuing such a job.
     unattended: bool,
+    /// It starts a mission's work (not a continuation or a review): the
+    /// canaries run before it.
+    mission_start: bool,
 }
 
 /// How often stale worktrees are looked for.
@@ -330,7 +363,50 @@ impl JobService {
             unattended: UnattendedJobs::new(),
             on_unreachable: OnUnreachable::default(),
             starts: None,
+            runtime: None,
+            chosen: HashMap::new(),
+            next_profile: None,
+            mission_starts: HashSet::new(),
+            launches: HashMap::new(),
+            canary_seq: None,
+            profile_reasons: HashMap::new(),
+            cleared_by: HashMap::new(),
         }
+    }
+
+    /// Describes how every run launches and clears the runs nobody watches
+    /// (a mission's) with `gate` before they start. `trust` says which
+    /// repositories may load their own agent configuration.
+    pub fn with_runtime(
+        mut self,
+        gate: Rc<dyn RuntimeGate>,
+        ledger: Rc<LedgerService>,
+        settings: RuntimeSettings,
+        trust: Rc<dyn RepoTrust>,
+    ) -> JobService {
+        self.runtime = Some(RuntimeHooks {
+            gate,
+            ledger,
+            settings,
+            trust,
+        });
+        self
+    }
+
+    /// Queues `prompt` like [`JobService::dispatch`], to run with `profile`
+    /// whatever the `[runtime] profile` setting says. A reviewer is
+    /// controlled regardless. (A mission's own choice of profile, and a
+    /// pack's, come through here once the contract has a place for it.)
+    pub fn dispatch_with_profile(
+        &mut self,
+        session_id: SessionId,
+        prompt: &str,
+        profile: RuntimeProfile,
+    ) -> AppResult<JobId> {
+        self.next_profile = Some(profile);
+        let queued = self.dispatch(session_id, prompt);
+        self.next_profile = None;
+        queued
     }
 
     /// Tells `starts` about every job as it starts.
@@ -638,6 +714,7 @@ impl JobService {
             wants_review: self.review_next(),
             cap,
             unattended: true,
+            mission_start: true,
             ..Lineage::default()
         };
         self.enqueue(session_id, prompt, None, None, false, lineage)
@@ -657,6 +734,7 @@ impl JobService {
             cap,
             base: Some(base.to_string()),
             unattended: true,
+            mission_start: true,
             ..Lineage::default()
         };
         self.enqueue(session_id, prompt, None, None, false, lineage)
@@ -677,6 +755,7 @@ impl JobService {
             cap,
             repos: Some(repos.to_vec()),
             unattended: true,
+            mission_start: true,
             ..Lineage::default()
         };
         self.enqueue(session_id, prompt, None, None, false, lineage)
@@ -723,6 +802,7 @@ impl JobService {
             inherits: Some(id),
             cap: self.caps.get(&id).copied(),
             unattended: self.unattended.contains(id),
+            mission_start: false,
             ..Lineage::default()
         };
         self.enqueue(
@@ -786,6 +866,7 @@ impl JobService {
             base: None,
             repos: None,
             unattended: self.unattended.contains(id),
+            mission_start: false,
         };
         self.enqueue(
             job.session_id,
@@ -884,6 +965,7 @@ impl JobService {
             base: None,
             repos: None,
             unattended: self.unattended.contains(id),
+            mission_start: false,
         };
         let model = restart.model.unwrap_or(job.model);
         let new = self.enqueue(
@@ -1256,6 +1338,7 @@ impl JobService {
             base: None,
             repos: self.scopes.get(&id).cloned(),
             unattended: self.unattended.contains(id),
+            mission_start: false,
         };
         self.enqueue(
             job.session_id,
@@ -1284,6 +1367,7 @@ impl JobService {
             base,
             repos,
             unattended,
+            mission_start,
         } = lineage;
         let prompt = prompt.trim();
         if prompt.is_empty() {
@@ -1307,6 +1391,12 @@ impl JobService {
         let id = self.jobs.insert(&new, now)?;
         if unattended || review_of.is_some() {
             self.unattended.mark(id);
+        }
+        if mission_start {
+            self.mission_starts.insert(id);
+        }
+        if let Some(profile) = self.next_profile.take() {
+            self.chosen.insert(id, profile);
         }
         if let Some(cap) = cap.filter(|c| c.is_finite() && *c > 0.0) {
             self.caps.insert(id, cap);
@@ -1531,6 +1621,89 @@ impl JobService {
         }
     }
 
+    /// The profile the job at `i` launches with, once a run nobody watches
+    /// is cleared to start. `None` leaves the job queued: its canaries are
+    /// still running, or they refused it (then it has failed).
+    fn clear_launch(&mut self, i: usize, session: &Session) -> AppResult<Option<RuntimeProfile>> {
+        let id = self.tracked[i].job.id;
+        let review = self.tracked[i].job.review_of.is_some();
+        let unattended = review || self.unattended.contains(id);
+        let rt = self.runtime.clone();
+        let (profile, reason) = resolve_profile(ProfileInput {
+            setting: rt
+                .as_ref()
+                .map_or(ProfileSetting::Auto, |r| r.settings.profile),
+            chosen: self.chosen.get(&id).copied(),
+            unattended,
+            review,
+            trusted: rt.as_ref().is_some_and(|r| r.trust.trusted(&session.cwd)),
+        });
+        self.profile_reasons.insert(id, reason);
+        let Some(rt) = rt else {
+            return Ok(Some(profile));
+        };
+        if !self.mission_starts.contains(&id) {
+            return Ok(Some(profile));
+        }
+        let now = self.clock.now();
+        match rt.gate.clearance(profile) {
+            Clearance::Pending => Ok(None),
+            Clearance::Cleared(report) => {
+                if let Some(report) = report {
+                    self.canary_seq = rt
+                        .ledger
+                        .record_canary(Some(id), Some(session.id), &report, now)
+                        .ok();
+                }
+                self.mission_starts.remove(&id);
+                self.cleared_by.insert(id, self.canary_seq);
+                Ok(Some(profile))
+            }
+            Clearance::Refused { why, report } => {
+                let _ = rt
+                    .ledger
+                    .record_canary(Some(id), Some(session.id), &report, now);
+                self.mission_starts.remove(&id);
+                if let Some(result) = self.tracked[i]
+                    .progress
+                    .fail(&format!("refused before starting: {why}"), 0)
+                {
+                    self.tracked[i].job.status = JobStatus::Failed;
+                    self.jobs.save_result(id, &result)?;
+                    self.jobs.set_status(id, JobStatus::Failed, now)?;
+                }
+                Ok(None)
+            }
+        }
+    }
+
+    /// Hands the ledger how the job launches, for its `job_started` entry.
+    fn record_launch(&mut self, i: usize, id: JobId, profile: RuntimeProfile, lean: bool) {
+        let Some(rt) = self.runtime.clone() else {
+            return;
+        };
+        let job = &self.tracked[i].job;
+        let intent = LaunchIntent {
+            job: id,
+            profile,
+            review: job.review_of.is_some(),
+            board: self.board.as_ref().is_some_and(|b| b.is_member(id)),
+            unattended: job.review_of.is_some() || self.unattended.contains(id),
+            lean,
+        };
+        let Some(mut launch) = rt.gate.launch(&intent) else {
+            return;
+        };
+        launch.profile_reason = self
+            .profile_reasons
+            .remove(&id)
+            .unwrap_or_default()
+            .to_string();
+        launch.canary_seq = self.cleared_by.remove(&id).flatten();
+        self.jobs.stage_runtime(id, &launch);
+        self.launches.insert(id, launch);
+    }
+
     fn start(&mut self, id: JobId) -> AppResult<()> {
         let Some(i) = self.find(id) else {
             return Ok(());
@@ -1545,6 +1718,9 @@ impl JobService {
             }
             return Ok(());
         };
+        let Some(profile) = self.clear_launch(i, &session)? else {
+            return Ok(());
+        };
         let resume = self.sessions.has_started(session_id)?;
         let Workdir { cwd, env, add_dirs } = match self.workdir(i, &session) {
             Ok(dir) => dir,
@@ -1557,6 +1733,7 @@ impl JobService {
                 return Ok(());
             }
         };
+        self.record_launch(i, id, profile, session.lean);
         self.jobs.set_status(id, JobStatus::Running, now)?;
         self.sessions.touch(session_id, now)?;
         if let Some(starts) = &self.starts {
@@ -1638,6 +1815,7 @@ impl JobService {
             max_budget_usd: cap,
             board: self.board.as_ref().is_some_and(|b| b.is_member(id)),
             add_dirs,
+            profile,
         };
         t.progress.command = self.runner.command_line(&request);
         let tx = self.tx.clone();
@@ -1700,6 +1878,13 @@ impl JobService {
                         &describe(&ev),
                         now,
                     )?;
+                }
+                if let (AgentEvent::Environment(env), Some(rt)) = (&ev, &self.runtime) {
+                    let observed = rt.gate.observe(self.launches.get(&job_id), env);
+                    let session = Some(self.tracked[i].job.session_id);
+                    let _ = rt
+                        .ledger
+                        .record_runtime_observed(job_id, session, &observed, now);
                 }
                 if let AgentEvent::SessionState(state) = &ev {
                     self.tracked[i].session_state = Some(*state);

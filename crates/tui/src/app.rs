@@ -154,6 +154,8 @@ pub struct App {
     pub work_screen: crate::work::WorkScreen,
     /// The Deck screen: its selection, focus and scroll.
     pub deck_screen: crate::deck::DeckScreen,
+    /// The Return brief: its window, digest and view.
+    pub brief: crate::brief::BriefScreen,
     /// What `[deck]` of the config asks of the Deck, checked.
     pub(crate) deck_layout: swarmux_domain::console::DeckLayout,
     /// Jobs, the Guard, hooks, the gate, the watchdog, missions and the
@@ -172,7 +174,7 @@ pub struct App {
     /// Bundles, their verification and outcome labels.
     evidence: Option<Rc<EvidenceService>>,
     /// When the user was last here: what happened since is the digest.
-    away_since: Option<Millis>,
+    pub(crate) away_since: Option<Millis>,
     clock: Option<Rc<dyn Clock>>,
     pub(crate) session_service: SessionService,
     pub(crate) prompt_service: PromptService,
@@ -350,6 +352,7 @@ impl App {
             followup_screen: Default::default(),
             work_screen: Default::default(),
             deck_screen: Default::default(),
+            brief: Default::default(),
             deck_layout: Default::default(),
             engine: Engine::new(jobs, guard),
             console: ConsoleService::new(),
@@ -647,6 +650,13 @@ impl App {
         away_since: Option<Millis>,
     ) -> App {
         self.attach_evidence(evidence, away_since);
+        self
+    }
+
+    /// When the user was last here, if the app does not know from the
+    /// ledger (the demo plays its night first and then says so).
+    pub fn with_away_since(mut self, at: Millis) -> App {
+        self.away_since = Some(at);
         self
     }
 
@@ -1547,6 +1557,12 @@ impl App {
     /// Shows `to`, remembering the screen being left for `Esc`.
     pub(crate) fn navigate(&mut self, to: Screen) {
         self.nav.visit(self.screen, to);
+        self.switch_to(to);
+    }
+
+    /// Shows `to` without remembering the screen being left: `Esc` there
+    /// does not come back.
+    pub(crate) fn skip_to(&mut self, to: Screen) {
         self.switch_to(to);
     }
 

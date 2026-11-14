@@ -3,6 +3,7 @@
 
 pub mod anim;
 pub mod board;
+pub mod brief;
 pub mod confirm;
 pub mod constellation;
 pub mod dashboard;

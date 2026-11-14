@@ -51,37 +51,6 @@ other than 1 or 2 is refused with its number. A fixture in the repository
 (`crates/domain/src/evidence/fixtures/bundle_v1.json`) pins the version 1
 bytes and its signature, which was also recomputed with `sha256sum`.
 
-### What a bundle says about how it was checked (schema 2)
-
-A tick says the gate passed; it does not say how. A bundle of schema 2 has a
-`verification` object, read from the passing verdict's ledger entry, so it
-never shows more certainty than the run had:
-
-| Key | Says |
-| --- | --- |
-| `ran_in` | `clean_copy`, or `worktree` when the checks ran next to what the agent left (a mission is only delivered like that when its `gates.toml` says `worktree_checks = "allow"`) |
-| `planned`, `left_out` | the checks the gate meant to run, and those it left out with why (a level above the gate's) |
-| `hidden_not_run` | how many hidden checks exist and did not run, and why: `hidden checks: not run (reason)`. The `hidden` count beside it is only for checks that did run |
-| `base_suite` | whether the original tests passed with the job's code, and which files were put back |
-| `tampering`, `substrate`, `dependencies` | tests weakened, harness files created or changed, dependencies added or changed: what the gate found and let by |
-| `revert_probe` | whether the tests proved the change, when the probe ran |
-| `incomplete` | why the gate could not vouch, if it could not |
-| `policy_sha256` | the hash of the gate configuration that judged |
-
-`swarmux verify` prints what it says as findings that do not mismatch (`checks
-ran in: the worktree, next to what the agent left`, `hidden checks: not run
-(...)`, `planned check <name>: not run`): they are what the bundle does not
-establish. A bundle sealed before schema 2 prints `how it was checked: not
-recorded`.
-
-**Schema versions.** The bundle format is `schema` 2. Bundles of schema 1 are
-still read and verify as they always did: their digest covers the bytes they
-were sealed with, no new key is written into them when they are read back,
-and nothing is added to the digest of a bundle that already has one. Anything
-other than 1 or 2 is refused with its number. A fixture in the repository
-(`crates/domain/src/evidence/fixtures/bundle_v1.json`) pins the version 1
-bytes and its signature, which was also recomputed with `sha256sum`.
-
 ```sh
 swarmux verify fast-search          # by mission
 swarmux verify .swarmux/evidence/fast-search.json
@@ -172,7 +141,7 @@ database can in principle also ask the keychain for the key (or read it from
 checkpoint` says), delete the checkpoints and sign new ones. Checkpoints
 raise the bar from "edit a file" to "edit a file and use the key" and make
 the earlier history committed to something the database does not hold by
-itself. The strong guarantee comes from a copy outside the machine's reach:
+itself. A stronger protection comes from a copy outside the machine's reach:
 export the checkpoints now and then (a gist, an email to yourself) and verify
 against them. On Linux the keychain may not survive a reboot; then a new key
 is made, and earlier checkpoints still verify against their own recorded key
@@ -203,6 +172,34 @@ or `undelivered` (with the `reason`, and `queued_seq` pointing at the first
 entry). A message refused before it was taken (empty, too long, the job not
 running) is not recorded: nothing was sent.
 
+## What a run was launched with, and what it reported
+
+The `job_started` entry carries a `runtime` object when swarmux launched the
+job through an agent adapter (Claude Code): `runtime` (`claude-code`),
+`profile` (`inherit` or `controlled`) and `profile_reason`, `version` as
+found at start and `version_standing` (`tested`, `above_tested`,
+`below_tested`, `below_floor`, `unknown`), `sources` (the settings files it
+loads: `default`, a list, or `none`), `strict_mcp`, `on_failure_block`,
+`settings_hash` (SHA-256 of the `--settings` JSON swarmux generated),
+`host_policy` (`sources`, `locks`, `unreadable` and `blocks` of Claude Code's
+managed settings as read), `policy_sha256` (the `[runtime]` settings that
+decided it) and `canary_seq`, the entry of the canary that
+cleared it (null for a job that needed none). An entry written before this
+existed has no `runtime`, and verifies as before.
+
+Entries of kind `runtime` are written next to it:
+
+- `canary`: the checks run before an unattended mission's job started
+  (`version`, `host_policy`, `deny`), each with its `status` (`pass`, `fail`,
+  `note`, `inconclusive`, `skipped`), whether it was `required` and what was
+  seen, `passed`, and `policy_sha256`, the `[runtime]` settings that decided
+  what to do with it. A refused job has one of these and no `job_started`.
+- `observed`: what the agent said about itself in `system/init` once it was
+  running: `version`, `permission_mode`, the number of `tools` and `plugins`,
+  the `mcp_servers` as `name=status`, `capabilities`, and `mismatches`, the places
+  where that differs from what was asked (another version than the one found at
+  start; an MCP server in a controlled run that is not swarmux's).
+
 ## Changes to the policy and gaps in it
 
 Entries of kind `policy` record what changes what the [Guard](guard.md)
@@ -212,14 +209,6 @@ allows, and where it could not decide:
   was added, removed by `swarmux guard rules remove`, or pruned after its expiry
   (`rule`, `scope`, `root`, `source`, `created_at`, `expires_at` and the SHA-256
   of the rule as kept; the actor is `operator`).
-- `gate_selftest`: `swarmux gate selftest` ran. Each known-bad change it made
-  in a scratch copy and whether the gate refused it (`probes`), the probes it
-  could not make (`skipped`), the outcome (`pass` only when at least one was
-  made and all were refused), the repository, and the SHA-256 of the gate
-  configuration that judged (`policy_sha256`; the actor is `operator`).
-- `holdout_migrated`: hidden checks kept under a repository's folder name moved
-  to its identity key (`from`, `to`; the actor is `operator`). See [the
-  verifier](verifier.md#how-hidden-checks-are-kept-per-repository).
 - `gate_selftest`: `swarmux gate selftest` ran. Each known-bad change it made
   in a scratch copy and whether the gate refused it (`probes`), the probes it
   could not make (`skipped`), the outcome (`pass` only when at least one was

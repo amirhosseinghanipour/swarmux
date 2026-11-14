@@ -175,6 +175,7 @@ fn a_real_job_records_session_start_tool_use_and_stop() {
             max_budget_usd: None,
             board: false,
             add_dirs: Vec::new(),
+            profile: swarmux_domain::runtime::RuntimeProfile::Inherit,
         },
         Box::new(move |m| {
             let _ = tx.send(m);

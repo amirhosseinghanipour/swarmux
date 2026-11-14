@@ -609,7 +609,7 @@ impl Registry {
         ));
         r.register(list(
             "worktree.copy",
-            "[\".env\", \".env.local\", \".claude/settings.local.json\"]",
+            "[\".env\", \".env.local\", \".claude/settings.local.json\", \"CLAUDE.local.md\"]",
             "Files copied from the main checkout into each worktree.",
         ));
         r.register(int(
@@ -920,6 +920,118 @@ impl Registry {
             "Standing orders: `[[followups.order]]` tables that act on follow-ups by themselves.",
         )
         .grants());
+
+        // [brief]: read whole, with its own lint (`swarmux return-brief lint`).
+        r.register(whole(
+            "brief",
+            Ty::Table,
+            "",
+            "The return brief: `away_after_minutes` (default 30), `show_on_attach`, `esc_goes_to` (see `swarmux return-brief lint`).",
+        ));
+
+        // [runtime]: how Claude Code is launched.
+        r.register_section(
+            "runtime",
+            "How jobs launch Claude Code: profiles, canaries, trusted folders.",
+        );
+        r.register(
+            one_of(
+                "runtime.profile",
+                &["auto", "inherit", "controlled"],
+                "\"auto\"",
+                "inherit loads the user's and the repository's Claude Code settings; controlled loads only `controlled_sources` and a generated MCP config; auto makes unattended jobs in untrusted folders controlled.",
+            )
+            .lock(order(&["controlled", "auto", "inherit"]))
+            .restricts()
+            .invalid_as("\"controlled\""),
+        );
+        r.register(
+            whole(
+                "runtime.controlled_sources",
+                Ty::StrList,
+                "[\"user\"]",
+                "Claude Code settings files a controlled job loads (user, project, local). Naming project or local lets a repository steer the agent.",
+            )
+            .grants(),
+        );
+        r.register(
+            whole(
+                "runtime.reviewer_sources",
+                Ty::StrList,
+                "[]",
+                "Settings files the reviewer loads; the reviewer is always controlled.",
+            )
+            .grants(),
+        );
+        r.register(
+            one_of(
+                "runtime.canary",
+                &["each", "cached", "off"],
+                "\"each\"",
+                "When the deny canary runs before an unattended job.",
+            )
+            .lock(order(&["each", "cached", "off"]))
+            .restricts(),
+        );
+        r.register(int(
+            "runtime.canary_cache_minutes",
+            "60",
+            1.0,
+            1440.0,
+            "How long a passed canary is reused (canary = cached).",
+        ));
+        r.register(int(
+            "runtime.canary_timeout_secs",
+            "90",
+            10.0,
+            600.0,
+            "How long a canary may take.",
+        ));
+        r.register(
+            one_of(
+                "runtime.on_error",
+                &["refuse", "warn"],
+                "\"refuse\"",
+                "A canary that cannot run refuses the job, or only warns.",
+            )
+            .lock(order(&["refuse", "warn"]))
+            .restricts()
+            .invalid_as("\"refuse\""),
+        );
+        r.register(
+            one_of(
+                "runtime.hook_failure",
+                &["auto", "block", "off"],
+                "\"auto\"",
+                "Whether the PreToolUse hook carries onFailure=block.",
+            )
+            .lock(order(&["block", "auto", "off"]))
+            .restricts(),
+        );
+        r.register(one_of(
+            "runtime.statusline",
+            &["auto", "on", "off"],
+            "\"auto\"",
+            "Whether swarmux's status line replaces yours.",
+        ));
+        r.register(
+            whole(
+                "runtime.repos",
+                Ty::Any,
+                "",
+                "`[runtime.repos.\"<folder>\"] trusted = true`: folders whose own Claude Code settings an unattended job may load.",
+            )
+            .grants(),
+        );
+        r.register(
+            whole(
+                "runtime.mcp",
+                Ty::Any,
+                "",
+                "`[runtime.mcp.<name>]`: MCP servers (a command or a url) a controlled job may use.",
+            )
+            .grants(),
+        );
         r
     }
 }

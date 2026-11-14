@@ -20,16 +20,16 @@ fn every_screen_is_registered_once_with_its_own_id_title_and_nav_action() {
     let mut ids: Vec<_> = all().map(Screen::id).collect();
     let mut titles: Vec<_> = all().map(Screen::title).collect();
     let mut navs: Vec<_> = all().map(|s| s.def().nav_action()).collect();
-    assert_eq!(ids.len(), 12);
+    assert_eq!(ids.len(), 13);
     ids.sort_unstable();
     ids.dedup();
     titles.sort_unstable();
     titles.dedup();
     navs.sort();
     navs.dedup();
-    assert_eq!(ids.len(), 12, "ids differ");
-    assert_eq!(titles.len(), 12, "titles differ");
-    assert_eq!(navs.len(), 12, "nav actions differ");
+    assert_eq!(ids.len(), 13, "ids differ");
+    assert_eq!(titles.len(), 13, "titles differ");
+    assert_eq!(navs.len(), 13, "nav actions differ");
     for screen in all() {
         assert_eq!(screen.def().id(), screen);
         assert_eq!(nav_target(screen.def().nav_action()), Some(screen));

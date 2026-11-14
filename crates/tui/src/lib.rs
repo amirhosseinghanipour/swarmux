@@ -5,6 +5,7 @@
 
 mod app;
 mod board;
+mod brief;
 mod dashboard;
 mod deck;
 mod deck_actions;

@@ -17,10 +17,11 @@ use tokio::process::Command;
 use tokio::runtime::Handle;
 use tokio::task::AbortHandle;
 
-use super::command::{build_args, display, env_for, user_message};
+use super::command::{build_args_with, display, env_for, user_message};
 use super::contention::{self, is_config_contention};
 use super::parse::parse_line;
-use crate::hook::{ENV_JOB, ENV_PIPE, ENV_SPOOL, hook_settings_with};
+use super::runtime::launch::LaunchSpec;
+use crate::hook::{ENV_JOB, ENV_PIPE, ENV_SPOOL};
 use crate::process::{Stagger, random_below, spawn_tokio};
 
 /// Makes `claude` report `system/session_state_changed` on stdout.
@@ -35,15 +36,14 @@ type Running = Arc<Mutex<HashMap<JobId, AbortHandle>>>;
 pub struct ClaudeCli {
     bin: PathBuf,
     env: Vec<(String, String)>,
-    guard: Option<GuardHook>,
-    board: Option<BoardMcp>,
+    /// The guard's hook, the Board's server and the profile settings that
+    /// shape every launch.
+    spec: LaunchSpec,
     rt: Handle,
     running: Running,
     stagger: Arc<Stagger>,
     /// Where each job's hook leaves what it could not ask the app.
     spool: Option<PathBuf>,
-    /// Add `onFailure: "block"` to the PreToolUse hook.
-    on_failure_block: bool,
 }
 
 /// The Board's MCP server, added to the jobs on a mission's board.
@@ -57,13 +57,18 @@ pub struct BoardMcp {
 
 impl BoardMcp {
     /// `--mcp-config` and `--allowedTools` for `job`.
-    fn args(&self, job: JobId) -> [String; 4] {
+    pub(super) fn args(&self, job: JobId) -> [String; 4] {
         [
             "--mcp-config".into(),
-            crate::board::mcp_config(&self.exe, &self.pipe, job.0),
+            self.config_json(job),
             "--allowedTools".into(),
             crate::board::SERVER_NAME_PREFIX.into(),
         ]
+    }
+
+    /// The MCP config registering the Board's server for `job`.
+    pub(super) fn config_json(&self, job: JobId) -> String {
+        crate::board::mcp_config(&self.exe, &self.pipe, job.0)
     }
 }
 
@@ -78,16 +83,6 @@ pub struct GuardHook {
     pub timeout_secs: u64,
 }
 
-impl GuardHook {
-    /// `--settings` and its JSON.
-    fn args(&self, on_failure_block: bool) -> [String; 2] {
-        [
-            "--settings".into(),
-            hook_settings_with(&self.exe, self.timeout_secs, on_failure_block),
-        ]
-    }
-}
-
 /// The map stays usable even if a task panicked while holding the lock.
 fn lock(running: &Running) -> MutexGuard<'_, HashMap<JobId, AbortHandle>> {
     running.lock().unwrap_or_else(|e| e.into_inner())
@@ -98,13 +93,11 @@ impl ClaudeCli {
         ClaudeCli {
             bin,
             env: Vec::new(),
-            guard: None,
-            board: None,
+            spec: LaunchSpec::default(),
             rt,
             running: Running::default(),
             stagger: Stagger::shared(),
             spool: None,
-            on_failure_block: false,
         }
     }
 
@@ -117,7 +110,14 @@ impl ClaudeCli {
 
     /// Adds `onFailure: "block"` to the PreToolUse hook of every job.
     pub fn with_on_failure_block(mut self, on: bool) -> ClaudeCli {
-        self.on_failure_block = on;
+        self.spec.on_failure_block = on;
+        self
+    }
+
+    /// Launches with `spec`: the guard, the Board and the profile settings
+    /// the runtime was given too.
+    pub fn with_spec(mut self, spec: LaunchSpec) -> ClaudeCli {
+        self.spec = spec;
         self
     }
 
@@ -128,13 +128,13 @@ impl ClaudeCli {
 
     /// Routes every job's tool calls through the guard's hook.
     pub fn with_guard(mut self, guard: GuardHook) -> ClaudeCli {
-        self.guard = Some(guard);
+        self.spec.guard = Some(guard);
         self
     }
 
     /// Registers the board's MCP server for the jobs that are on a board.
     pub fn with_board(mut self, board: BoardMcp) -> ClaudeCli {
-        self.board = Some(board);
+        self.spec.board = Some(board);
         self
     }
 
@@ -156,29 +156,26 @@ impl AgentRunner for ClaudeCli {
         let bin = self.bin.clone();
         let mut env = self.env.clone();
         let job = request.job_id;
-        let mut extra_args = Vec::new();
         // Exact idle / running / requires_action instead of guessing.
         env.push((ENV_SESSION_STATE.into(), "1".into()));
         // A workspace job's repositories load their own instructions.
         env.extend(env_for(&request));
-        if let Some(guard) = &self.guard {
-            extra_args.extend(guard.args(self.on_failure_block));
+        let extra_args = self.spec.extra_args(&request);
+        if let Some(guard) = &self.spec.guard {
             env.push((ENV_PIPE.into(), guard.pipe.clone()));
             env.push((ENV_JOB.into(), job.to_string()));
             if let Some(spool) = &self.spool {
                 env.push((ENV_SPOOL.into(), spool.to_string_lossy().into_owned()));
             }
         }
-        if let (Some(board), true) = (&self.board, request.board) {
-            extra_args.extend(board.args(job));
-        }
+        let launch = self.spec.config.clone();
         let running = self.running.clone();
         let stagger = self.stagger.clone();
         // Held until the handle is stored, so a job that ends at once still
         // finds (and removes) its own entry.
         let mut map = lock(&self.running);
         let task = self.rt.spawn(async move {
-            run(bin, env, extra_args, request, sink, stagger).await;
+            run(bin, env, extra_args, launch, request, sink, stagger).await;
             lock(&running).remove(&job);
         });
         map.insert(job, task.abort_handle());
@@ -191,13 +188,8 @@ impl AgentRunner for ClaudeCli {
     }
 
     fn command_line(&self, request: &RunRequest) -> Option<String> {
-        let mut args = build_args(request);
-        if let Some(guard) = &self.guard {
-            args.extend(guard.args(self.on_failure_block));
-        }
-        if let (Some(board), true) = (&self.board, request.board) {
-            args.extend(board.args(request.job_id));
-        }
+        let mut args = build_args_with(request, &self.spec.config);
+        args.extend(self.spec.extra_args(request));
         Some(display(&args))
     }
 }
@@ -217,12 +209,13 @@ async fn run(
     bin: PathBuf,
     env: Vec<(String, String)>,
     extra_args: Vec<String>,
+    launch: super::runtime::launch::LaunchConfig,
     req: RunRequest,
     mut sink: RunSink,
     stagger: Arc<Stagger>,
 ) {
     let mut cmd = Command::new(&bin);
-    cmd.args(build_args(&req))
+    cmd.args(build_args_with(&req, &launch))
         .args(extra_args)
         .envs(env)
         .envs(req.env.iter().map(|(k, v)| (k, v)))

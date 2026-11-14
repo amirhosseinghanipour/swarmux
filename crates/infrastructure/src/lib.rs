@@ -8,6 +8,7 @@ pub mod clean_checkout;
 mod clock;
 pub mod config;
 mod config_board;
+mod config_brief;
 mod config_console;
 mod config_deck;
 pub mod config_edit;
@@ -19,6 +20,7 @@ pub mod config_layers;
 mod config_missions;
 mod config_notify;
 pub mod config_registry;
+mod config_runtime;
 pub mod config_schema;
 mod config_telemetry;
 mod config_watchdog;
@@ -54,8 +56,8 @@ pub mod worktree;
 pub use agents::FsAgentCatalog;
 pub use anchor::MinisignSigner;
 pub use claude_cli::{
-    BoardMcp, ClaudeCli, ClaudePlanner, GuardHook, HaikuDiagnoser, HaikuExtractor, HaikuLinter,
-    HaikuRouter,
+    BoardMcp, ClaudeCli, ClaudePlanner, ClaudeRuntime, GuardHook, HaikuDiagnoser, HaikuExtractor,
+    HaikuLinter, HaikuRouter,
 };
 pub use clean_checkout::{GitCleanCheckout, holdout_key};
 pub use clock::SystemClock;

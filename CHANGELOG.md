@@ -29,6 +29,60 @@ follows [Semantic Versioning](https://semver.org/).
   a version, 12 months of deprecation, `COMPAT(...)` tags) and
   [SECURITY-MODEL.md](SECURITY-MODEL.md) (failure semantics, trust tiers, what is
   not a security boundary, the integrity invariants).
+- The Return brief (`g b`). After a gap (`[brief] away_after_minutes`, default
+  30) swarmux starts on a screen that says what happened while you were away:
+  what landed with its evidence bundle, what is verified and ready to land,
+  the decisions waiting (ranked as in Work, each with its auto-deny countdown
+  or what waits on it), what stopped, what the jobs cost, claim to verified
+  and the first-run pass rate with their sample sizes, the Guard's exceptions
+  (held and refused calls with their rule, calls that fell back because
+  swarmux was not reachable, always-allow rules added), hidden checks that did
+  not run, jobs checked in their own worktree, what landed where, and a
+  timeline. `Enter` opens the first decision in Work, `Esc` skips to Work (or
+  the Deck, `esc_goes_to`). Nothing is invented: no estimate of your time, no
+  day budget, a missing figure is unknown and never zero. `[brief]` config with
+  `swarmux return-brief lint`; `swarmux --demo --demo-away 60` shows it. See
+  [the guide](guide/brief.md).
+- Claude Code launch profiles and runtime conformance (see [Claude
+  Code](guide/claude-code.md)).
+  - `[runtime] profile` is `"auto"` (default), `"inherit"` or `"controlled"`.
+    `controlled` loads only the settings files named in `controlled_sources`
+    (`["user"]` by default) and passes `--strict-mcp-config` with a generated MCP
+    config (the Board's server and the ones listed under `[runtime.mcp.*]`), so a
+    repository's own `.claude` settings, `.mcp.json`, `CLAUDE.md` and `env` do
+    not load. `auto` makes unattended jobs in folders you have not trusted
+    (`[runtime.repos."<path>"] trusted = true`, until trust records exist)
+    controlled and leaves the rest as they were. The reviewer is always
+    controlled, loading `reviewer_sources` (none by default).
+  - The record of a start: `job_started` carries a `runtime` object (profile and
+    why, version and where it stands against the tested range, settings sources,
+    hash of the generated `--settings`, host policy, the canary that cleared it),
+    and a new ledger kind `runtime` holds the canaries and what `system/init`
+    reported (version, tools, MCP servers, plugins, capabilities) next to what
+    was asked. `capabilities` is parsed from `system/init`.
+  - The tested Claude Code range is declared in code (2.1.323) with a floor of
+    2.1.295 (2.1.299 on Windows), where `onFailure` and the Windows hook fix
+    arrived. Below the floor, or with a version that cannot be read, unattended
+    missions are refused; outside the tested range `swarmux doctor` warns.
+  - Before an unattended mission's job starts, a deny canary (one tiny `claude`
+    call) checks that the Guard's hook is run and honoured, and refuses the job
+    when it is not; the result is ledgered. `[runtime] canary` is `"each"`,
+    `"cached"` or `"off"`, `on_error` `"refuse"` (default) or `"warn"`.
+  - `swarmux doctor --conformance [--profile controlled|inherit]` runs the whole
+    canary set (deny, hook exit 1, hook timeout, invalid JSON, subagent, and the
+    Guard's own unknown-tool and subagent checks) and fails when a required one
+    does.
+  - A host policy probe reads Claude Code's managed settings (the files, the
+    Windows registry) and reports `allowManagedHooksOnly`,
+    `allowManagedPermissionRulesOnly`, `disableAllHooks` and managed MCP in
+    `swarmux doctor` and the ledger; a mission whose Guard hook would be dropped
+    is refused.
+  - `CLAUDE.local.md` is copied into new worktrees by default. swarmux's status
+    line replaces yours only when you have none (`[runtime] statusline`). The
+    guard hook's `onFailure: "block"` is now added by default for versions that
+    know it (`[runtime] hook_failure`; `[guard] hook_on_failure_block = true`
+    still means always).
+  - `swarmux hook canary <mode>`, the hook the canaries run (hidden).
 
 - Intervene: message a running agent from Work. `m` on a running job opens a
   line (and the stream tab, the conversation so far) and sends your words to its
@@ -415,6 +469,14 @@ follows [Semantic Versioning](https://semver.org/).
   (`~/.config/swarmux` and `~/.local/state/swarmux` on Linux). **An existing
   `~/.swarmux` keeps working where it is; nothing moves.**
 
+- Honest wording: the README and guides now say what the code does. "Proves
+  done" became "decides done with checks it runs itself"; hidden checks are "kept
+  outside the repository and out of the agent's tools", shown as counts, and `not
+  run (reason)` when they could not run; the Guard is described as checking the
+  tool calls Claude Code reports, with its fail modes and a Limits section;
+  budgets name where they are enforced; the tagline gets a definition of
+  "verify". New pages: what leaves your machine, and when you do not need
+  swarmux. No behaviour changed.
 - Hidden checks are kept per repository by its folder name and what it is (its
   remote and root commit), like `shop.id-3fa9c1d2e4b7`, so two folders of one
   name no longer share them. Checks kept under the plain folder name move to the

@@ -76,12 +76,18 @@ pub struct Settings {
     /// What was wrong in lines the loader replaced with defaults, one
     /// message each. Shown on start and by `swarmux doctor`.
     pub warnings: Vec<String>,
+    /// The `[runtime]` section: launch profiles, canaries, trusted folders.
+    pub runtime: crate::runtime::RuntimeSettings,
     /// The `[deck]` section as written: the Deck checks it when it draws
     /// (`swarmux_domain::console::resolve_deck`), so a mistake in it never
     /// stops the file from loading.
     pub deck: swarmux_domain::console::DeckConfig,
     /// Where this configuration came from (tiers, files, a hash).
     pub provenance: Provenance,
+    /// The `[brief]` section as written, checked by
+    /// `swarmux_domain::console::resolve_brief`: a mistake in it never stops
+    /// the file from loading.
+    pub brief: swarmux_domain::console::BriefConfig,
 }
 
 /// The `[board]` section.
@@ -175,6 +181,7 @@ impl Default for WorktreeSettings {
                 ".env".into(),
                 ".env.local".into(),
                 ".claude/settings.local.json".into(),
+                "CLAUDE.local.md".into(),
             ],
             ports: PortPlan::default(),
             stale_hours: 12,
@@ -512,8 +519,10 @@ impl Default for Settings {
             followups: crate::FollowSettings::default(),
             keys: swarmux_domain::keys::KeyConfig::default(),
             warnings: Vec::new(),
+            runtime: crate::runtime::RuntimeSettings::default(),
             deck: swarmux_domain::console::DeckConfig::default(),
             provenance: Provenance::default(),
+            brief: swarmux_domain::console::BriefConfig::default(),
         }
     }
 }
@@ -589,6 +598,19 @@ mod tests {
             (0.97, 2, None)
         );
         assert_eq!(g.policy(), GovernorPolicy::default());
+    }
+
+    #[test]
+    fn new_worktrees_get_the_untracked_instruction_files_too() {
+        let copy = Settings::default().worktree.copy;
+        for file in [
+            ".env",
+            ".env.local",
+            ".claude/settings.local.json",
+            "CLAUDE.local.md",
+        ] {
+            assert!(copy.contains(&file.to_string()), "{file}");
+        }
     }
 
     #[test]

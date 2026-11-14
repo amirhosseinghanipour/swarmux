@@ -14,6 +14,7 @@ use crate::app::App;
 use crate::theme::Theme;
 
 pub(crate) mod board;
+pub(crate) mod brief;
 pub(crate) mod dashboard;
 pub(crate) mod deck;
 pub(crate) mod followups;
@@ -55,6 +56,8 @@ impl Screen {
     pub const Work: Screen = Screen::new("work");
     /// The task graph with what the work needs around it.
     pub const Deck: Screen = Screen::new("deck");
+    /// What happened while the user was away, and what waits.
+    pub const Brief: Screen = Screen::new("brief");
 }
 
 impl Screen {
@@ -94,6 +97,7 @@ const REGISTRY: &[&dyn ScreenDef] = &[
     &mission::Def,
     &deck::Def,
     &work::Def,
+    &brief::Def,
     &missions::Def,
     &prompts::Def,
     &queue::Def,
