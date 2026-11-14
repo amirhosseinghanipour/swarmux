@@ -95,6 +95,9 @@ pub struct BriefView {
     /// Decisions waiting now, in the order Work ranks them.
     pub decisions: Vec<DecisionView>,
     pub decisions_total: usize,
+    /// Still running or queued: nothing to do.
+    pub running: Vec<RunningView>,
+    pub running_total: usize,
     /// Outcomes that stopped or were escalated in the window.
     pub stopped: Vec<StoppedView>,
     pub stopped_total: usize,
@@ -188,6 +191,14 @@ pub struct DecisionView {
     pub deadline_at: Option<Millis>,
     /// What waits on this one: cards whose dependency on it is not met.
     pub blocks: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RunningView {
+    pub id: String,
+    pub title: String,
+    pub lifecycle: Lifecycle,
+    pub since_at: Millis,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -421,6 +432,19 @@ pub fn build_brief(snap: &ConsoleSnapshot, input: &BriefInput<'_>) -> BriefView 
         .map(|o| decision(snap, o, input.now))
         .collect();
 
+    // Still running or queued.
+    let running_all = in_group(GroupKind::Running);
+    let running: Vec<RunningView> = running_all
+        .iter()
+        .take(LIST_CAP)
+        .map(|o| RunningView {
+            id: o.id.clone(),
+            title: o.title.clone(),
+            lifecycle: o.lifecycle,
+            since_at: o.since_at,
+        })
+        .collect();
+
     // Stopped or escalated in the window.
     let stopped_all: Vec<StoppedView> = all
         .iter()
@@ -622,6 +646,8 @@ pub fn build_brief(snap: &ConsoleSnapshot, input: &BriefInput<'_>) -> BriefView 
         ready,
         decisions_total: decide.len(),
         decisions,
+        running_total: running_all.len(),
+        running,
         stopped_total,
         stopped,
         spend,

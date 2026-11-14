@@ -276,6 +276,8 @@ pub fn build(options: &Options) -> anyhow::Result<App> {
 const AWAY_TICKS: u32 = 340;
 
 #[cfg(test)]
+mod brief_tests;
+#[cfg(test)]
 mod deck_tests;
 #[cfg(test)]
 mod tests;

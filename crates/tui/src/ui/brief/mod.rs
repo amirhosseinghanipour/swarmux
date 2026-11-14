@@ -74,8 +74,21 @@ pub(crate) fn render_with(frame: &mut Frame, area: Rect, app: &App, view: &Brief
         );
         return;
     }
+    // The approval and typed-confirm overlays sit on the bottom rows of the
+    // body: leave them room, so no section is hidden under them.
+    let reserved = if matches!(app.mode, crate::app::Mode::Confirm(_)) {
+        crate::ui::confirm::HEIGHT.min(area.height)
+    } else if app.approval_target().is_some() {
+        crate::ui::overlay_rows(app, area.height)
+    } else {
+        0
+    };
+    let area = Rect {
+        height: area.height.saturating_sub(reserved),
+        ..area
+    };
     let folded = folds(area.width, area.height);
-    let head_h = 4u16.min(area.height);
+    let head_h = 5u16.min(area.height);
     let [head, body] =
         Layout::vertical([Constraint::Length(head_h), Constraint::Fill(1)]).areas(area);
     header(frame, head, app, view);
@@ -89,18 +102,50 @@ pub(crate) fn render_with(frame: &mut Frame, area: Rect, app: &App, view: &Brief
             } else if folded {
                 main_sections(frame, body, app, view, true);
             } else {
-                let foot = FOOT_HEIGHT.min(body.height / 3);
-                let [main, foot_area] =
-                    Layout::vertical([Constraint::Fill(1), Constraint::Length(foot)]).areas(body);
-                main_sections(frame, main, app, view, false);
-                let [tl, lw] =
-                    Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
-                        .areas(foot_area);
-                timeline(frame, tl, app, view);
-                lands_where(frame, lw, app, view);
+                // What lands where, as tall as its rows; the timeline sits
+                // under the decisions when they leave room, else beside it.
+                let rows: usize = view.lands_where.iter().map(|r| r.items.len()).sum();
+                let lands_h = u16::try_from(rows + 2)
+                    .unwrap_or(FOOT_HEIGHT)
+                    .clamp(4, FOOT_HEIGHT);
+                let tall = body.height.saturating_sub(lands_h.min(body.height / 3));
+                if timeline_under_decisions(view, tall, false) {
+                    let foot = lands_h.min(body.height / 3);
+                    let [main, foot_area] =
+                        Layout::vertical([Constraint::Fill(1), Constraint::Length(foot)])
+                            .areas(body);
+                    main_sections(frame, main, app, view, false);
+                    lands_where(frame, foot_area, app, view);
+                } else {
+                    let foot = FOOT_HEIGHT.min(body.height / 3);
+                    let [main, foot_area] =
+                        Layout::vertical([Constraint::Fill(1), Constraint::Length(foot)])
+                            .areas(body);
+                    main_sections(frame, main, app, view, false);
+                    let [tl, lw] = Layout::horizontal([
+                        Constraint::Percentage(50),
+                        Constraint::Percentage(50),
+                    ])
+                    .areas(foot_area);
+                    timeline(frame, tl, app, view);
+                    lands_where(frame, lw, app, view);
+                }
             }
         }
     }
+}
+
+/// Whether the timeline fits under the decisions in a column `height` tall
+/// (nothing is running to take that room, and the size does not fold).
+fn timeline_under_decisions(view: &BriefView, height: u16, folded: bool) -> bool {
+    let need: usize = view
+        .decisions
+        .iter()
+        .map(|d| 4 + usize::from(d.detail.is_some()))
+        .sum::<usize>()
+        + 2;
+    let spare = usize::from(height).saturating_sub(need.max(6));
+    view.running.is_empty() && !folded && !view.timeline.is_empty() && spare >= 6
 }
 
 // ---------------------------------------------------------------------
@@ -171,7 +216,7 @@ fn header(frame: &mut Frame, area: Rect, app: &App, view: &BriefView) {
     let t = &app.look.theme;
     let w = usize::from(area.width);
     let offset = (app.utc_offset)();
-    let mut lines: Lines = Vec::new();
+    let mut lines: Lines = vec![Line::default()];
 
     // The window, from and to, and how long it was.
     let mut title = vec![span("WHILE YOU WERE AWAY", bold(t.title))];
@@ -406,7 +451,7 @@ fn nothing(frame: &mut Frame, area: Rect, app: &App, view: &BriefView) {
 fn main_sections(frame: &mut Frame, area: Rect, app: &App, view: &BriefView, folded: bool) {
     let [left, right] =
         Layout::horizontal([Constraint::Percentage(54), Constraint::Percentage(46)]).areas(area);
-    decisions(frame, left, app, view);
+    left_column(frame, left, app, view, folded);
 
     let w = usize::from(right.width).saturating_sub(2);
     let landed_rows = landed_lines(app, view, w).len();
@@ -482,6 +527,71 @@ fn main_sections(frame: &mut Frame, area: Rect, app: &App, view: &BriefView, fol
             Style::new().fg(app.look.theme.dim),
         ))],
     );
+}
+
+/// The decisions at the height they need, and what is still running in
+/// the room below them (nothing to do there, but it says what the agents
+/// are at).
+fn left_column(frame: &mut Frame, area: Rect, app: &App, view: &BriefView, folded: bool) {
+    let need: usize = view
+        .decisions
+        .iter()
+        .map(|d| 4 + usize::from(d.detail.is_some()))
+        .sum::<usize>()
+        + 2;
+    let spare = usize::from(area.height).saturating_sub(need.max(6));
+    let timeline_below = timeline_under_decisions(view, area.height, folded);
+    if (view.running.is_empty() && !timeline_below) || spare < 5 {
+        decisions(frame, area, app, view);
+        return;
+    }
+    let top = area.height - u16::try_from(spare).unwrap_or(0);
+    let [a, b] = Layout::vertical([Constraint::Length(top), Constraint::Fill(1)]).areas(area);
+    decisions(frame, a, app, view);
+    if timeline_below {
+        timeline(frame, b, app, view);
+    } else {
+        running(frame, b, app, view);
+    }
+}
+
+fn running(frame: &mut Frame, area: Rect, app: &App, view: &BriefView) {
+    let t = &app.look.theme;
+    let Some(inner) = open(
+        frame,
+        area,
+        app,
+        &format!("STILL RUNNING {}", view.running_total),
+        "no action needed",
+        t.border,
+    ) else {
+        return;
+    };
+    let w = usize::from(inner.width);
+    let now = app.now();
+    let mut rows: Lines = view
+        .running
+        .iter()
+        .map(|r| {
+            Line::from(vec![
+                span(
+                    format!("{} ", mark(app, Mark::Open)),
+                    Style::new().fg(t.label),
+                ),
+                span(fit(&r.title, w.saturating_sub(16)), Style::new().fg(t.text)),
+                span(
+                    format!(
+                        "  {} · {}",
+                        lifecycle_word(r.lifecycle),
+                        span_text(now - r.since_at)
+                    ),
+                    muted(t),
+                ),
+            ])
+        })
+        .collect();
+    rows.truncate(usize::from(inner.height));
+    paragraph(frame, inner, rows);
 }
 
 /// The sections that fold at a small size, in the main ones' place.
@@ -717,6 +827,49 @@ fn stopped(frame: &mut Frame, area: Rect, app: &App, view: &BriefView) {
     paragraph(frame, inner, lines);
 }
 
+/// Calls the Guard held or refused, with the runs of the same kind (same
+/// state and reason) cut to the first few, and a count of the rest.
+fn collapse(
+    calls: &[swarmux_application::console::GuardCallView],
+) -> (
+    Vec<&swarmux_application::console::GuardCallView>,
+    Vec<(&'static str, String, usize)>,
+) {
+    const KEEP: usize = 3;
+    let word = |s: GuardCallState| match s {
+        GuardCallState::Waiting => "held, waiting",
+        GuardCallState::Held => "held",
+        GuardCallState::HeldAllowed => "held, allowed",
+        GuardCallState::HeldDenied => "held, denied",
+        GuardCallState::Denied => "denied",
+        GuardCallState::Stopped => "stopped",
+    };
+    let mut seen: Vec<(GuardCallState, &str, usize)> = Vec::new();
+    let mut shown = Vec::new();
+    for c in calls {
+        match seen
+            .iter_mut()
+            .find(|(s, r, _)| *s == c.state && *r == c.reason)
+        {
+            Some((_, _, n)) => *n += 1,
+            None => seen.push((c.state, c.reason.as_str(), 1)),
+        }
+        let n = seen
+            .iter()
+            .find(|(s, r, _)| *s == c.state && *r == c.reason)
+            .map_or(0, |x| x.2);
+        if n <= KEEP {
+            shown.push(c);
+        }
+    }
+    let more = seen
+        .into_iter()
+        .filter(|(_, _, n)| *n > KEEP)
+        .map(|(s, r, n)| (word(s), r.to_string(), n - KEEP))
+        .collect();
+    (shown, more)
+}
+
 /// The Guard's exceptions only: held and refused calls with their rule or
 /// reason, then the calls that fell back and the rules added; the routine
 /// allows are one number.
@@ -738,7 +891,8 @@ fn guard_lines(app: &App, view: &BriefView, w: usize) -> Lines {
                 ),
                 muted(t),
             )));
-            for c in &g.calls {
+            let (shown, more) = collapse(&g.calls);
+            for c in shown {
                 let (m, word, color) = match c.state {
                     GuardCallState::Waiting => (mark(app, Mark::Ask), "held, waiting", t.warn),
                     GuardCallState::Held => (mark(app, Mark::Ask), "held", t.warn),
@@ -758,6 +912,18 @@ fn guard_lines(app: &App, view: &BriefView, w: usize) -> Lines {
                 lines.push(Line::from(vec![
                     span(format!("{m} "), Style::new().fg(color)),
                     span(fit(&text, w.saturating_sub(2)), Style::new().fg(t.text)),
+                ]));
+            }
+            for (word, reason, n) in more {
+                lines.push(Line::from(vec![
+                    span(format!("{} ", mark(app, Mark::Idle)), muted(t)),
+                    span(
+                        fit(
+                            &format!("+{n} more, each {word} · {reason}: in Work or the Deck"),
+                            w.saturating_sub(2),
+                        ),
+                        muted(t),
+                    ),
                 ]));
             }
         }
