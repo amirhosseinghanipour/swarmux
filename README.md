@@ -13,18 +13,15 @@
 
 </div>
 
-<!--
-  Demo GIF (render with `vhs assets/tapes/demo.tape`, then uncomment):
-
-  ![swarmux --demo](assets/demo.gif)
-
-  Caption: scripted demo · `swarmux --demo`
--->
-
 swarmux runs Claude Code unattended and holds its work to account. It decides
 whether work is done with checks it runs itself, checks the tool calls Claude
 Code reports to its hook against your rules, stops a job at its cost cap, and
 keeps a hash-chained record of each decision. It starts with Claude Code.
+
+![The swarmux Deck: a task graph of the jobs and tasks with their state and spend, panels for verification, limits and what needs you, the sessions, the Guard's held calls and a timeline, and a held call waiting for an answer at the bottom](assets/screens/deck.png)
+
+*The [Deck](guide/deck.md). Every screenshot here is from `swarmux --demo`, a scripted scenario
+with made-up numbers, not a real run.*
 
 "Verify" in the tagline has one meaning: `swarmux verify` re-runs the checks
 recorded in an evidence bundle on the delivered commit, in a clean checkout,
@@ -81,9 +78,32 @@ own `claude` command line, so swarmux never changes your Claude Code settings
 files. To show swarmux in a session you start yourself, `swarmux statusline
 --print-settings` prints the entry for you to add.
 
-## Themes
+## Screens
 
-<!-- theme strip: assets/themes.png, added with the demo kit -->
+All from `swarmux --demo` ([the scripted demo](guide/install.md#the-scripted-demo)).
+
+![Work: the queue of decisions on the left, the held git push with its risk and the agent's own words before it in the middle, and the keys that answer it at the bottom](assets/screens/work.png)
+
+*[Work](guide/work.md): the call the Guard held, why, and the agent's words
+before it, with the keys that decide it. `y` allows once, and an irreversible
+call needs you to name its target; `n` denies.*
+
+![The Return brief: counts of what landed, what waits and what was spent, the decisions waiting, a timeline, the Guard's exceptions and what landed where](assets/screens/brief.png)
+
+*The [Return brief](guide/brief.md), read from the ledger after the scenario ran
+while you were away (`swarmux --demo --demo-away 60`).*
+
+![The Ledger: every run as a card with its outcome and cost, and the evidence bundle of the delivered job: digest, head, diff, check, gate and cost](assets/screens/ledger.png)
+
+*The [Ledger](guide/ledger-and-evidence.md): each run with its outcome and cost.
+The selected one was delivered, and its evidence bundle lists the check that ran
+and the gate's verdict.*
+
+![The Deck at 120 columns by 36 rows: the task graph as a list, limits, what needs you, the Guard's exceptions and a held call](assets/screens/deck-compact.png)
+
+*The [Deck](guide/deck.md) at 120x36 draws the graph as a list.*
+
+## Themes
 
 Twelve built-in themes, plus `wal`, base16 and matugen imports. List them with
 `swarmux theme list` and export one for your terminal or another tool with

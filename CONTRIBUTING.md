@@ -34,6 +34,30 @@ cargo test -p swarmux --features fake-claude --no-fail-fast
 Windows, Linux and macOS are all supported; CI runs the same checks. Write
 code that does not assume a shell, a path separator or a tmux.
 
+## Screenshots
+
+The images in the README (`assets/screens/*.png`) are captured from
+`swarmux --demo`, the scripted scenario, so they show no real data. One command
+regenerates all of them:
+
+```sh
+scripts/screenshots.sh
+```
+
+It builds a release binary (or uses the one in `SWARMUX_BIN`), plays the demo in
+a `tmux` pane of each size (180x50, plus 120x36 for the compact Deck), waits
+for the scenario to finish, presses the keys that reach each screen, captures
+the pane with its colours and draws it to a PNG with `scripts/render_ansi.py`.
+It needs `tmux`, Python 3 with `pip install pillow` (and optionally
+`fonttools`), a monospace font (JetBrains Mono, else DejaVu Sans Mono; or point
+`SWX_FONT` and `SWX_FONT_BOLD` at TTF files), and runs on Linux or macOS. Set
+`THEME` to capture another built-in theme, and `OUT` to write somewhere else.
+
+Look at every image before you commit it. The held call's countdown and the
+clock-driven figures differ by a little from run to run. If you change the demo
+or a screen, regenerate the images in the same pull request, and keep each PNG
+under about 150 KB.
+
 ## Architecture
 
 The workspace is split in layers. Dependencies point inward only:
