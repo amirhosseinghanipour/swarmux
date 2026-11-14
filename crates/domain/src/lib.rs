@@ -19,6 +19,7 @@ pub mod followup;
 pub mod gate;
 mod guard;
 mod hook;
+pub mod intervene;
 mod job;
 mod json;
 pub mod keys;

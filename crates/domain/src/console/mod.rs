@@ -15,7 +15,7 @@ mod graph;
 mod metrics;
 mod rank;
 
-pub use actions::{ActionFacts, ActionKind, Allowed, LandFacts, allowed};
+pub use actions::{ActionFacts, ActionKind, Allowed, InterveneFacts, LandFacts, allowed};
 pub use deck_config::{
     DEFAULT_PANELS, DEFAULT_SESSION_ROWS, DeckConfig, DeckLayout, DeckProblem, Direction,
     KEYS as DECK_KEYS, MAX_SESSION_ROWS, Panel, Zone, resolve as resolve_deck,

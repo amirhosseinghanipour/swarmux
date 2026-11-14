@@ -47,6 +47,8 @@ pub struct Engine {
     pub contracts: Option<Rc<ContractService>>,
     /// Where the operator's notes to agents are recorded.
     pub ledger: Option<Rc<LedgerService>>,
+    /// The operator's messages to running agents, and their settings.
+    pub interventions: crate::intervene::Interventions,
 }
 
 /// What one [`Engine::pump`] did.
@@ -82,6 +84,7 @@ impl Engine {
             followups: None,
             contracts: None,
             ledger: None,
+            interventions: crate::intervene::Interventions::default(),
         }
     }
 
@@ -147,6 +150,17 @@ impl Engine {
     /// jobs and task graphs, and stops the jobs of missions out of budget.
     /// `facts` and `gates` are what the jobs and the gate said this frame.
     pub fn pump_missions(
+        &mut self,
+        facts: &[JobFact],
+        gates: &HashMap<JobId, GateState>,
+    ) -> MissionsPump {
+        let mut report = self.pump_missions_only(facts, gates);
+        // Messages follow the jobs the missions just took in.
+        report.errors.extend(self.pump_interventions());
+        report
+    }
+
+    fn pump_missions_only(
         &mut self,
         facts: &[JobFact],
         gates: &HashMap<JobId, GateState>,

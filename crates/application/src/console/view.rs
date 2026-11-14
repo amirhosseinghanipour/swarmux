@@ -41,6 +41,11 @@
 //!   contract has none.
 //! - [`ActionKind::SendBack`]: send the work back to the agent with a note,
 //!   or deny a held call with one.
+//! - [`ActionKind::Intervene`]: tell a running job's agent something, in
+//!   the mode (`queue` or `steer`) the client picks; disabled, with the
+//!   reason, for a job that is not running, not followed by this swarmux, or
+//!   one task of a graph. A client sends it with [`ReceiptView`]'s call
+//!   (`Engine::intervene`) and shows the receipt it returns.
 //! - [`ConsoleSnapshot::metrics`]: the verification figures.
 
 use serde::{Deserialize, Serialize};
@@ -895,6 +900,7 @@ pub enum ActionKind {
     ApprovePlan,
     RejectPlan,
     SendBack,
+    Intervene,
 }
 mirror!(
     ActionKind
@@ -908,8 +914,60 @@ mirror!(
             ApprovePlan,
             RejectPlan,
             SendBack,
+            Intervene,
         }
 );
+
+/// What a client is told about a message to a running agent: the receipt
+/// `Engine::intervene` returns, and the same record later as it settles.
+/// `state` is `queued`, `handed_over`, `delivered`, `refused` or
+/// `undelivered`; `reason` says why for the last two (and `summary` says
+/// it in a sentence). `delivered_at` is set only once the agent's turn with
+/// the message was seen to start.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ReceiptView {
+    /// 0 for a message that was refused: it was never numbered.
+    pub id: u64,
+    pub job: i64,
+    /// `queue` or `steer`.
+    pub mode: String,
+    pub state: String,
+    pub summary: String,
+    pub text: String,
+    pub at: Millis,
+    pub reason: Option<String>,
+    /// The job the agent carries on as, once the message is handed over.
+    pub resumed_as: Option<i64>,
+    pub delivered_at: Option<Millis>,
+    /// The ledger entry that records the message.
+    pub seq: Option<u64>,
+}
+
+impl From<&swarmux_domain::intervene::Receipt> for ReceiptView {
+    fn from(r: &swarmux_domain::intervene::Receipt) -> ReceiptView {
+        use swarmux_domain::intervene::State;
+        let (reason, resumed_as, delivered_at) = match &r.state {
+            State::Queued => (None, None, None),
+            State::Handed { job } => (None, Some(job.0), None),
+            State::Delivered { job, at } => (None, Some(job.0), Some(*at)),
+            State::Refused(why) => (Some(why.reason()), None, None),
+            State::Undelivered(why) => (Some(why.clone()), None, None),
+        };
+        ReceiptView {
+            id: r.id,
+            job: r.job.0,
+            mode: r.mode.as_str().to_string(),
+            state: r.state.as_str().to_string(),
+            summary: r.summary(),
+            text: r.text.clone(),
+            at: r.at,
+            reason,
+            resumed_as,
+            delivered_at,
+            seq: r.seq,
+        }
+    }
+}
 
 // ---------------------------------------------------------------------
 // Guard holds

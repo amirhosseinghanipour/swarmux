@@ -140,6 +140,32 @@ pub struct OperatorNote<'a> {
     pub gate_reruns: bool,
 }
 
+/// One entry about a message the operator sent to a running agent, as
+/// [`LedgerService::record_intervention`] writes it. A message makes two
+/// at most: when it is taken (`note` set, outcome `queued` or `stopping`)
+/// and when it is settled (`delivered`, or `undelivered` with a reason).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InterveneEntry<'a> {
+    /// `queue` or `steer`.
+    pub mode: &'a str,
+    /// The message, on the entry that takes it; later entries point back
+    /// at that one with `queued_seq`.
+    pub note: Option<&'a str>,
+    pub job: JobId,
+    pub session: Option<SessionId>,
+    pub outcome: &'a str,
+    /// The message's number in this run.
+    pub message: u64,
+    /// The entry that took the message.
+    pub queued_seq: Option<u64>,
+    pub mission: Option<&'a str>,
+    /// The job the agent carries on as.
+    pub resumed_as: Option<JobId>,
+    /// When the agent's turn with the message was seen to start.
+    pub delivered_at: Option<Millis>,
+    pub reason: Option<&'a str>,
+}
+
 pub struct LedgerService {
     ledger: Rc<dyn Ledger>,
     clock: Rc<dyn Clock>,
@@ -381,6 +407,39 @@ impl LedgerService {
             "operator",
             n.job,
             n.session,
+            payload,
+        )
+    }
+
+    /// The operator told a running agent something (`action` `intervene`):
+    /// who (the actor is `operator`), the mode, the text when this entry
+    /// takes the message, the job, what happened, and the delivery time
+    /// when it is known. Returns the entry's `seq`.
+    pub fn record_intervention(&self, e: &InterveneEntry<'_>, now: Millis) -> AppResult<u64> {
+        let mut payload = Payload::new()
+            .str("action", "intervene")
+            .str("mode", e.mode);
+        if let Some(note) = e.note {
+            payload = payload.text("note", note);
+        }
+        let payload = payload
+            .int("job", e.job.0)
+            .str("outcome", e.outcome)
+            .int("message", i64::try_from(e.message).unwrap_or(i64::MAX))
+            .opt_int(
+                "queued_seq",
+                e.queued_seq.and_then(|s| i64::try_from(s).ok()),
+            )
+            .opt_str("mission", e.mission)
+            .opt_int("resumed_as", e.resumed_as.map(|j| j.0))
+            .opt_int("delivered_at", e.delivered_at)
+            .opt_str("reason", e.reason);
+        self.append_entry(
+            now,
+            LedgerKind::Operator,
+            "operator",
+            Some(e.job),
+            e.session,
             payload,
         )
     }

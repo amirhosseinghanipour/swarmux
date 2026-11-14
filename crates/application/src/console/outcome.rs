@@ -924,6 +924,9 @@ fn mission(
             manual: landing == LandingPolicy::Manual,
         },
         task_graph: graph.is_some(),
+        intervene: rules::InterveneFacts {
+            controlled: lead.is_some(),
+        },
     };
     let first_request = my_holds.first().and_then(|h| h.request);
 
@@ -1168,6 +1171,8 @@ fn plain(src: &Sources<'_>, caches: &mut Caches, holds: &[HoldView], f: &JobFact
         evidence: false,
         landing: rules::LandFacts::default(),
         task_graph: false,
+        // This run follows the job: it is on the list of facts.
+        intervene: rules::InterveneFacts { controlled: true },
     };
     let title = title_of(f);
     let view = OutcomeView {

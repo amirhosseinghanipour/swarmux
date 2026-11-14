@@ -225,6 +225,14 @@
               "job": 2,
               "mission": null,
               "request": 7
+            },
+            {
+              "kind": "intervene",
+              "enabled": true,
+              "reason": null,
+              "job": 2,
+              "mission": null,
+              "request": 7
             }
           ]
         },
@@ -439,6 +447,14 @@
               "kind": "send_back",
               "enabled": true,
               "reason": null,
+              "job": 3,
+              "mission": null,
+              "request": null
+            },
+            {
+              "kind": "intervene",
+              "enabled": false,
+              "reason": "the job has ended: send it back with a note instead",
               "job": 3,
               "mission": null,
               "request": null
@@ -659,6 +675,14 @@
             },
             {
               "kind": "send_back",
+              "enabled": false,
+              "reason": "no job has run",
+              "job": null,
+              "mission": "plan-me",
+              "request": null
+            },
+            {
+              "kind": "intervene",
               "enabled": false,
               "reason": "no job has run",
               "job": null,
@@ -966,6 +990,14 @@
               "job": null,
               "mission": "split-app",
               "request": null
+            },
+            {
+              "kind": "intervene",
+              "enabled": false,
+              "reason": "no job has run",
+              "job": null,
+              "mission": "split-app",
+              "request": null
             }
           ]
         }
@@ -1167,6 +1199,14 @@
               "job": 6,
               "mission": null,
               "request": null
+            },
+            {
+              "kind": "intervene",
+              "enabled": false,
+              "reason": "the job has ended: send it back with a note instead",
+              "job": 6,
+              "mission": null,
+              "request": null
             }
           ]
         }
@@ -1353,6 +1393,14 @@
               "kind": "send_back",
               "enabled": false,
               "reason": "the job is still running: stop it, or wait for it to end",
+              "job": 4,
+              "mission": null,
+              "request": null
+            },
+            {
+              "kind": "intervene",
+              "enabled": false,
+              "reason": "the job has not started: its prompt is still waiting",
               "job": 4,
               "mission": null,
               "request": null
@@ -1626,6 +1674,14 @@
               "kind": "send_back",
               "enabled": false,
               "reason": "the work is delivered: change it with a new mission",
+              "job": 1,
+              "mission": "fix-invoice",
+              "request": null
+            },
+            {
+              "kind": "intervene",
+              "enabled": false,
+              "reason": "the job has ended: send it back with a note instead",
               "job": 1,
               "mission": "fix-invoice",
               "request": null
