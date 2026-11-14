@@ -575,7 +575,7 @@ mod tests {
         let d = run(
             vec![
                 LedgerDraft::genesis(0, "t"),
-                decision(1 * MIN, 1, "allow", "Read", "a.rs"),
+                decision(MIN, 1, "allow", "Read", "a.rs"),
                 decision(2 * MIN, 1, "allow", "Read", "b.rs"),
                 decision(3 * MIN, 1, "ask", "Bash", "git push"),
                 decision(4 * MIN, 1, "allow", "Bash", "git push"),
@@ -610,7 +610,7 @@ mod tests {
         let d = run(
             vec![
                 LedgerDraft::genesis(0, "t"),
-                decision(1 * MIN, 1, "ask", "Bash", "git push"),
+                decision(MIN, 1, "ask", "Bash", "git push"),
                 decision(2 * MIN, 2, "allow", "Bash", "git push"),
             ],
             0,
@@ -696,7 +696,7 @@ mod tests {
             vec![
                 LedgerDraft::genesis(0, "t"),
                 verdict(
-                    1 * MIN,
+                    MIN,
                     1,
                     "escalate",
                     not_run
@@ -736,7 +736,7 @@ mod tests {
         let d = run(
             vec![
                 LedgerDraft::genesis(0, "t"),
-                decision(1 * MIN, 1, "allow", "Read", "a"),
+                decision(MIN, 1, "allow", "Read", "a"),
                 finished(2 * MIN, 1, "done", 0.5, false),
                 manual,
                 verdict(4 * MIN, 1, "pass", Payload::new()),
