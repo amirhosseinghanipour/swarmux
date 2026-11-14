@@ -7,6 +7,9 @@
 //! FAKE_CLAUDE_SLEEP_MS (wait before exiting) and FAKE_CLAUDE_DONE_FILE (written
 //! after the wait, so tests can tell whether the process was killed).
 //! FAKE_CLAUDE_ARGS_FILE gets one line of arguments per start.
+//! FAKE_CLAUDE_STDIN_FILE gets one line per start: what that start was
+//! told on stdin (the JSON user message), so a test can tell which start
+//! received what.
 //! FAKE_CLAUDE_START_FILE gets one line (nanoseconds since the epoch) per
 //! start, FAKE_CLAUDE_PIDS_FILE one line per process id, and
 //! FAKE_CLAUDE_GRANDCHILDREN=n starts n long-lived copies of this program.
@@ -114,6 +117,11 @@ fn main() {
     }
     let mut stdin = String::new();
     let _ = std::io::stdin().read_to_string(&mut stdin);
+    // One line per start: what this start was told. The JSON message has no
+    // raw newline in it, so one line is one start.
+    if std::env::var_os("FAKE_CLAUDE_STDIN_FILE").is_some() {
+        append_line("FAKE_CLAUDE_STDIN_FILE", stdin.trim_end());
+    }
 
     if let Ok(path) = std::env::var("FAKE_CLAUDE_ECHO_FILE") {
         let echo = serde_json::json!({
