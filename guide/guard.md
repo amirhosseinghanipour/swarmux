@@ -38,7 +38,7 @@ on_unreachable = "auto"      # "auto", "deny", "ask" or "pass": see below
 always_scope = "repo"        # "repo", "workspace" or "global": where "always allow" applies
 always_expiry_days = 30      # 1 to 3650, or "never"
 protected_paths = ["deploy/**"]  # more files whose writes are held, besides the built-in ones
-hook_on_failure_block = false    # see "onFailure" below
+hook_on_failure_block = false    # old switch, see "onFailure" below
 ```
 
 The last five keys are read line by line: a value that isn't valid is replaced
@@ -143,11 +143,20 @@ only after that restart, and a spool the hook couldn't write is not.
 `swarmux doctor` shows the mode and runs the hook against an unreachable app in
 each mode. swarmux says at every start what the default means.
 
-**`onFailure`.** Recent Claude Code versions accept `"onFailure": "block"` on a
-hook, which makes a hook that crashes or times out block the call. With
-`hook_on_failure_block = true` the key is added to the PreToolUse hook. swarmux
-does not check which Claude Code versions know it (that arrives with the
-version check); versions that don't know the key ignore it. Off by default.
+**`onFailure`.** Claude Code 2.1.295 and later accept `"onFailure": "block"` on a
+hook, which makes a hook that crashes, exits 1 or times out block the call
+instead of letting it run (*observed* on 2.1.323, see [Claude
+Code](claude-code.md#what-was-found-out)). swarmux adds it to the PreToolUse hook
+unless the version it found is older than 2.1.295 or `[runtime] hook_failure`
+is `"off"`; `"block"` adds it whatever the version, and the old
+`hook_on_failure_block = true` still means that. A hook that prints text that
+is not JSON is not stopped by it: the call runs. The Guard's hook therefore
+prints only valid JSON, or exits with a code.
+
+**Before an unattended mission starts** swarmux calls `claude` once with a hook
+that denies and an allow rule that would let the call through, and refuses the
+mission when the call ran; `swarmux doctor --conformance` runs the whole set. See
+[Claude Code](claude-code.md#before-an-unattended-mission-starts-the-deny-canary).
 
 ## What the Guard keeps from agents
 

@@ -17,6 +17,7 @@ The other settings live next to the feature they control:
 | `[guard]` | permission rules, the loop breaker, what happens when swarmux can't be reached, "always allow" scope and expiry, protected paths | [Guard](guard.md) |
 | `gates.toml` in a repository | the done-gate's checks and protected paths | [Done-gate](done-gate.md) |
 | `[verifier]`, `[gate] level`, `[[check]] required/level/env` | clean copies, hidden checks, the harness list, check levels and environment, the revert probe | [Verifier](verifier.md#configuration) |
+| `[runtime]` | the launch profile (how much of Claude Code's own configuration a job loads), trusted folders, the MCP servers a controlled job may use, the canary before unattended missions, the guard hook's `onFailure`, the status line | [Claude Code](claude-code.md#configuration) |
 | `[worktree]` | where worktrees go, port blocks | [Worktrees](worktrees.md) |
 | `[missions]` | plan-first, drift, and `landing` | [Missions](missions.md), [Landing](#landing) below |
 | `[deck]` | which panels the Deck shows, their order, the graph's direction, the sessions strip | [The Deck](deck.md#customizing-deck) |

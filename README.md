@@ -162,6 +162,7 @@ Single Rust binary. Windows, macOS, Linux. Works with Claude Code only.
 - [Focus and the classic dashboard](guide/focus.md)
 - [Themes and layouts](guide/themes.md)
 - [Guard](guide/guard.md)
+- [Claude Code: launch profiles, versions and conformance](guide/claude-code.md)
 - [Sessions: lean mode and routing](guide/sessions.md)
 - [Done-gate](guide/done-gate.md)
 - [Independent verifier, hidden checks and review](guide/verifier.md)

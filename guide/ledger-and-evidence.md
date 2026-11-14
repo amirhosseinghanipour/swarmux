@@ -203,6 +203,34 @@ or `undelivered` (with the `reason`, and `queued_seq` pointing at the first
 entry). A message refused before it was taken (empty, too long, the job not
 running) is not recorded: nothing was sent.
 
+## What a run was launched with, and what it reported
+
+The `job_started` entry carries a `runtime` object when swarmux launched the
+job through an agent adapter (Claude Code): `runtime` (`claude-code`),
+`profile` (`inherit` or `controlled`) and `profile_reason`, `version` as
+found at start and `version_standing` (`tested`, `above_tested`,
+`below_tested`, `below_floor`, `unknown`), `sources` (the settings files it
+loads: `default`, a list, or `none`), `strict_mcp`, `on_failure_block`,
+`settings_hash` (SHA-256 of the `--settings` JSON swarmux generated),
+`host_policy` (`sources`, `locks`, `unreadable` and `blocks` of Claude Code's
+managed settings as read), `policy_sha256` (the `[runtime]` settings that
+decided it) and `canary_seq`, the entry of the canary that
+cleared it (null for a job that needed none). An entry written before this
+existed has no `runtime`, and verifies as before.
+
+Entries of kind `runtime` are written next to it:
+
+- `canary`: the checks run before an unattended mission's job started
+  (`version`, `host_policy`, `deny`), each with its `status` (`pass`, `fail`,
+  `note`, `inconclusive`, `skipped`), whether it was `required` and what was
+  seen, `passed`, and `policy_sha256`, the `[runtime]` settings that decided
+  what to do with it. A refused job has one of these and no `job_started`.
+- `observed`: what the agent said about itself in `system/init` once it was
+  running: `version`, `permission_mode`, the number of `tools` and `plugins`,
+  the `mcp_servers` as `name=status`, `capabilities`, and `mismatches`, the places
+  where that differs from what was asked (another version than the one found at
+  start; an MCP server in a controlled run that is not swarmux's).
+
 ## Changes to the policy and gaps in it
 
 Entries of kind `policy` record what changes what the [Guard](guard.md)

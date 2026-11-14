@@ -5,7 +5,9 @@ Inside a git repository every job runs in its own worktree, on its own branch
 same files, and each gets a block of ports so dev servers don't collide:
 `SWARMUX_PORT_BASE` is the first port, `SWARMUX_PORT_COUNT` how many are yours
 (also `SWARMUX_WORKTREE`, `SWARMUX_BRANCH`, `SWARMUX_JOB`). Files listed in
-`copy` (by default `.env`, `.env.local` and `.claude/settings.local.json`) are
+`copy` (by default `.env`, `.env.local`, `.claude/settings.local.json` and
+`CLAUDE.local.md`, Claude Code's personal instructions file, which is
+usually git-ignored) are
 copied from the repository into each worktree when they exist; they are never
 committed by swarmux. Outside a git repository nothing changes: the job runs
 in the session's folder. A session can be set to `on`, `off` or `auto` (the
@@ -28,7 +30,7 @@ always keeps the work.
 ```toml
 [worktree]
 # root = "D:/swarmux-worktrees"            # default: ~/.swarmux/worktrees
-copy = [".env", ".env.local", ".claude/settings.local.json"]  # globs allowed in the file name
+copy = [".env", ".env.local", ".claude/settings.local.json", "CLAUDE.local.md"]  # globs allowed in the file name
 port_base = 20000     # first port handed out
 port_block = 20       # ports per job
 port_slots = 500      # jobs that can hold a block at once
