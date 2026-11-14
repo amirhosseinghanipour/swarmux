@@ -24,8 +24,11 @@ const HANDOFF_FILE: &str = "handoff.json";
 /// Marks a worktree set's task folder: the gate takes it for the root.
 pub const TASK_MARKER: &str = ".swarmux-task";
 /// What a workspace root's own instructions are called; they are copied
-/// into a task folder, which is not in any repository.
-const ROOT_INSTRUCTIONS: [&str; 2] = ["CLAUDE.md", "CLAUDE.local.md"];
+/// into a task folder, which is not in any repository. The root's own
+/// `.swarmux/gates.toml` goes too: a task folder is where a workspace
+/// mission's checks run, so it is where the gate reads its configuration
+/// (agents cannot write `.swarmux`).
+const ROOT_INSTRUCTIONS: [&str; 3] = ["CLAUDE.md", "CLAUDE.local.md", ".swarmux/gates.toml"];
 /// Tries for operations that git or Windows may briefly refuse.
 const TRIES: u32 = 6;
 

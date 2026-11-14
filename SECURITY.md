@@ -33,15 +33,19 @@ Only the latest release gets security fixes.
 
 ## What leaves your machine
 
-swarmux itself opens a network connection in only three cases, each of which
-you start or turn on:
+The full list, with what each call sends and which are on by default, is in
+[What leaves your machine](guide/what-leaves-your-machine.md). In short:
+
+swarmux itself causes network traffic in only three cases. Two you start or
+turn on; the third (`gh`) is on by default:
 
 - `swarmux self-update` fetches a release from GitHub and installs it only
   if its minisign signature verifies;
 - `[notify] ntfy`, when you set a topic URL, sends a short title and the kind
   of item (never a command, path, prompt or session name) to that URL;
 - the `gh` command, where it is installed, is run for the GitHub readings
-  (pull requests and CI runs) and for outcomes; what it sends is `gh`'s own.
+  (pull requests and CI runs, on by default and every minute) and, when you
+  ask, for outcomes; what it sends is `gh`'s own.
 
 Everything else that leaves is Claude Code's own traffic: swarmux starts
 `claude` for your jobs, and for its small Haiku helpers (routing a prompt,

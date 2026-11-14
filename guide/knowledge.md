@@ -78,8 +78,8 @@ enforcer, the cheapest that works:
 
 | Enforcer | What it does |
 | --- | --- |
-| `guard` | the [Guard](guard.md) checks every tool call: tools, paths it watches, a regular expression over the command or the text being written; then `deny` (refused, the rule is the reason), `ask` (held as a P1 approval that shows the rule) or `warn` (let through, the rule added to the agent's context) |
-| `gate` | a hidden check the [done-gate](done-gate.md) runs for missions in scope; the agent only learns that a hidden check failed, never what it runs |
+| `guard` | the [Guard](guard.md) checks every tool call Claude Code reports to its hook: tools, paths it watches, a regular expression over the command or the text being written; then `deny` (refused, the rule is the reason), `ask` (held as a P1 approval that shows the rule) or `warn` (let through, the rule added to the agent's context) |
+| `gate` | a hidden check the [done-gate](done-gate.md) runs for missions in scope; the agent is told only that a hidden check failed, not what it runs; the check is kept outside the repository and out of the agent's tools, and code that runs in the verifier's copy is not kept from it (see [verifier](verifier.md#what-this-does-not-establish)) |
 | `lint` | a visible command the done-gate runs with its checks (an analyzer, a linter) |
 | `prompt` | text only, given to agents in scope |
 
@@ -117,7 +117,8 @@ broke checkout. The rule, enforced three ways:
 
 ```sh
 # A hidden gate check: no policy may condition on is_anonymous, except an
-# allow-list the owner keeps. The agent never sees the command.
+# allow-list the owner keeps. The command is kept out of the agent's tools and
+# prompt; the agent learns only that a hidden check failed.
 swarmux knowledge add --workspace product --kind rule \
   --text "Anonymous users are full users." \
   --why "guests check out; an agent once broke that" \

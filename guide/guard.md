@@ -1,14 +1,16 @@
 # Guard
 
-Every tool call a swarmux job makes goes through the Guard first. swarmux adds
+The Guard checks the tool calls Claude Code reports, before they run. swarmux adds
 a `PreToolUse` hook to each `claude` run (with `--settings`, never by editing
 your own settings files). The hook runs `swarmux hook pre-tool`, which asks the
 running swarmux over a local socket (a named pipe on Windows, a Unix socket
 elsewhere) and prints the answer. Allowed and denied calls are answered at
 once, in about a millisecond plus process start-up.
 
-What the Guard sees is the tool calls Claude Code reports to that hook. What
-it does when swarmux can't be reached is a setting ([below](#when-swarmux-cant-be-reached)).
+What the Guard sees is the tool calls Claude Code reports to that hook, and
+nothing else. What it does when swarmux can't be reached is a setting
+([below](#when-swarmux-cant-be-reached)). What it cannot do is listed under
+[Limits](#limits).
 
 Rules use Claude Code's syntax:
 
@@ -182,8 +184,11 @@ mission when the call ran; `swarmux doctor --conformance` runs the whole set. Se
 This is text matching on the calls Claude Code reports, not a sandbox. Agents
 run as your operating-system user: a determined one finds another spelling of a
 command or a path, and a tool Claude Code doesn't report to the hook is not
-seen at all. The point is that the plain ways are refused and that every
-decision, and every gap the Guard knows about, is in the ledger.
+seen at all. The rules and the protected paths are matched as text, so a path
+or command the matching does not recognise is not held. What the Guard gives
+you is that the plain ways are refused, and that the decisions it makes and the
+fallbacks the hook can record are in the ledger (a fallback only after the next
+start of swarmux, see above). Rules that match shell text are a safety net.
 
 **Loop breaker.** When an agent makes the same tool call and it fails with the
 same error `loop_repeats` times in a row, swarmux stops the job and records

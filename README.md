@@ -21,19 +21,35 @@
   Caption: scripted demo · `swarmux --demo`
 -->
 
-swarmux runs AI agents unattended and holds their work to account: independent
-verification before anything counts as done, policy on every action, budgets
-that hold, and a tamper-evident record of all of it. It starts with Claude Code.
+swarmux runs Claude Code unattended and holds its work to account. It decides
+whether work is done with checks it runs itself, checks the tool calls Claude
+Code reports to its hook against your rules, stops a job at its cost cap, and
+keeps a hash-chained record of each decision. It starts with Claude Code.
 
-- **Proves "done".** Gates swarmux runs itself, hidden checks the agent never
-  sees, and evidence bundles you can re-check with `swarmux verify`.
-  ([done-gate](guide/done-gate.md), [verifier](guide/verifier.md),
-  [evidence](guide/ledger-and-evidence.md))
-- **Spends on purpose.** Per-mission and per-job budgets, 5-hour and 7-day
-  forecasts, and jobs a usage limit stopped resume on their own after the
-  reset. ([usage governor](guide/governor.md))
-- **Asks only when it matters.** One risk-ranked inbox; approve, deny or
-  always allow with one key. ([mission control](guide/mission-control.md),
+"Verify" in the tagline has one meaning: `swarmux verify` re-runs the checks
+recorded in an evidence bundle on the delivered commit, in a clean checkout,
+and compares the results with what the bundle says
+([evidence](guide/ledger-and-evidence.md)). It shows that the recorded checks
+still give the recorded results. It does not show that the code is correct.
+
+- **Decides "done" with checks it runs itself.** The required checks run in a
+  clean copy swarmux builds, followed by hidden checks. The evidence bundle
+  lists which checks ran, which passed and which did not run. Hidden checks are
+  kept outside the repository and out of the agent's tools, and are shown only
+  as counts; when they could not run, the gate says `not run (reason)` and a
+  mission is not delivered. A passing gate means those checks passed; it is
+  not a review of the code. ([done-gate](guide/done-gate.md),
+  [verifier](guide/verifier.md), [evidence](guide/ledger-and-evidence.md))
+- **Stops a job at its cap.** Each job runs with `--max-budget-usd` when it has
+  a cap, which Claude Code enforces from its own cost estimate. For a mission,
+  swarmux also compares the spend Claude Code reports with the contract's
+  budget and escalates when it is over. The 5-hour and 7-day usage forecasts
+  are estimates, and jobs a usage limit stopped resume after the reset.
+  ([usage governor](guide/governor.md), [missions](guide/missions.md))
+- **One inbox, ranked by a risk score you can read.** Approve, deny or always
+  allow with one key; an always-allow rule is scoped to a repository and
+  expires. A call that cannot be undone is allowed only by a typed
+  confirmation. ([mission control](guide/mission-control.md),
   [guard](guide/guard.md))
 
 ## Install
@@ -53,7 +69,8 @@ see [Install](guide/install.md) for by-hand installs, `swarmux self-update` and
 uninstalling.
 
 Native Windows · Linux · macOS · one Rust binary · no tmux · no Electron · no
-login · no telemetry · MIT
+login · no telemetry · MIT. What does leave your machine, and when, is listed
+in [What leaves your machine](guide/what-leaves-your-machine.md).
 
 ## Starts with Claude Code
 
@@ -88,7 +105,7 @@ From a checkout, use `cargo run` and `cargo run -- doctor`. See
 
 ## What it does
 
-- **Missions**: state the outcome, the checks that prove it, what the agent
+- **Missions**: state the outcome, the checks that decide it, what the agent
   may not touch and the budget; swarmux lints it (at most three questions),
   runs it as a job under its own gate and calls it delivered only when the
   gate passes; a mission can plan first, so you approve a task graph before
@@ -103,7 +120,7 @@ From a checkout, use `cargo run` and `cargo run -- doctor`. See
   anchored to the code it is about and withheld once that code changes; a
   one-page map every session starts with (and gets again after a
   compaction), the items a file is about when an agent opens it, and rules
-  the Guard and the gate enforce, proven in shadow first
+  the Guard and the gate enforce, run in shadow first
 - **Background service**: close the window and the work goes on; `swarmux`
   attaches again from any terminal, several windows at once, and a restart
   picks missions and jobs up where they were
@@ -112,30 +129,41 @@ From a checkout, use `cargo run` and `cargo run -- doctor`. See
 - **Live dashboard**: the lead, its subagents (model, context, activity), the
   job's phase from plan to ship, the guard, the reviewer, a per-actor
   timeline, token use per actor and the session log
-- **Guard**: one permission policy across all sessions and an automatic loop
-  breaker, settled in code in about a millisecond so the models never see it
+- **Guard**: one permission policy across all sessions, checked against every
+  tool call Claude Code reports to the `PreToolUse` hook, and an automatic loop
+  breaker. Calls are decided by code and your rules, not by a model. When
+  swarmux cannot be reached, unattended jobs are denied and attached sessions
+  fall back to Claude Code's own rules, by the `on_unreachable` setting. Rules
+  on shell text are a safety net, not a sandbox ([guard](guide/guard.md#limits))
 - **Done-gate**: when an agent says it is finished, swarmux runs the
-  repository's tests itself and sends it back with the failure until they
-  pass; tests and other oracles it may not edit are protected
+  repository's checks itself and sends it back with the failure until they
+  pass; tests and other files it may not edit are protected paths
 - **Independent verifier**: the checks run in a clean copy swarmux makes of
-  the work, not in the agent's worktree, followed by hidden checks the agent
-  never sees; edited or switched-off tests block the stop
-- **Review step**: a read-only reviewer model audits a finished job's diff
+  the work, not in the agent's worktree, followed by hidden checks kept outside
+  the repository and out of the agent's tools, with the test harness put back
+  as the job's starting commit had it; edited or switched-off tests block the
+  stop. The agent's code still runs as your user in that copy
+  ([verifier](guide/verifier.md#what-this-does-not-establish))
+- **Review step**: a read-only reviewer model reads a finished job's diff and
+  lists concerns; it is a model's opinion and never changes the gate's verdict
 - **Ledger screen**: every run as a card with its outcome, evidence, cost,
   model mix and what became of it (merged, reverted); a digest of what
   happened while you were away; re-run, fork, search or verify from any card
 - **Evidence bundles**: every delivered mission leaves a verifiable JSON record that
   `swarmux verify` re-checks at the head commit in a clean checkout
-- **Test-weakening detector and base suite**: deleted, skipped, loosened or
-  re-blessed tests block a stop, and the checks are run again against the
-  original tests ([verifier](guide/verifier.md))
-- **Anchored ledger**: signed checkpoints of the audit ledger's head, kept
-  with your key, expose a ledger that was cut short or rewritten
-  ([ledger](guide/ledger-and-evidence.md#anchoring-the-ledger))
+- **Test-weakening detector and base suite**: flags common ways of weakening
+  tests (deleted, skipped, loosened or re-blessed) and blocks the stop; the
+  checks are run again against the original tests. It reads text and is one of
+  several layers ([verifier](guide/verifier.md))
+- **Anchored ledger**: signed checkpoints of the audit ledger's head make a
+  ledger that was cut short or rewritten detectable, unless the signing key and
+  the checkpoints are also compromised; export checkpoints off the machine to
+  raise that bar ([ledger](guide/ledger-and-evidence.md#anchoring-the-ledger))
 - **Cache-read metric**: how much of each job's input came from the prompt
   cache, on the Ledger card and in Focus; `swarmux stats cache`
-- **Audit ledger**: a tamper-evident, hash-chained record of every job,
-  agent event, review and guard decision
+- **Audit ledger**: a hash-chained record of jobs, agent events, reviews and
+  guard decisions; edits to recorded history are detectable within the limits
+  above
 - **Watchdog**: notices loops, stalls, full contexts and runaway spending,
   and tries a ladder of recoveries (nudge, fresh session, diagnosis, fork
   from a checkpoint, stronger model, replan) before it asks you
@@ -174,6 +202,8 @@ Single Rust binary. Windows, macOS, Linux. Works with Claude Code only.
 - [Watchdog and recovery ladder](guide/watchdog.md)
 - [Notifications](guide/notifications.md)
 - [The background service](guide/daemon.md)
+- [What leaves your machine](guide/what-leaves-your-machine.md)
+- [When you do not need swarmux](guide/when-you-do-not-need-swarmux.md)
 
 ## Project
 
