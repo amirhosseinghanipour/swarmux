@@ -107,6 +107,25 @@ task folder; one without a prefix runs at the task folder itself. The
 mission that names a repository its workspace does not have is refused
 when it is linted.
 
+**Landing needs one line of configuration.** A workspace mission's checks run
+in the task folder, not in a clean copy of a repository, and the verifier
+does not let a mission pass on checks that ran next to what the agent left
+(see [When the gate cannot vouch](verifier.md#when-the-gate-cannot-vouch)).
+Without more, the gate's verdict is Escalate: nothing lands, the mission
+waits in *Needs you* and says the checks ran in the worktree. To let your
+workspace's missions land on their in-place checks, put this in
+`.swarmux/gates.toml` at the workspace root (it is copied into each task
+folder, where agents cannot write it):
+
+```toml
+[verifier]
+worktree_checks = "allow"
+```
+
+The bundle and the ledger still record `ran_in = "worktree"`, so what the
+checks did not rule out stays visible. A repository's own `gates.toml` does
+not apply to a workspace job; the root's does.
+
 When the job ends and its gate passes, the mission lands: in each
 repository, in the order `repos` names them, its branch is merged into the
 mission's branch `swarmux/<mission>/integration` (made from that
@@ -127,7 +146,8 @@ including the undo when one repository can't take its merge. The default,
 - A workspace mission builds in one session: plans whose tasks could run
   side by side are not split into a task graph across repositories.
 - Checks that run in a repository's folder run in the task folder, not in a
-  clean copy, and a repository's own `.swarmux/gates.toml` and hidden
-  checks don't apply to a workspace job.
+  clean copy (so a mission needs `worktree_checks = "allow"` at the workspace
+  root to land, see above), and a repository's own `.swarmux/gates.toml` and
+  hidden checks don't apply to a workspace job.
 - The evidence bundle of a workspace mission records the first repository
   of its set; the landing of each is on the audit ledger.

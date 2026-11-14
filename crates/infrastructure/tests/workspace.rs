@@ -15,9 +15,10 @@ use std::time::{Duration, Instant};
 
 use swarmux_application::ledger::LedgerService;
 use swarmux_application::{
-    GateKeeper, GateService, JobService, MissionService, ScopeClaims, SessionService,
-    WorkspaceService, WorktreeService,
+    GateKeeper, GateService, GateSource, JobService, LoadedGate, MissionService, ScopeClaims,
+    SessionService, WorkspaceService, WorktreeService,
 };
+use swarmux_domain::gate::{Pin, WorktreeChecks};
 use swarmux_domain::mission::{Acceptance, Budget, Constraints, Contract, LandState, MissionState};
 use swarmux_domain::{AttentionKind, JobId, Limits, Workspace};
 use swarmux_infrastructure::{
@@ -75,7 +76,37 @@ fn product(dir: &Path) -> PathBuf {
 
 /// The product folder, swarmux over it, and a mission naming two of its
 /// three repositories, producer first.
+///
+/// Its checks name a folder per repository, so they run in the task folder
+/// and not in a clean copy. Since the verifier checks where checks ran, a
+/// mission is only delivered like that when the gate says it may
+/// (`[verifier] worktree_checks = "allow"`): this is the rig of the tests
+/// about landing, which opt in.
 fn rig() -> Option<Rig> {
+    rig_with(Some(WorktreeChecks::Allow), None)
+}
+
+/// A [`GateSource`] that reads gates as the real one does and sets what a
+/// mission does when its checks ran in the worktree, as the `[verifier]`
+/// key of a `gates.toml` would.
+struct WithWorktreeChecks(FsGateSource, WorktreeChecks);
+
+impl GateSource for WithWorktreeChecks {
+    fn load(&self, dir: &Path) -> LoadedGate {
+        let mut gate = self.0.load(dir);
+        gate.spec.verifier.worktree_checks = self.1;
+        gate
+    }
+
+    fn pins(&self, root: &Path, globs: &[String]) -> Vec<Pin> {
+        self.0.pins(root, globs)
+    }
+}
+
+/// `worktree_checks` is set on the gate the way a `gates.toml` would; with
+/// `None` the gate is the real one, and `root_gates` (if any) is the
+/// product root's own `.swarmux/gates.toml`.
+fn rig_with(worktree_checks: Option<WorktreeChecks>, root_gates: Option<&str>) -> Option<Rig> {
     if !have_git() {
         eprintln!("git not available; skipping");
         return None;
@@ -85,6 +116,10 @@ fn rig() -> Option<Rig> {
     repo(&root.join("backend"), "schema.sql");
     repo(&root.join("app"), "api.dart");
     repo(&root.join("admin"), "index.ts");
+    if let Some(gates) = root_gates {
+        fs::create_dir_all(root.join(".swarmux")).unwrap();
+        fs::write(root.join(".swarmux/gates.toml"), gates).unwrap();
+    }
     fs::create_dir_all(root.join("notes")).unwrap();
     fs::write(root.join("notes").join("ideas.md"), "not a repository\n").unwrap();
     fs::write(
@@ -139,10 +174,11 @@ fn rig() -> Option<Rig> {
         })
         .with_worktrees(worktrees.clone())
         .with_workspaces(store.clone());
-    let (keeper, records) = GateKeeper::new(
-        Arc::new(FsGateSource::new()),
-        Arc::new(ProcessChecker::new()),
-    );
+    let source: Arc<dyn GateSource> = match worktree_checks {
+        Some(w) => Arc::new(WithWorktreeChecks(FsGateSource::new(), w)),
+        None => Arc::new(FsGateSource::new()),
+    };
+    let (keeper, records) = GateKeeper::new(source, Arc::new(ProcessChecker::new()));
     let keeper = Arc::new(keeper);
     let gate = GateService::new(records, ledger.clone(), store.clone(), clock.clone());
     let mut missions = MissionService::new(store.clone(), clock.clone())
@@ -343,6 +379,67 @@ fn a_workspace_mission_runs_in_a_set_and_lands_producer_first() {
         &["show", "main:schema.sql"],
     );
     assert_eq!(main, "first");
+}
+
+#[test]
+fn a_workspace_mission_with_in_place_checks_is_escalated_by_default_and_lands_nothing() {
+    // The default (`worktree_checks = "escalate"`): its checks ran in the
+    // task folder, not in a clean copy, so the gate cannot pass it and
+    // nothing is landed until a person decides.
+    let Some(mut r) = rig_with(None, None) else {
+        return;
+    };
+    let job = r.missions.launch(&r.slug, &mut r.jobs).unwrap();
+    r.work(job);
+    assert_eq!(
+        r.settle(),
+        MissionState::Escalated,
+        "{:?}",
+        r.missions.get(&r.slug)
+    );
+    assert!(!r.landed("backend", job));
+    assert!(!r.landed("app", job));
+    let state = r.gate.state(job).expect("a verdict");
+    assert_eq!(
+        state.notes.ran_in,
+        Some(swarmux_domain::gate::RanIn::Worktree)
+    );
+    assert!(
+        state
+            .notes
+            .incomplete
+            .iter()
+            .any(|s| s.contains("ran in the worktree")),
+        "{:?}",
+        state.notes.incomplete
+    );
+}
+
+#[test]
+fn the_product_roots_own_gates_toml_is_how_a_workspace_mission_opts_in_and_lands() {
+    // No test double: the root's `.swarmux/gates.toml` is copied into the
+    // task folder, where the gate reads it.
+    let gates = "[verifier]\nworktree_checks = \"allow\"\n";
+    let Some(mut r) = rig_with(None, Some(gates)) else {
+        return;
+    };
+    let job = r.missions.launch(&r.slug, &mut r.jobs).unwrap();
+    let set = r.worktrees.set_for(job).unwrap();
+    let task = set[0].member.as_ref().unwrap().task_dir.clone();
+    assert!(task.join(".swarmux/gates.toml").is_file());
+    r.work(job);
+    assert_eq!(
+        r.settle(),
+        MissionState::Delivered,
+        "{:?}",
+        r.missions.get(&r.slug)
+    );
+    assert!(r.landed("backend", job) && r.landed("app", job));
+    assert_eq!(
+        r.gate.state(job).unwrap().notes.ran_in,
+        Some(swarmux_domain::gate::RanIn::Worktree),
+        "still recorded as run in the worktree"
+    );
 }
 
 #[test]

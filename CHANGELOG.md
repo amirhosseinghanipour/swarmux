@@ -384,6 +384,10 @@ follows [Semantic Versioning](https://semver.org/).
   identity key the first time that repository is looked at (recorded in
   `holdout/.migrated` and in the ledger as `holdout_migrated`); a name is handed
   out once.
+- A workspace mission's checks run in the task folder, so by default its gate
+  now says Escalate and nothing lands. Put `[verifier] worktree_checks = "allow"`
+  in `.swarmux/gates.toml` at the workspace root (now copied into each task
+  folder) to let it land; the record still says the checks ran in the worktree.
 - The base suite and the hidden checks no longer run in the copy the visible
   checks ran in. `swarmux gate run` prints `gate cannot pass this: escalate` when
   the gate could not vouch for work in which nothing was wrong.

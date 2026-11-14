@@ -177,7 +177,8 @@ change:
   A repository that accepts that says so in `[verifier] worktree_checks =
   "allow"`; the record still says where they ran. A workspace mission whose
   checks name a folder per repository runs there, so it escalates until that
-  is set.
+  is set (for a workspace, in the workspace root's `.swarmux/gates.toml`, see
+  [Workspaces](workspaces.md)).
 - **The change could not be read** (no diff): the tamper and harness scans
   did not happen.
 
