@@ -21,7 +21,10 @@ use crate::focus::stream::{RowKind, rows};
 use crate::ui::focus::parts::diff_style;
 use crate::ui::focus::stream::row_line_of;
 use crate::ui::mission::age;
-use crate::work::{NoteComposer, NoteTarget, Tab, edge_label, holds_of, relations};
+use crate::work::{
+    MessageComposer, NoteComposer, NoteTarget, Tab, edge_label, holds_of, relations,
+};
+use swarmux_domain::intervene::{Mode as Via, Receipt, State};
 
 pub(super) fn render(
     frame: &mut Frame,
@@ -46,10 +49,12 @@ pub(super) fn render(
     };
     let w = usize::from(area.width);
     let header = header(app, snap, o, w);
-    // While a note is being written its panel takes the actions' place.
-    let actions = match &app.work_screen.note {
-        Some(composer) => note_panel(app, composer, w),
-        None => actions(app, &crate::work::rows_for(snap, o), w),
+    // While a note or a message is being written its panel takes the
+    // actions' place.
+    let actions = match (&app.work_screen.message, &app.work_screen.note) {
+        (Some(composer), _) => message_panel(app, composer, w),
+        (None, Some(composer)) => note_panel(app, composer, w),
+        (None, None) => actions(app, &crate::work::rows_for(snap, o), w),
     };
     let header_h = u16::try_from(header.len()).unwrap_or(0).min(area.height);
     let actions_h = u16::try_from(actions.len())
@@ -162,6 +167,13 @@ fn header(app: &App, snap: &ConsoleSnapshot, o: &OutcomeView, w: usize) -> Lines
     }
     if let Some(j) = o.jobs.first() {
         facts.push(format!("job #{} {}", j.id, j.model));
+        let waiting = app.engine.interventions.waiting(JobId(j.id));
+        if waiting > 0 {
+            facts.push(format!(
+                "{waiting} message{} queued",
+                if waiting == 1 { "" } else { "s" }
+            ));
+        }
     }
     facts.push(usd(o.spend.total_usd));
     facts.push(format!("{} in state", age(now - o.since_at)));
@@ -280,21 +292,92 @@ fn stream(app: &App, snap: &ConsoleSnapshot, o: &OutcomeView, w: usize) -> Lines
         return out;
     };
     let all = rows(&progress.log);
+    let mut out: Lines = Vec::new();
     if all.is_empty() {
-        return vec![Line::from(span(
+        out.push(Line::from(span(
             "waiting for the first action",
             Style::new().fg(t.muted),
-        ))];
+        )));
+    } else {
+        out.push(Line::from(span(
+            format!("{} rows · job #{} · ⏎ opens it in Focus", all.len(), job.id),
+            Style::new().fg(t.dim),
+        )));
+        out.extend(
+            all.iter()
+                .filter(|r| !matches!(r.kind, RowKind::Note) || r.depth == 0)
+                .map(|r| row_line_of(app, (&progress.model, &[]), r, w)),
+        );
     }
-    let mut out = vec![Line::from(span(
-        format!("{} rows · job #{} · ⏎ opens it in Focus", all.len(), job.id),
-        Style::new().fg(t.dim),
-    ))];
-    out.extend(
-        all.iter()
-            .filter(|r| !matches!(r.kind, RowKind::Note) || r.depth == 0)
-            .map(|r| row_line_of(app, (&progress.model, &[]), r, w)),
-    );
+    out.extend(messages(app, JobId(job.id), w));
+    out
+}
+
+/// What was said to the agent and where each message stands: the other
+/// half of the conversation. A receipt says "delivered" only once the
+/// agent's turn with the message started; until then it says what is not
+/// known.
+fn messages(app: &App, job: JobId, w: usize) -> Lines {
+    let t = &app.look.theme;
+    let receipts: Vec<&Receipt> = app.engine.interventions.involving(job).collect();
+    if receipts.is_empty() {
+        return Vec::new();
+    }
+    let mut out: Lines = vec![
+        Line::default(),
+        heading(
+            app,
+            "YOUR MESSAGES",
+            "to the agent, in your words",
+            w,
+            t.lead,
+        ),
+    ];
+    for r in receipts {
+        let mode = match r.mode {
+            Via::Queue => "queue",
+            Via::Steer => "steer",
+        };
+        out.push(Line::from(vec![
+            span(format!(" #{} ", r.id), Style::new().fg(t.dim)),
+            span(
+                format!("{mode:<6}"),
+                Style::new().fg(t.lead).add_modifier(Modifier::BOLD),
+            ),
+            span(
+                fit(&r.text.replace('\n', " "), w.saturating_sub(12)),
+                Style::new().fg(t.title),
+            ),
+        ]));
+        let (hue, line) = match &r.state {
+            State::Queued => (
+                t.warn,
+                "queued · delivers when the agent's turn ends".to_string(),
+            ),
+            State::Handed { job } => (
+                t.muted,
+                format!("handed to the agent as job #{job} · not confirmed until its turn starts"),
+            ),
+            State::Delivered { job, at } => (
+                t.ok,
+                format!(
+                    "delivered · its turn started as job #{job} at {}",
+                    super::util::clock(*at)
+                ),
+            ),
+            State::Undelivered(why) => (t.error, format!("not delivered · {why}")),
+            State::Refused(why) => (t.error, format!("not sent · {}", why.reason())),
+        };
+        for (i, part) in super::util::wrap_text(&line, w.saturating_sub(5))
+            .into_iter()
+            .enumerate()
+        {
+            out.push(Line::from(span(
+                format!("{}{part}", if i == 0 { "      " } else { "        " }),
+                Style::new().fg(hue),
+            )));
+        }
+    }
     out
 }
 
@@ -510,6 +593,89 @@ fn note_panel(app: &App, composer: &NoteComposer, w: usize) -> Lines {
                 Style::new().fg(if picked { t.title } else { t.text }),
             ),
         ]));
+    }
+    out
+}
+
+// ---------------------------------------------------------------------
+// The message panel
+// ---------------------------------------------------------------------
+
+/// What the user is writing to the running agent, the mode it goes in and
+/// what that mode does and does not do. The line itself is the status
+/// bar's, as for every other text input.
+fn message_panel(app: &App, composer: &MessageComposer, w: usize) -> Lines {
+    let t = &app.look.theme;
+    let steer = composer.mode == Via::Steer;
+    let hue = if steer { t.warn } else { t.lead };
+    let mut out = vec![heading(app, "MESSAGE THE AGENT", &composer.about, w, hue)];
+    out.push(Line::from(vec![
+        span(" mode   ", Style::new().fg(t.muted)),
+        span(
+            composer.mode.as_str().to_string(),
+            Style::new().fg(hue).add_modifier(Modifier::BOLD),
+        ),
+        span("  (tab switches)", Style::new().fg(t.dim)),
+    ]));
+    for line in super::util::wrap_text(composer.mode.promise(), w.saturating_sub(2)) {
+        out.push(Line::from(span(
+            format!(" {line}"),
+            Style::new().fg(t.text),
+        )));
+    }
+    let held = app
+        .engine
+        .guard
+        .approvals()
+        .iter()
+        .any(|a| a.request.job_id == Some(JobId(composer.job)));
+    if held {
+        let line = if steer {
+            "a call is held for you: steering is refused until you answer it; queue works"
+        } else {
+            "a call is held for you: this message does not answer it"
+        };
+        for line in super::util::wrap_text(line, w.saturating_sub(2)) {
+            out.push(Line::from(span(
+                format!(" {line}"),
+                Style::new().fg(t.warn),
+            )));
+        }
+    }
+    let typed = match &app.mode {
+        Mode::Input(InputPurpose::WorkMessage, input) => input.text.as_str(),
+        _ => "",
+    };
+    let mut text = super::util::wrap_text(typed, w.saturating_sub(10));
+    if typed.is_empty() {
+        text = vec!["type below".to_string()];
+    }
+    for (i, line) in text.iter().take(3).enumerate() {
+        out.push(Line::from(vec![
+            span(
+                if i == 0 { " message " } else { "         " },
+                Style::new().fg(t.muted),
+            ),
+            span(
+                line.clone(),
+                Style::new().fg(if typed.is_empty() { t.dim } else { t.title }),
+            ),
+        ]));
+    }
+    if composer.armed {
+        out.push(Line::from(span(
+            " enter again stops the agent's turn and sends it · esc drops it",
+            Style::new().fg(t.warn).add_modifier(Modifier::BOLD),
+        )));
+    } else {
+        out.push(Line::from(span(
+            " enter sends it · esc drops it · tab switches the mode",
+            Style::new().fg(t.muted),
+        )));
+        out.push(Line::from(span(
+            " nothing is sent before you press enter",
+            Style::new().fg(t.muted),
+        )));
     }
     out
 }

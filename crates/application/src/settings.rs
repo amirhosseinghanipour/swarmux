@@ -17,6 +17,9 @@ pub struct ConsoleSettings {
     /// Notes the send-back line offers to start from (Tab picks one; the
     /// user edits it or sends it as it is). At most [`MAX_SEND_BACK_NOTES`].
     pub send_back_notes: Vec<String>,
+    /// Messages to running agents: the mode the composer opens in, the
+    /// longest message and whether steering asks to be confirmed.
+    pub intervene: swarmux_domain::intervene::Config,
 }
 
 /// Most suggested notes the send-back line keeps.
@@ -33,6 +36,7 @@ impl Default for ConsoleSettings {
             ]
             .map(String::from)
             .to_vec(),
+            intervene: swarmux_domain::intervene::Config::default(),
         }
     }
 }

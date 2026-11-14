@@ -27,6 +27,8 @@ pub const RETRY: Action = Action::new("work.retry");
 pub const RESUME: Action = Action::new("work.resume");
 pub const EVIDENCE: Action = Action::new("work.evidence");
 pub const SEND_BACK: Action = Action::new("work.send_back");
+pub const MESSAGE: Action = Action::new("work.message");
+pub const MESSAGE_MODE: Action = Action::new("work.message_mode");
 
 const SECTIONS: &[Section] = &[Section {
     context: CTX,
@@ -102,6 +104,16 @@ const SECTIONS: &[Section] = &[Section {
             help: "send the work back to the agent with a note, or deny a held call with one",
         },
         Bind {
+            action: MESSAGE,
+            keys: &["m"],
+            help: "message the running agent: queued until its turn ends, or stop the turn and carry on with it",
+        },
+        Bind {
+            action: MESSAGE_MODE,
+            keys: &["M"],
+            help: "switch the message mode between queue and steer",
+        },
+        Bind {
             action: actions::LIST_OPEN,
             keys: &["enter"],
             help: "open the job in focus",
@@ -115,6 +127,7 @@ const HINTS: &[Hint] = &[
     Hint::keys(&[DECIDE_YES, DECIDE_NO, DECIDE_ALWAYS], "answer"),
     Hint::keys(&[LAND], "land"),
     Hint::keys(&[SEND_BACK], "send back"),
+    Hint::keys(&[MESSAGE], "message"),
     Hint::keys(&[EVIDENCE], "evidence"),
     Hint::keys(&[TAB_PRODUCT, TAB_STREAM, TAB_DIFF, TAB_CHECKS], "tabs"),
     Hint::keys(&[KILL], "kill"),
@@ -187,6 +200,8 @@ impl ScreenDef for Def {
             RESUME => app.work_do(Do::Resume),
             EVIDENCE => app.work_do(Do::Evidence),
             SEND_BACK => app.work_do(Do::SendBack),
+            MESSAGE => app.work_do(Do::Message),
+            MESSAGE_MODE => app.work_switch_mode(),
             actions::LIST_OPEN => app.work_open_focus(),
             _ => return Handled::No,
         }

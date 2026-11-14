@@ -15,8 +15,10 @@ use crossterm::event::{KeyCode, KeyEvent};
 use crate::app::{App, InputPurpose, Mode, Screen};
 use crate::ui::input::Input;
 use crate::work::{
-    ActionRow, DiffRead, Do, NoteComposer, NoteTarget, Tab, held_request, holds_of, rows_for,
+    ActionRow, DiffRead, Do, MessageComposer, NoteComposer, NoteTarget, Tab, held_request,
+    holds_of, rows_for,
 };
+use swarmux_domain::intervene::{Mode as Via, Receipt, Refusal, State};
 
 /// Lines of a diff read.
 const DIFF_LINES: usize = 400;
@@ -78,7 +80,20 @@ impl App {
         };
         let rows = self.work_rows();
         let Some(row) = rows.iter().find(|r| r.what == what) else {
-            self.notice = Some("that does not apply to this outcome".into());
+            // A message is offered only while the job runs; the action says
+            // why it is not.
+            let why = (what == Do::Message)
+                .then(|| {
+                    o.actions
+                        .iter()
+                        .find(|a| a.kind == swarmux_application::console::ActionKind::Intervene)
+                        .and_then(|a| a.reason.clone())
+                })
+                .flatten();
+            self.notice = Some(match why {
+                Some(why) => format!("message: {why}"),
+                None => "that does not apply to this outcome".into(),
+            });
             return;
         };
         if !row.enabled {
@@ -120,6 +135,7 @@ impl App {
             Do::Land => self.work_land(o)?,
             Do::Evidence => self.work_open_evidence(o)?,
             Do::SendBack => self.work_begin_note(o),
+            Do::Message => self.work_begin_message(o),
             // The decision keys carry these; the rows only show them.
             Do::AllowOnce | Do::AlwaysAllow | Do::Deny | Do::ApprovePlan | Do::ChangePlan => {}
         }
@@ -223,6 +239,125 @@ impl App {
         }
         // The new state shows at once.
         self.work_refresh();
+        Ok(())
+    }
+
+    /// Takes `text` for the agent of `job`, in `via` (see
+    /// `Engine::intervene`), and shows the new state at once. Nothing is
+    /// added to the text. The message line and the demo come in here.
+    pub fn send_message(&mut self, job: JobId, text: &str, via: Via, confirmed: bool) -> Receipt {
+        let receipt = self.engine.intervene(job, text, via, confirmed);
+        self.work_refresh();
+        receipt
+    }
+
+    /// The messages sent to `job`'s agent in this run, oldest first, with
+    /// where each stands.
+    pub fn message_receipts(&self, job: JobId) -> Vec<Receipt> {
+        self.engine.interventions.for_job(job).cloned().collect()
+    }
+
+    /// Opens the message line for the selected outcome's running job and
+    /// shows its conversation. Nothing is sent until the user confirms
+    /// with Enter.
+    fn work_begin_message(&mut self, o: &OutcomeView) {
+        let Some(job) = o
+            .actions
+            .iter()
+            .find(|a| a.kind == swarmux_application::console::ActionKind::Intervene)
+            .and_then(|a| a.job)
+        else {
+            self.notice = Some("message: no running job".into());
+            return;
+        };
+        let session = o
+            .jobs
+            .iter()
+            .find(|j| j.id == job)
+            .map_or(String::new(), |j| format!(" {}", j.session));
+        self.work_screen.message = Some(MessageComposer {
+            job,
+            about: format!("job #{job}{session}"),
+            mode: self.work_screen.mode,
+            armed: false,
+        });
+        self.work_tab(Tab::Stream);
+        self.mode = Mode::Input(InputPurpose::WorkMessage, Input::default());
+    }
+
+    /// Switches between queue and steer: for the line that is open, and for
+    /// the messages after it.
+    pub(crate) fn work_switch_mode(&mut self) {
+        let next = self.work_screen.mode.other();
+        self.work_screen.mode = next;
+        if let Some(c) = &mut self.work_screen.message {
+            c.mode = next;
+            // A confirmation was for the other mode.
+            c.armed = false;
+        }
+        self.notice = Some(format!(
+            "messages go in {} mode: {}",
+            next.as_str(),
+            next.promise()
+        ));
+    }
+
+    /// The keys of the message line beyond typing: Tab switches the mode.
+    /// Whether the key was one of them.
+    pub(crate) fn work_message_key(&mut self, key: KeyEvent) -> bool {
+        if !matches!(key.code, KeyCode::Tab | KeyCode::BackTab) {
+            return false;
+        }
+        self.work_switch_mode();
+        true
+    }
+
+    /// The user closed the message line without sending.
+    pub(crate) fn work_message_cancelled(&mut self) {
+        self.work_screen.message = None;
+        self.notice = Some("not sent".into());
+    }
+
+    /// The user confirmed: the message is taken, or refused with the reason.
+    /// A refusal that a change of the text or the mode fixes keeps the line
+    /// open with the text in it. Steering that asks for a confirmation
+    /// keeps it open too, and the next Enter is the confirmation.
+    pub(crate) fn submit_message(&mut self, text: &str) -> swarmux_application::AppResult<()> {
+        let Some(mut composer) = self.work_screen.message.take() else {
+            return Ok(());
+        };
+        let receipt = self.send_message(JobId(composer.job), text, composer.mode, composer.armed);
+        let reopen = match &receipt.state {
+            State::Refused(Refusal::ConfirmSteer) => {
+                composer.armed = true;
+                self.notice = Some(
+                    "steering stops the agent's turn and cuts its work short: enter again to confirm, esc to drop"
+                        .into(),
+                );
+                true
+            }
+            State::Refused(
+                Refusal::Empty
+                | Refusal::TooLong { .. }
+                | Refusal::TooMany(_)
+                | Refusal::ApprovalPending
+                | Refusal::Ledger(_),
+            ) => {
+                self.notice = Some(receipt.summary());
+                true
+            }
+            _ => {
+                self.notice = Some(match receipt.seq {
+                    Some(seq) => format!("{} · ledger #{seq}", receipt.summary()),
+                    None => receipt.summary(),
+                });
+                false
+            }
+        };
+        if reopen {
+            self.work_screen.message = Some(composer);
+            self.mode = Mode::Input(InputPurpose::WorkMessage, Input::with_text(text));
+        }
         Ok(())
     }
 
@@ -349,3 +484,6 @@ impl App {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod message_tests;

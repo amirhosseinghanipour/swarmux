@@ -69,6 +69,8 @@ pub enum InputPurpose {
     /// The note that sends a job's work back to its agent, or goes with
     /// the denial of a held call.
     SendBackNote,
+    /// A message to a running agent (Work).
+    WorkMessage,
     /// The answer to a question an agent put on the board.
     BoardAnswer,
     /// The ledger search; applied as it is typed.
@@ -619,6 +621,8 @@ impl App {
             console.metrics_hours,
         ));
         self.send_back_notes = console.send_back_notes.clone();
+        self.engine.interventions.configure(console.intervene);
+        self.work_screen.mode = console.intervene.mode;
         self.engine.ledger = Some(ledger);
         self
     }
@@ -1288,6 +1292,12 @@ impl App {
         {
             return;
         }
+        // The message line takes Tab to switch between queue and steer.
+        if matches!(self.mode, Mode::Input(InputPurpose::WorkMessage, _))
+            && self.work_message_key(key)
+        {
+            return;
+        }
         if let Mode::Input(purpose, input) = &mut self.mode {
             let purpose = *purpose;
             match input.handle(key) {
@@ -1307,6 +1317,9 @@ impl App {
                     if purpose == InputPurpose::SendBackNote {
                         self.work_note_cancelled();
                     }
+                    if purpose == InputPurpose::WorkMessage {
+                        self.work_message_cancelled();
+                    }
                 }
                 InputAction::Submit(text) => {
                     self.mode = Mode::Normal;
@@ -1317,6 +1330,7 @@ impl App {
                         InputPurpose::Variable => self.answer_variable(text),
                         InputPurpose::PlanNote => self.submit_plan_note(&text),
                         InputPurpose::SendBackNote => self.submit_send_back(&text),
+                        InputPurpose::WorkMessage => self.submit_message(&text),
                         InputPurpose::BoardAnswer => self.submit_board_answer(&text),
                         InputPurpose::Search => Ok(()),
                         InputPurpose::WorkspaceSession => self.create_workspace_session(&text),
@@ -1597,6 +1611,11 @@ impl App {
             && let Some(m) = composer.slug.as_deref().and_then(|s| service.get(s))
         {
             composer.sync(m);
+        }
+        // A message delivered, or one that could not be, is said once, even
+        // when its job is no longer on the screen.
+        if let Some(line) = self.engine.interventions.news().pop() {
+            self.notice = Some(line);
         }
         let errors = pumped.errors;
         if pumped.graphs_changed {

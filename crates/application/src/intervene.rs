@@ -39,6 +39,8 @@ pub struct Interventions {
     config: Config,
     next: u64,
     items: Vec<Receipt>,
+    /// Messages whose outcome was already reported by [`Interventions::news`].
+    told: Vec<u64>,
 }
 
 impl Interventions {
@@ -55,11 +57,50 @@ impl Interventions {
         self.items.iter().filter(move |r| r.job == job)
     }
 
+    /// The messages that concern `job`: those sent to it, and those handed
+    /// to it as the job that carries them.
+    pub fn involving(&self, job: JobId) -> impl Iterator<Item = &Receipt> {
+        self.items.iter().filter(move |r| {
+            r.job == job
+                || matches!(
+                    r.state,
+                    State::Handed { job: j } | State::Delivered { job: j, .. } if j == job
+                )
+        })
+    }
+
     /// Messages of `job` still waiting for the end of its turn.
     pub fn waiting(&self, job: JobId) -> usize {
         self.for_job(job)
             .filter(|r| r.state == State::Queued)
             .count()
+    }
+
+    /// What became of messages since this was last asked: one line for each
+    /// that was delivered or could not be, said once. The screen shows it
+    /// even when the job it was about is no longer on it.
+    pub fn news(&mut self) -> Vec<String> {
+        let mut out = Vec::new();
+        for r in &self.items {
+            if self.told.contains(&r.id) {
+                continue;
+            }
+            let line = match &r.state {
+                State::Delivered { job, .. } => {
+                    format!(
+                        "message #{} delivered: the agent's turn with it started as job #{job}",
+                        r.id
+                    )
+                }
+                State::Undelivered(why) => format!("message #{} not delivered: {why}", r.id),
+                _ => continue,
+            };
+            self.told.push(r.id);
+            out.push(line);
+        }
+        self.told
+            .retain(|id| self.items.iter().any(|r| r.id == *id));
+        out
     }
 
     /// The receipt numbered `id`.
@@ -360,7 +401,7 @@ impl Engine {
                     self.set_state(id, State::Handed { job: new });
                 }
                 self.jobs
-                    .operator_line(new, "message", "your message was handed to the agent");
+                    .note(new, "message", "this turn carries your message");
             }
             Err(e) => self.fail_all(&waiting, &e.to_string(), errors),
         }
