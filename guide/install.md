@@ -9,9 +9,9 @@
 
 `swarmux install` copies the binary to a per-user folder (`%LOCALAPPDATA%\Programs\swarmux\bin`
 on Windows, `~/.local/bin` elsewhere), puts it on your PATH on Windows, and creates
-`~/.swarmux`. Add `--statusline` to print the `statusLine` setting for Claude Code; swarmux
+its data folder (`~/.swarmux` where that exists, else the platform's state folder, see [Configuration](configuration.md#where-the-files-are)). Add `--statusline` to print the `statusLine` setting for Claude Code; swarmux
 never edits your Claude Code settings. `swarmux uninstall` removes what `install` set up and
-lists each thing it removed; your data in `~/.swarmux` stays unless you pass `--purge`. It
+lists each thing it removed; your data stays unless you pass `--purge`. It
 stops the [background service](daemon.md) first when it runs.
 
 `swarmux self-update` downloads the newest release for your platform and installs it only

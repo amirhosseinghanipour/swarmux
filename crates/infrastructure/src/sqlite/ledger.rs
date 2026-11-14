@@ -104,6 +104,37 @@ fn from_row(r: &Row) -> rusqlite::Result<LedgerEntry> {
     })
 }
 
+impl SqliteLedger {
+    /// The newest entry's `seq`, 0 when there is none: a cheap way to see
+    /// whether anything was appended since.
+    pub fn head_seq(&self) -> AppResult<u64> {
+        self.conn
+            .query_row("SELECT COALESCE(MAX(seq), 0) FROM ledger", [], |r| {
+                r.get::<_, i64>(0)
+            })
+            .map(|n| n.max(0) as u64)
+            .or_storage()
+    }
+
+    /// The entries of one `kind` with `seq > after`, oldest first.
+    pub fn of_kind_after(&self, kind: LedgerKind, after: u64) -> AppResult<Vec<LedgerEntry>> {
+        let mut stmt = self
+            .conn
+            .prepare_cached(&format!(
+                "SELECT {COLUMNS} FROM ledger WHERE kind = ?1 AND seq > ?2 ORDER BY seq"
+            ))
+            .or_storage()?;
+        let rows = stmt
+            .query_map(
+                params![kind.as_str(), i64::try_from(after).unwrap_or(i64::MAX)],
+                from_row,
+            )
+            .or_storage()?;
+        rows.collect::<Result<_, _>>()
+            .map_err(|e| AppError::Storage(format!("ledger: {e}")))
+    }
+}
+
 impl Ledger for SqliteLedger {
     fn append(&self, draft: LedgerDraft) -> AppResult<LedgerEntry> {
         // IMMEDIATE takes the write lock before reading the head, so two

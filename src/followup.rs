@@ -11,7 +11,7 @@ use swarmux_application::{FollowUpService, Reply, Settings};
 use swarmux_domain::JobId;
 use swarmux_domain::followup::{FollowStatus, FollowUp, OwnerBrief};
 use swarmux_infrastructure::{
-    HaikuExtractor, Paths, SqliteLedger, SqliteStore, SystemClock, load_settings,
+    HaikuExtractor, Paths, SqliteLedger, SqliteStore, SystemClock, load_effective_settings,
     utc_offset_minutes,
 };
 
@@ -68,7 +68,7 @@ fn open() -> anyhow::Result<FollowUpService> {
     let paths = Paths::default_home()?;
     std::fs::create_dir_all(&paths.data_dir)
         .with_context(|| format!("cannot create {}", paths.data_dir.display()))?;
-    let settings = load_settings(&paths.config)?;
+    let settings = load_effective_settings(&paths);
     let store = Rc::new(SqliteStore::open(&paths.db)?);
     let clock = Rc::new(SystemClock);
     let ledger = Rc::new(LedgerService::new(

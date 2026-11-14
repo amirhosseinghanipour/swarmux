@@ -45,6 +45,8 @@ pub struct Engine {
     pub followups: Option<Rc<crate::followup::FollowUpService>>,
     /// What the repositories of a workspace provide and consume.
     pub contracts: Option<Rc<ContractService>>,
+    /// Repositories waiting for the owner's trust, for the inbox.
+    pub trust: Option<std::sync::Arc<crate::trust::TrustGuard>>,
     /// Where the operator's notes to agents are recorded.
     pub ledger: Option<Rc<LedgerService>>,
     /// The operator's messages to running agents, and their settings.
@@ -83,6 +85,7 @@ impl Engine {
             knowledge: None,
             followups: None,
             contracts: None,
+            trust: None,
             ledger: None,
             interventions: crate::intervene::Interventions::default(),
         }

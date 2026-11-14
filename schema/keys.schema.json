@@ -1,0 +1,36 @@
+{
+  "$id": "https://raw.githubusercontent.com/amirhosseinghanipour/swarmux/main/schema/keys.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The [keys] section as `swarmux keys export` writes it.",
+  "properties": {
+    "keys": {
+      "additionalProperties": {
+        "additionalProperties": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "type": "object"
+      },
+      "description": "A table per context (`global`, a screen, or a part of one); each line is an action id and one key or a list of keys.",
+      "type": "object"
+    },
+    "schema_version": {
+      "default": 1,
+      "description": "The version of this file's format. Additive changes keep it; a breaking change raises it.",
+      "minimum": 1,
+      "type": "integer"
+    }
+  },
+  "title": "swarmux keys",
+  "type": "object"
+}

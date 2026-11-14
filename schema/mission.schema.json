@@ -1,0 +1,125 @@
+{
+  "$id": "https://raw.githubusercontent.com/amirhosseinghanipour/swarmux/main/schema/mission.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A mission's contract: the goal, what done means and the limits. An unknown key refuses the contract.",
+  "properties": {
+    "acceptance": {
+      "additionalProperties": false,
+      "properties": {
+        "by_repo": {
+          "additionalProperties": {
+            "description": "Checks of one repository.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "type": "object"
+        },
+        "checks": {
+          "description": "Commands that must pass, or `repo: command` lines.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "human_signoff": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "budget": {
+      "additionalProperties": false,
+      "properties": {
+        "on_exhaust": {
+          "default": "escalate",
+          "enum": [
+            "escalate",
+            "warn"
+          ],
+          "type": "string"
+        },
+        "usd": {
+          "exclusiveMinimum": 0,
+          "type": "number"
+        },
+        "wall_minutes": {
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "clarifications": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "answer": {
+            "type": "string"
+          },
+          "question": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "question"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "constraints": {
+      "additionalProperties": false,
+      "properties": {
+        "paths_rw": {
+          "description": "Globs the agent may write.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "protected": {
+          "description": "Globs the agent may never write.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "due": {
+      "description": "When it is needed by: RFC 3339 with an offset.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "goal": {
+      "description": "What done means, in a sentence.",
+      "type": "string"
+    },
+    "repos": {
+      "description": "The repositories of a workspace mission, producers first.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "schema_version": {
+      "default": 1,
+      "description": "The version of this file's format. Additive changes keep it; a breaking change raises it.",
+      "minimum": 1,
+      "type": "integer"
+    },
+    "title": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "goal"
+  ],
+  "title": "swarmux mission contract",
+  "type": "object"
+}

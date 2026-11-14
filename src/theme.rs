@@ -2,7 +2,7 @@
 
 use anyhow::{Context, anyhow};
 use swarmux_application::PaletteSource;
-use swarmux_infrastructure::{FilePalette, Paths, load_settings};
+use swarmux_infrastructure::{FilePalette, Paths, load_effective_settings};
 use swarmux_tui::theme::{THEMES, Theme};
 use swarmux_tui::theme_export::{ExportFormat, export};
 
@@ -10,7 +10,7 @@ use swarmux_tui::theme_export::{ExportFormat, export};
 /// built in, defined in `[themes.<name>]`, or imported from a palette file.
 pub fn find(name: Option<&str>) -> anyhow::Result<Theme> {
     let paths = Paths::default_home()?;
-    let settings = load_settings(&paths.config)?;
+    let settings = load_effective_settings(&paths);
     let want = name.unwrap_or(&settings.ui.theme);
     if let Some(source) = FilePalette::from_spec(want, &paths.home) {
         let palette = source.load().map_err(|e| anyhow!(e))?;
@@ -37,7 +37,7 @@ pub fn export_cmd(name: Option<&str>, format: &str) -> anyhow::Result<()> {
 /// Prints the built-in themes and the user's own.
 pub fn list() -> anyhow::Result<()> {
     let paths = Paths::default_home()?;
-    let settings = load_settings(&paths.config)?;
+    let settings = load_effective_settings(&paths);
     for t in THEMES {
         let alias = if t.name == "reference" {
             " (alias oled)"

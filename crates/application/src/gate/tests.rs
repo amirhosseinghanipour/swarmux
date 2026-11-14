@@ -13,6 +13,8 @@ use swarmux_domain::{AttentionKind, GuardPolicy, Session, Unmatched, Verdict};
 struct FakeSource {
     spec: Mutex<GateSpec>,
     pins: Mutex<Vec<Pin>>,
+    /// The repository ships its checks and needs the owner's trust.
+    shipped: Mutex<bool>,
 }
 
 impl FakeSource {
@@ -25,6 +27,7 @@ impl FakeSource {
                 ..GateSpec::default()
             }),
             pins: Mutex::new(vec![pin("tests/oracles/expected.txt", "42")]),
+            shipped: Mutex::new(false),
         }
     }
 }
@@ -48,6 +51,24 @@ impl GateSource for FakeSource {
 
     fn pins(&self, _root: &Path, _globs: &[String]) -> Vec<Pin> {
         lock(&self.pins).clone()
+    }
+
+    fn supplied(&self, _gate: &LoadedGate) -> swarmux_domain::trust::Supplied {
+        use swarmux_domain::trust::{CommandSource, Supplied, TrustEntry, WantedCommand};
+        if !*lock(&self.shipped) {
+            return Supplied::default();
+        }
+        Supplied {
+            repo_id: "w.id-000000000000".into(),
+            root: "/w".into(),
+            entries: vec![TrustEntry::of_bytes(".swarmux/gates.toml", b"[[check]]")],
+            commands: vec![WantedCommand {
+                name: "cargo test".into(),
+                line: "cargo test".into(),
+                source: CommandSource::File,
+            }],
+            loosens: Vec::new(),
+        }
     }
 }
 
@@ -1099,4 +1120,78 @@ fn a_job_that_ended_and_could_not_be_verified_shows_as_unverified_with_why() {
     .with_finisher(Rc::new(Refuses));
     assert!(fresh.pump_finished(&done).is_empty());
     assert!(fresh.state(f.job).is_none());
+}
+
+struct Grants(Mutex<Vec<swarmux_domain::trust::TrustEvent>>);
+
+impl crate::trust::TrustReader for Grants {
+    fn events(&self) -> Vec<swarmux_domain::trust::TrustEvent> {
+        lock(&self.0).clone()
+    }
+}
+
+#[test]
+fn a_stop_in_a_repository_nobody_trusted_runs_no_check_and_escalates_until_it_is_granted() {
+    use swarmux_domain::trust::{TrustEvent, TrustRecord};
+    let source = Arc::new(FakeSource::new(2));
+    *lock(&source.shipped) = true;
+    let checker = Arc::new(FakeChecker::default());
+    let grants = Arc::new(Grants(Mutex::new(Vec::new())));
+    let (keeper, rx) = GateKeeper::new(source.clone(), checker.clone());
+    let keeper = Arc::new(keeper.with_trust(Arc::new(crate::trust::TrustGuard::new(
+        grants.clone(),
+        FixedClock::new(1).reader(),
+    ))));
+    let notice = |event, tool: Option<&str>| HookNotice {
+        event,
+        job: Some(JobId(1)),
+        session: "claude-1".into(),
+        cwd: "/w".into(),
+        tool: tool.map(str::to_string),
+        summary: "x".into(),
+        detail: String::new(),
+        input_sha256: String::new(),
+        input_len: 0,
+        raw: String::new(),
+    };
+    let stop = |message: &str| {
+        keeper.on_stop(&StopContext {
+            event: HookEvent::Stop,
+            job: Some(JobId(1)),
+            session: "claude-1".into(),
+            cwd: "/w".into(),
+            last_message: message.into(),
+        })
+    };
+    keeper.observe(&notice(HookEvent::SessionStart, None));
+    keeper.observe(&notice(HookEvent::PostToolUse, Some("Edit")));
+    stop("done");
+    assert_eq!(
+        checker.runs.load(Ordering::SeqCst),
+        0,
+        "no command of the repository ran"
+    );
+    let record = rx.try_recv().expect("the gate still says something");
+    assert_ne!(record.outcome, GateOutcome::Pass);
+    assert!(
+        record
+            .problem
+            .as_deref()
+            .is_some_and(|p| p.contains("not trusted")),
+        "{:?}",
+        record.problem
+    );
+
+    // The owner grants exactly these files: the next stop runs the check.
+    let supplied = source.supplied(&source.load(Path::new("/w")));
+    lock(&grants.0).push(TrustEvent::Granted(TrustRecord {
+        repo_id: supplied.repo_id,
+        root: supplied.root,
+        entries: supplied.entries,
+        at: 2,
+    }));
+    keeper.observe(&notice(HookEvent::PostToolUse, Some("Edit")));
+    stop("done");
+    // A failing check is run once more by the gate itself.
+    assert!(checker.runs.load(Ordering::SeqCst) >= 1, "now it runs");
 }

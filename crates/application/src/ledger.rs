@@ -11,7 +11,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use swarmux_domain::gate::GateOutcome;
+use swarmux_domain::gate::{GateOrigin, GateOutcome};
 use swarmux_domain::ledger::{
     ChainBreak, ChainVerifier, Hash, LedgerDraft, LedgerEntry, LedgerKind, Payload,
 };
@@ -724,7 +724,26 @@ impl LedgerService {
             .strs("incomplete", &r.findings.incomplete())
             .strs("warnings", &r.findings.warnings)
             .bool("unattended", r.findings.unattended)
-            .str("policy_sha256", &r.findings.policy_sha256);
+            .str("policy_sha256", &r.findings.policy_sha256)
+            .str(
+                "policy_tier",
+                match r.origin {
+                    GateOrigin::File => "project",
+                    GateOrigin::Detected => "core",
+                },
+            )
+            .text(
+                "policy_source",
+                &match r.origin {
+                    GateOrigin::File => format!(
+                        "{}/.swarmux/gates.toml",
+                        r.root.trim_end_matches(['/', '\\'])
+                    ),
+                    GateOrigin::Detected => {
+                        "checks guessed from the repository's files".to_string()
+                    }
+                },
+            );
         // What the verdict could not say about the hidden checks, and how
         // the base suite and the revert probe went, for the bundle.
         let payload = match &r.findings.hidden_not_run {
@@ -826,7 +845,10 @@ impl LedgerService {
             .opt_num("confidence", d.confidence)
             .opt_str("resolver", d.extra.resolver.as_deref())
             .opt_str("agent_id", d.extra.agent_id.as_deref())
-            .opt_str("agent_type", d.extra.agent_type.as_deref());
+            .opt_str("agent_type", d.extra.agent_type.as_deref())
+            .opt_str("policy_sha256", d.extra.policy_sha256.as_deref())
+            .opt_str("rule_tier", d.extra.rule_tier.as_deref())
+            .opt_str("rule_source", d.extra.rule_source.as_deref());
         self.append(
             d.ts,
             LedgerKind::GuardDecision,
@@ -919,6 +941,97 @@ impl LedgerService {
             .str("event", "holdout_migrated")
             .str("from", from)
             .str("to", to);
+        self.append(now, LedgerKind::Policy, "operator", None, None, payload)
+    }
+
+    /// The owner trusted a repository: which one, the hash of every file
+    /// (and guessed command) the grant covers, and the commands it lets run.
+    /// Trust is read back from these entries, newest wins.
+    pub fn record_trust_granted(
+        &self,
+        record: &swarmux_domain::trust::TrustRecord,
+        supplied: &swarmux_domain::trust::Supplied,
+        now: Millis,
+    ) -> AppResult<()> {
+        let files = record
+            .entries
+            .iter()
+            .map(|e| {
+                Payload::new()
+                    .text("path", &e.path)
+                    .str("sha256", &e.sha256)
+            })
+            .collect();
+        let commands: Vec<String> = supplied.commands.iter().map(|c| c.line.clone()).collect();
+        let covered: String = record
+            .entries
+            .iter()
+            .map(|e| format!("{} {}\n", e.path, e.sha256))
+            .collect();
+        let payload = Payload::new()
+            .str("event", "trust_granted")
+            .str("repo_id", &record.repo_id)
+            .text("root", &record.root)
+            .objects("file_hashes", files)
+            .strs("commands", &commands)
+            .strs("loosens", &supplied.loosens)
+            .str("policy_sha256", &hex(&sha256(covered.as_bytes())));
+        self.append(now, LedgerKind::Policy, "operator", None, None, payload)
+    }
+
+    /// The owner took a repository's trust back.
+    pub fn record_trust_revoked(&self, repo_id: &str, root: &str, now: Millis) -> AppResult<()> {
+        let payload = Payload::new()
+            .str("event", "trust_revoked")
+            .str("repo_id", repo_id)
+            .text("root", root);
+        self.append(now, LedgerKind::Policy, "operator", None, None, payload)
+    }
+
+    /// The effective configuration a mission started under: its hash and the
+    /// layers it was read from (`mission` is its slug, `job` the job it
+    /// became when there is one).
+    pub fn record_config_loaded(
+        &self,
+        config: &crate::Provenance,
+        mission: Option<&str>,
+        job: Option<JobId>,
+        now: Millis,
+    ) -> AppResult<()> {
+        let layers = config
+            .layers
+            .iter()
+            .map(|(tier, source, found)| {
+                Payload::new()
+                    .str("tier", tier.as_str())
+                    .text("source", source)
+                    .bool("found", *found)
+            })
+            .collect();
+        let payload = Payload::new()
+            .str("event", "config_loaded")
+            .opt_str("mission", mission)
+            .str("config_sha256", &config.config_sha256)
+            .objects("layers", layers);
+        self.append(now, LedgerKind::Policy, "swarmux", job, None, payload)
+    }
+
+    /// `swarmux config migrate-paths` moved the data of an old install: from
+    /// where, to which config and state folders, and what moved.
+    pub fn record_paths_migrated(
+        &self,
+        from: &str,
+        config_to: &str,
+        state_to: &str,
+        moved: &[String],
+        now: Millis,
+    ) -> AppResult<()> {
+        let payload = Payload::new()
+            .str("event", "paths_migrated")
+            .text("from", from)
+            .text("config_to", config_to)
+            .text("state_to", state_to)
+            .strs("moved", moved);
         self.append(now, LedgerKind::Policy, "operator", None, None, payload)
     }
 

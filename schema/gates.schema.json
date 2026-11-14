@@ -1,0 +1,191 @@
+{
+  "$id": "https://raw.githubusercontent.com/amirhosseinghanipour/swarmux/main/schema/gates.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A repository's done-gate. An unknown key or a value that cannot be used makes the gate escalate: it never passes on a file it cannot read.",
+  "properties": {
+    "check": {
+      "description": "Checks that must pass. A repository's checks run only after `swarmux trust grant`.",
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "env": {
+            "description": "Environment variables this check may see besides the built-in allowlist.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "level": {
+            "enum": [
+              "fast",
+              "full",
+              "deep"
+            ],
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "on_error": {
+            "const": "fail",
+            "description": "The only value: a check that cannot run never passes."
+          },
+          "required": {
+            "default": true,
+            "type": "boolean"
+          },
+          "run": {
+            "description": "The program and its arguments. Never a shell.",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "type": "array"
+          },
+          "timeout_secs": {
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "run"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "gate": {
+      "additionalProperties": false,
+      "description": "How the done-gate behaves.",
+      "properties": {
+        "detect": {
+          "default": true,
+          "description": "Guess checks from the repository's files when none are listed.",
+          "type": "boolean"
+        },
+        "evidence": {
+          "default": true,
+          "description": "Test runs the agent claims must appear in what it ran.",
+          "type": "boolean"
+        },
+        "level": {
+          "enum": [
+            "fast",
+            "full",
+            "deep"
+          ],
+          "type": "string"
+        },
+        "max_blocks": {
+          "default": 3,
+          "description": "Stops blocked before the owner is asked; 0 never blocks (ignored until the repository is trusted).",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "protected": {
+          "description": "Globs of files agents may not write. Restricts, so it applies at once.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "subagent_checks": {
+          "default": false,
+          "description": "Subagents' stops run the checks too.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "schema_version": {
+      "default": 1,
+      "description": "The version of this file's format. Additive changes keep it; a breaking change raises it.",
+      "minimum": 1,
+      "type": "integer"
+    },
+    "verifier": {
+      "additionalProperties": false,
+      "description": "How the independent verifier treats this repository.",
+      "properties": {
+        "allow_substrate": {
+          "description": "Harness files this repository changes on purpose (loosens: needs trust).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "allow_test_changes": {
+          "description": "Globs of tests that may be removed or changed on purpose (loosens: needs trust).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "base_suite": {
+          "default": true,
+          "type": "boolean"
+        },
+        "clean": {
+          "default": true,
+          "type": "boolean"
+        },
+        "dependencies": {
+          "default": "flag",
+          "enum": [
+            "flag",
+            "block"
+          ],
+          "type": "string"
+        },
+        "env": {
+          "description": "Environment variables every check may see (loosens: needs trust).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "flaky_after": {
+          "default": 3,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "flaky_window": {
+          "default": 10,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "revert_probe": {
+          "default": false,
+          "type": "boolean"
+        },
+        "substrate": {
+          "description": "Harness files besides the built-in list (restricts).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "test_edits": {
+          "default": "block",
+          "enum": [
+            "block",
+            "allow"
+          ],
+          "type": "string"
+        },
+        "worktree_checks": {
+          "default": "escalate",
+          "enum": [
+            "escalate",
+            "allow"
+          ],
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "title": "swarmux .swarmux/gates.toml",
+  "type": "object"
+}

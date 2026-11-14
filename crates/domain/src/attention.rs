@@ -62,6 +62,9 @@ pub enum AttentionKind {
     FollowUp,
     /// Knowledge items whose code changed wait to be confirmed.
     Knowledge,
+    /// A repository wants to run commands and the owner has not granted it
+    /// trust yet (or its files changed since).
+    Trust,
 }
 
 impl AttentionKind {
@@ -81,6 +84,7 @@ impl AttentionKind {
             AttentionKind::BoardQuestion => "ask",
             AttentionKind::FollowUp => "followup",
             AttentionKind::Knowledge => "knowledge",
+            AttentionKind::Trust => "trust",
         }
     }
 
@@ -242,7 +246,8 @@ impl AttentionItem {
                 | AttentionKind::Merge
                 | AttentionKind::BoardQuestion
                 | AttentionKind::FollowUp
-                | AttentionKind::Knowledge,
+                | AttentionKind::Knowledge
+                | AttentionKind::Trust,
             ) => self.id.to_string(),
             (None, kind) => kind.as_str().to_string(),
         }
@@ -503,6 +508,19 @@ impl AttentionItem {
         )
     }
 
+    /// A repository wants to run commands it ships (or guessed ones) and
+    /// the owner has not granted it trust for them. P2: the gate escalates
+    /// until it is answered, but nothing is blocked from starting.
+    pub fn trust(repo_id: &str, title: &str, detail: &str, since: Millis) -> AttentionItem {
+        AttentionItem::of_mission(
+            format!("trust:{repo_id}"),
+            (AttentionKind::Trust, Priority::P2, Likelihood::Certain),
+            (None, None),
+            (title, detail),
+            since,
+        )
+    }
+
     fn of_mission(
         id: String,
         (kind, priority, likelihood): (AttentionKind, Priority, Likelihood),
@@ -555,6 +573,7 @@ impl AttentionItem {
             AttentionKind::BoardQuestion => "ask",
             AttentionKind::FollowUp => "followup",
             AttentionKind::Knowledge => "knowledge",
+            AttentionKind::Trust => "trust",
         };
         AttentionItem {
             id: AttentionId::new(format!("job:{job}:{suffix}")),

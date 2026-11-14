@@ -157,6 +157,25 @@ impl GuardPolicy {
         self.unmatched
     }
 
+    /// The rule set as one canonical text: what decides a call. Its hash
+    /// goes into every decision's ledger entry, so a decision can be tied to
+    /// the exact rules in force when it was made.
+    pub fn policy_text(&self) -> String {
+        let mut out = format!("unmatched={:?}\n", self.unmatched);
+        for r in &self.deny {
+            out.push_str(&format!("deny:{r}\n"));
+        }
+        for r in &self.allow {
+            out.push_str(&format!("allow:{r}\n"));
+        }
+        out
+    }
+
+    /// The hash of [`GuardPolicy::policy_text`], hex.
+    pub fn policy_sha256(&self) -> String {
+        crate::ledger::hex(&crate::ledger::sha256(self.policy_text().as_bytes()))
+    }
+
     /// Adds an allow rule (deny rules still win).
     pub fn add_allow(&mut self, rule: Pattern) {
         if !self.allow.contains(&rule) {

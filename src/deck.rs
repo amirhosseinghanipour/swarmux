@@ -4,7 +4,7 @@
 use std::process::ExitCode;
 
 use swarmux_domain::console::{DeckConfig, DeckLayout, Zone, resolve_deck};
-use swarmux_infrastructure::{Paths, load_settings};
+use swarmux_infrastructure::{Paths, load_effective_settings};
 
 /// What `swarmux deck` was asked to do.
 #[derive(Clone, Copy)]
@@ -15,7 +15,7 @@ pub enum Action {
 
 pub fn run(action: Action) -> anyhow::Result<ExitCode> {
     let paths = Paths::default_home()?;
-    let settings = load_settings(&paths.config)?;
+    let settings = load_effective_settings(&paths);
     let layout = resolve_deck(&settings.deck);
     let source = paths.config.display().to_string();
     match action {
@@ -23,7 +23,7 @@ pub fn run(action: Action) -> anyhow::Result<ExitCode> {
         Action::Lint => {
             let (report, failed) = lint(&settings.deck, &layout, &source);
             print!("{report}");
-            if failed {
+            if failed || crate::configcmd::report_syntax(&paths) {
                 return Ok(ExitCode::FAILURE);
             }
         }

@@ -15,6 +15,7 @@ use swarmux_domain::gate::{
     protected_glob, search_roots,
 };
 use swarmux_domain::ledger::{hex, sha256};
+use swarmux_domain::trust::Supplied;
 
 /// Where a repository's gate lives, relative to its root.
 pub const GATES_FILE: &str = ".swarmux/gates.toml";
@@ -38,6 +39,9 @@ const PIN_BYTES_MAX: u64 = 64 << 20;
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawFile {
+    /// The version of this file's format.
+    #[allow(dead_code)]
+    schema_version: Option<toml::Value>,
     #[serde(default)]
     gate: RawGate,
     #[serde(default)]
@@ -417,12 +421,25 @@ pub fn parse_gates(text: &str, repo: &RepoFacts) -> Result<GateSpec, String> {
 }
 
 type Stamp = (Option<SystemTime>, Option<SystemTime>);
+/// When the files that decide what a repository supplies last changed.
+pub(super) type RepoFilesStamp = [Option<SystemTime>; 5];
+
+/// How many `[[check]]` a `gates.toml` declares; 0 for text that is not one.
+pub(super) fn declared_check_count(text: &str) -> usize {
+    toml::from_str::<RawFile>(text).map_or(0, |f| f.check.len())
+}
+
+/// `scripts.test` of the `package.json` at `root`.
+pub(super) fn npm_test_script(root: &Path) -> Option<String> {
+    facts_of(root).npm_test
+}
 
 /// Reads gates from the file system, re-reading a repository's gate only
 /// when its `gates.toml` or its root folder changed.
 #[derive(Default)]
 pub struct FsGateSource {
     cache: Mutex<HashMap<PathBuf, (Stamp, LoadedGate)>>,
+    supplied: Mutex<HashMap<PathBuf, (RepoFilesStamp, Supplied)>>,
 }
 
 impl FsGateSource {
@@ -487,7 +504,7 @@ fn facts_of(root: &Path) -> RepoFacts {
 fn load_at(root: &Path) -> LoadedGate {
     let file = root.join(GATES_FILE);
     let facts = facts_of(root);
-    let (spec, origin, problem) = match fs::read_to_string(&file) {
+    let (mut spec, origin, problem) = match fs::read_to_string(&file) {
         Ok(text) => match parse_gates(&text, &facts) {
             Ok(spec) => (spec, GateOrigin::File, None),
             Err(e) => (
@@ -505,6 +522,15 @@ fn load_at(root: &Path) -> LoadedGate {
             None,
         ),
     };
+    // The project tier of the configuration: what only restricts counts at
+    // once, trusted or not (protected paths).
+    let project = crate::config_layers::project_restrictions(root);
+    for glob in project.protected {
+        if !spec.protected.contains(&glob) {
+            spec.protected.push(glob);
+        }
+    }
+    spec.warnings.extend(project.warnings);
     LoadedGate {
         root: root.to_path_buf(),
         spec,
@@ -516,7 +542,11 @@ fn load_at(root: &Path) -> LoadedGate {
 impl GateSource for FsGateSource {
     fn load(&self, dir: &Path) -> LoadedGate {
         let root = root_of(dir);
-        let stamp = (modified(&root.join(GATES_FILE)), modified(&root));
+        let stamp = (
+            modified(&root.join(GATES_FILE))
+                .max(modified(&root.join(".swarmux").join("config.toml"))),
+            modified(&root),
+        );
         let mut cache = self.cache.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some((at, gate)) = cache.get(&root)
             && *at == stamp
@@ -526,6 +556,20 @@ impl GateSource for FsGateSource {
         let gate = load_at(&root);
         cache.insert(root, (stamp, gate.clone()));
         gate
+    }
+
+    fn supplied(&self, gate: &LoadedGate) -> Supplied {
+        let stamp = super::supplied::stamp(&gate.root);
+        let mut cache = self.supplied.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some((at, found)) = cache.get(&gate.root)
+            && *at == stamp
+        {
+            return found.clone();
+        }
+        let id = crate::trust::repo_id_of(&gate.root);
+        let found = super::supplied::compute(&gate.root, gate, id);
+        cache.insert(gate.root.clone(), (stamp, found.clone()));
+        found
     }
 
     fn pins(&self, root: &Path, globs: &[String]) -> Vec<Pin> {

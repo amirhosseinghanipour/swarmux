@@ -18,7 +18,7 @@ use swarmux_infrastructure::hook::{self, ENV_JOB, ENV_PIPE, HookServer};
 use swarmux_infrastructure::process::hide_std;
 use swarmux_infrastructure::{
     ClaudeRuntime, Paths, SqliteLedger, SqliteStore, SysinfoMonitor, SystemClock, legacy_jev,
-    load_settings,
+    load_effective,
 };
 
 const GB: f64 = (1u64 << 30) as f64;
@@ -55,8 +55,10 @@ pub fn run(conformance: bool, profile: RuntimeProfile) -> anyhow::Result<()> {
         Ok(ledger) => crate::audit::doctor(&ledger),
         Err(e) => println!("fail ledger: {e}"),
     }
-    match load_settings(&paths.config) {
-        Ok(s) => {
+    let resolved = load_effective(&paths);
+    {
+        let s = resolved.settings.clone();
+        {
             let source = if paths.config.exists() {
                 paths.config.display().to_string()
             } else {
@@ -73,9 +75,10 @@ pub fn run(conformance: bool, profile: RuntimeProfile) -> anyhow::Result<()> {
             }
             crate::telemetry::doctor(&s, &paths, SystemClock.now());
         }
-        Err(e) => println!("fail config {e}"),
+        crate::configcmd::doctor(&paths, &resolved);
     }
     hook_checks();
+    crate::trust::doctor(&paths);
     println!("{}", crate::daemon::doctor_line(&paths));
     match SysinfoMonitor::new().free_memory_bytes() {
         Some(free) => println!("ok   free memory {:.1} GB", free as f64 / GB),
@@ -259,7 +262,7 @@ fn guard_canaries(s: &Settings) -> Vec<CanaryCheck> {
 /// Guard's own, each with its result.
 fn run_conformance(bin: &Path, probes: Probes, profile: RuntimeProfile) -> anyhow::Result<()> {
     let paths = Paths::default_home()?;
-    let settings = load_settings(&paths.config)?;
+    let settings = load_effective(&paths).settings;
     println!();
     println!(
         "conformance, profile {profile}: {} calls to claude (--model haiku, a few turns each), then the Guard's own canaries",

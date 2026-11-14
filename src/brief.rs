@@ -3,7 +3,7 @@
 use std::process::ExitCode;
 
 use swarmux_domain::console::{BriefConfig, BriefSettings, resolve_brief};
-use swarmux_infrastructure::{Paths, load_settings};
+use swarmux_infrastructure::{Paths, load_effective_settings};
 
 /// What `swarmux return-brief` was asked to do.
 #[derive(Clone, Copy)]
@@ -13,7 +13,7 @@ pub enum Action {
 
 pub fn run(action: Action) -> anyhow::Result<ExitCode> {
     let paths = Paths::default_home()?;
-    let settings = load_settings(&paths.config)?;
+    let settings = load_effective_settings(&paths);
     let resolved = resolve_brief(&settings.brief);
     let source = paths.config.display().to_string();
     match action {

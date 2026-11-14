@@ -56,7 +56,7 @@ pub fn export(theme: &Theme, format: ExportFormat) -> String {
 
 fn toml(t: &Theme) -> String {
     let mut out = format!(
-        "# swarmux theme \"{0}\": paste into ~/.swarmux/config.toml\ntheme = \"{0}\"\n\n[themes.{0}]\n",
+        "# swarmux theme \"{0}\": paste into config.toml (leave out the schema_version line\n# when it has one already).\nschema_version = 1\ntheme = \"{0}\"\n\n[themes.{0}]\n",
         t.name
     );
     for (role, colours) in t.roles() {

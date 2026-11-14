@@ -13,7 +13,9 @@ use swarmux_domain::telemetry::UsageReport;
 use swarmux_infrastructure::telemetry::CollectorConfig;
 use swarmux_infrastructure::telemetry::localtime;
 use swarmux_infrastructure::telemetry::transcripts::TranscriptIndex;
-use swarmux_infrastructure::{Paths, SqliteLedger, SqliteStore, SystemClock, load_settings};
+use swarmux_infrastructure::{
+    Paths, SqliteLedger, SqliteStore, SystemClock, load_effective_settings,
+};
 use swarmux_tui::fetch::{ColorChoice, Depth, FetchInfo, render, terminal_columns};
 
 use crate::{doctor, evidence, theme};
@@ -32,7 +34,7 @@ pub fn run(theme_name: Option<&str>, color: &str) -> anyhow::Result<()> {
     let theme = theme::find(theme_name)?;
     let depth = Depth::from_env(choice, std::io::stdout().is_terminal());
     let paths = Paths::default_home()?;
-    let settings = load_settings(&paths.config)?;
+    let settings = load_effective_settings(&paths);
     let info = gather(&settings, &paths, theme.name);
     let width = terminal_columns().unwrap_or(DEFAULT_COLUMNS);
     print!("{}", render(&info, &theme, depth, width));

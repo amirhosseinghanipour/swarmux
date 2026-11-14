@@ -253,7 +253,7 @@ pub fn build(options: &Options) -> anyhow::Result<App> {
     // so `swarmux --demo` shows what their own keymap looks like.
     let keys = Paths::default_home()
         .ok()
-        .and_then(|p| swarmux_infrastructure::load_settings(&p.config).ok())
+        .map(|p| swarmux_infrastructure::load_effective_settings(&p))
         .map(|s| s.keys)
         .unwrap_or_default();
     let mut app = app.with_key_config(&keys);

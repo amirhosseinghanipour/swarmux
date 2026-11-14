@@ -381,6 +381,9 @@ pub enum AskKind {
     BoardQuestion,
     FollowUp,
     Knowledge,
+    /// A repository waits for the owner's trust (a wire value added in X4;
+    /// clients tolerate kinds they do not know).
+    Trust,
 }
 mirror!(
     AskKind
@@ -399,6 +402,7 @@ mirror!(
             BoardQuestion,
             FollowUp,
             Knowledge,
+            Trust,
         }
 );
 

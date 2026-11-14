@@ -19,13 +19,24 @@ use swarmux_infrastructure::gate::GATES_FILE;
 use crate::holdout;
 use swarmux_infrastructure::{FsGateSource, Paths, ProcessChecker, SqliteLedger, SystemClock};
 
-fn load(dir: Option<PathBuf>) -> anyhow::Result<LoadedGate> {
+fn folder(dir: Option<PathBuf>) -> anyhow::Result<PathBuf> {
     let dir = match dir {
         Some(d) => d,
         None => std::env::current_dir().context("cannot read the current folder")?,
     };
     anyhow::ensure!(dir.is_dir(), "{} is not a folder", dir.display());
-    Ok(FsGateSource::new().load(&dir))
+    Ok(dir)
+}
+
+/// The gate as the repository wrote it: what `gate lint` checks.
+fn load_file(dir: Option<PathBuf>) -> anyhow::Result<LoadedGate> {
+    Ok(FsGateSource::new().load(&folder(dir)?))
+}
+
+/// The gate as it counts: a repository the owner has not trusted runs none
+/// of its checks (`swarmux trust`).
+fn load(dir: Option<PathBuf>) -> anyhow::Result<LoadedGate> {
+    crate::trust::trusted_gate(&folder(dir)?)
 }
 
 /// The level named on the command line, if any.
@@ -122,7 +133,7 @@ pub fn show(dir: Option<PathBuf>) -> anyhow::Result<()> {
 /// read with a fallback. Whether it is clean (and with `strict`, free of
 /// warnings).
 pub fn lint(dir: Option<PathBuf>, strict: bool) -> anyhow::Result<bool> {
-    let gate = load(dir)?;
+    let gate = load_file(dir)?;
     let mut clean = true;
     match &gate.problem {
         Some(p) => {

@@ -1,0 +1,1797 @@
+{
+  "$id": "https://raw.githubusercontent.com/amirhosseinghanipour/swarmux/main/schema/config.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Settings for swarmux. Layers: the organisation's file, this file, a workspace's file, a repository's .swarmux/config.toml, SWARMUX_<SECTION>__<KEY> variables and --set. Every key is optional.",
+  "properties": {
+    "bg": {
+      "default": "theme",
+      "description": "\"none\" draws no background, so the terminal's shows through.",
+      "enum": [
+        "theme",
+        "none",
+        "solid",
+        "transparent"
+      ],
+      "type": "string",
+      "x-swarmux-effect": "neutral",
+      "x-swarmux-env": true,
+      "x-swarmux-merge": "scalar",
+      "x-swarmux-tiers": [
+        "org",
+        "user",
+        "workspace",
+        "run"
+      ]
+    },
+    "board": {
+      "additionalProperties": false,
+      "description": "The Board: shared state between the agents of a mission.",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "description": "Mission jobs get the board.",
+          "type": "boolean",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "scalar",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "brief": {
+      "description": "The return brief: `away_after_minutes` (default 30), `show_on_attach`, `esc_goes_to` (see `swarmux return-brief lint`).",
+      "type": "object",
+      "x-swarmux-effect": "neutral",
+      "x-swarmux-env": true,
+      "x-swarmux-merge": "allowlist",
+      "x-swarmux-tiers": [
+        "org",
+        "user",
+        "workspace",
+        "run"
+      ]
+    },
+    "console": {
+      "additionalProperties": false,
+      "description": "The Work and Deck screens.",
+      "properties": {
+        "intervene_confirm_steer": {
+          "default": true,
+          "description": "Ask a second time before a steer stops a turn.",
+          "type": "boolean",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "scalar",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        },
+        "intervene_max_chars": {
+          "default": 2000,
+          "description": "The longest message you can send to an agent, in characters.",
+          "maximum": 20000,
+          "minimum": 1,
+          "type": "integer",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "scalar",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        },
+        "intervene_mode": {
+          "default": "queue",
+          "description": "How `m` on a running job delivers your message: at the end of its turn, or by stopping the turn first.",
+          "enum": [
+            "queue",
+            "steer"
+          ],
+          "type": "string",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "scalar",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        },
+        "metrics_hours": {
+          "default": 24,
+          "description": "How many hours back the verification figures look.",
+          "maximum": 720,
+          "minimum": 1,
+          "type": "integer",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "scalar",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        },
+        "send_back_notes": {
+          "description": "The notes offered when you send work back.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "allowlist",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "deck": {
+      "description": "The Deck's panels and zones (see `swarmux deck show`).",
+      "type": "object",
+      "x-swarmux-effect": "neutral",
+      "x-swarmux-env": true,
+      "x-swarmux-merge": "allowlist",
+      "x-swarmux-tiers": [
+        "org",
+        "user",
+        "workspace",
+        "run"
+      ]
+    },
+    "default_model": {
+      "default": "sonnet",
+      "description": "Model for new sessions.",
+      "type": "string",
+      "x-swarmux-effect": "neutral",
+      "x-swarmux-env": true,
+      "x-swarmux-merge": "scalar",
+      "x-swarmux-tiers": [
+        "org",
+        "user",
+        "workspace",
+        "run"
+      ]
+    },
+    "followups": {
+      "additionalProperties": false,
+      "description": "Follow-through: what agents leave behind.",
+      "properties": {
+        "brief_times": {
+          "description": "Times of day for the owner brief, like \"09:00\".",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "allowlist",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        },
+        "defer_hours": {
+          "default": 24,
+          "description": "How long \"later\" is.",
+          "maximum": 8760,
+          "minimum": 1,
+          "type": "integer",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "scalar",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        },
+        "enabled": {
+          "default": true,
+          "description": "Collect follow-ups.",
+          "type": "boolean",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "scalar",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        },
+        "extract": {
+          "default": true,
+          "description": "Find follow-ups in what agents say (calls a model).",
+          "type": "boolean",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "scalar",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        },
+        "extract_model": {
+          "default": "haiku",
+          "description": "The model that finds them.",
+          "type": "string",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "scalar",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        },
+        "max_cards": {
+          "default": 5,
+          "description": "Cards in the brief.",
+          "maximum": 100,
+          "minimum": 1,
+          "type": "integer",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "scalar",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        },
+        "order": {
+          "description": "Standing orders: `[[followups.order]]` tables that act on follow-ups by themselves.",
+          "x-swarmux-effect": "grants",
+          "x-swarmux-env": false,
+          "x-swarmux-merge": "allowlist",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        },
+        "protected": {
+          "default": [],
+          "description": "Globs a standing order may never touch.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "x-swarmux-effect": "restricts",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "list",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "pack",
+            "mission",
+            "run"
+          ]
+        },
+        "spot_check_days": {
+          "default": 7,
+          "description": "Days between spot checks.",
+          "maximum": 365,
+          "minimum": 1,
+          "type": "integer",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "scalar",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "font": {
+      "default": "",
+      "description": "The terminal font to assume for icons, when it matters.",
+      "type": "string",
+      "x-swarmux-effect": "neutral",
+      "x-swarmux-env": true,
+      "x-swarmux-merge": "scalar",
+      "x-swarmux-tiers": [
+        "org",
+        "user",
+        "workspace",
+        "run"
+      ]
+    },
+    "fps": {
+      "default": 10,
+      "description": "Frames per second.",
+      "maximum": 30,
+      "minimum": 1,
+      "type": "integer",
+      "x-swarmux-effect": "neutral",
+      "x-swarmux-env": true,
+      "x-swarmux-merge": "scalar",
+      "x-swarmux-tiers": [
+        "org",
+        "user",
+        "workspace",
+        "run"
+      ]
+    },
+    "gaps": {
+      "default": 1,
+      "description": "Cells between panels.",
+      "maximum": 4,
+      "minimum": 0,
+      "type": "integer",
+      "x-swarmux-effect": "neutral",
+      "x-swarmux-env": true,
+      "x-swarmux-merge": "scalar",
+      "x-swarmux-tiers": [
+        "org",
+        "user",
+        "workspace",
+        "run"
+      ]
+    },
+    "governor": {
+      "additionalProperties": false,
+      "description": "When queued work waits, runs cheaper or runs fewer at once.",
+      "properties": {
+        "battery_concurrency": {
+          "default": 2,
+          "description": "Jobs at once on battery.",
+          "minimum": 1,
+          "type": "integer",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "scalar",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        },
+        "budget_line": {
+          "default": true,
+          "description": "Show the budget line on the wall.",
+          "type": "boolean",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "scalar",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        },
+        "downgrade_at": {
+          "default": 0.9,
+          "description": "Jobs use the cheaper model above this.",
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "scalar",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        },
+        "downgrade_to": {
+          "default": "sonnet",
+          "description": "The cheaper model.",
+          "type": "string",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "scalar",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        },
+        "enabled": {
+          "default": true,
+          "description": "Hold, downgrade and limit by the usage windows.",
+          "type": "boolean",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "scalar",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        },
+        "hold_at": {
+          "default": 0.97,
+          "description": "New jobs wait while a window is this full.",
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "scalar",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        },
+        "horizon_minutes": {
+          "default": 30,
+          "description": "How far ahead the forecast looks.",
+          "maximum": 1440,
+          "minimum": 1,
+          "type": "integer",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "scalar",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        },
+        "load_hold_at": {
+          "default": 0.7,
+          "description": "New jobs wait while the machine is this busy.",
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "scalar",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        },
+        "max_job_usd": {
+          "description": "A job that has cost this much is stopped; unset is no limit.",
+          "type": "number",
+          "x-swarmux-effect": "restricts",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "lock",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "pack",
+            "mission",
+            "run"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "guard": {
+      "additionalProperties": false,
+      "description": "Which tool calls are allowed, denied or asked.",
+      "properties": {
+        "allow": {
+          "default": [],
+          "description": "Allow rules (`Tool(pattern)`). Evaluated after the denies.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "x-swarmux-effect": "grants",
+          "x-swarmux-env": false,
+          "x-swarmux-merge": "list",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        },
+        "always_expiry_days": {
+          "default": 30,
+          "description": "Days an \"always allow\" rule lasts, 1 to 3650, or \"never\".",
+          "x-swarmux-effect": "restricts",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "lock",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "pack",
+            "mission",
+            "run"
+          ]
+        },
+        "always_scope": {
+          "default": "repo",
+          "description": "Where an \"always allow\" rule applies.",
+          "enum": [
+            "repo",
+            "workspace",
+            "global"
+          ],
+          "type": "string",
+          "x-swarmux-effect": "restricts",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "lock",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "pack",
+            "mission",
+            "run"
+          ]
+        },
+        "approval_timeout_secs": {
+          "default": 120,
+          "description": "How long a held call waits for your answer.",
+          "maximum": 3600,
+          "minimum": 1,
+          "type": "integer",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "scalar",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        },
+        "deny": {
+          "default": [],
+          "description": "Deny rules: a call that matches is refused, whatever else allows it.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "x-swarmux-effect": "restricts",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "list",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "pack",
+            "mission",
+            "run"
+          ]
+        },
+        "hook_on_failure_block": {
+          "default": false,
+          "description": "Add onFailure=block to the PreToolUse hook (a Claude Code that knows it).",
+          "type": "boolean",
+          "x-swarmux-effect": "restricts",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "lock",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "pack",
+            "mission",
+            "run"
+          ]
+        },
+        "loop_repeats": {
+          "default": 2,
+          "description": "The same failing call this many times is a loop; 0 turns the loop breaker off.",
+          "minimum": 0,
+          "type": "integer",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "scalar",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        },
+        "on_unreachable": {
+          "default": "auto",
+          "description": "What a job's hook does when swarmux cannot be reached: auto denies for unattended jobs and passes for the rest.",
+          "enum": [
+            "auto",
+            "deny",
+            "ask",
+            "pass"
+          ],
+          "type": "string",
+          "x-swarmux-effect": "restricts",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "lock",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "pack",
+            "mission",
+            "run"
+          ]
+        },
+        "protected_paths": {
+          "default": [],
+          "description": "Globs of files agents may not write, besides the built-in ones.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "x-swarmux-effect": "restricts",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "list",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "project",
+            "pack",
+            "mission",
+            "run"
+          ]
+        },
+        "unmatched": {
+          "default": "ask",
+          "description": "What happens to a call no rule matches: you are asked, or Claude Code's own rules decide.",
+          "enum": [
+            "ask",
+            "pass"
+          ],
+          "type": "string",
+          "x-swarmux-effect": "restricts",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "lock",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "pack",
+            "mission",
+            "run"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "icons": {
+      "default": "unicode",
+      "description": "The icon set.",
+      "enum": [
+        "ascii",
+        "unicode",
+        "nerd",
+        "auto"
+      ],
+      "type": "string",
+      "x-swarmux-effect": "neutral",
+      "x-swarmux-env": true,
+      "x-swarmux-merge": "scalar",
+      "x-swarmux-tiers": [
+        "org",
+        "user",
+        "workspace",
+        "run"
+      ]
+    },
+    "jev": {
+      "description": "Removed: JEV no longer exists. The section is ignored with a warning.",
+      "x-swarmux-effect": "neutral",
+      "x-swarmux-env": true,
+      "x-swarmux-merge": "scalar",
+      "x-swarmux-tiers": [
+        "org",
+        "user",
+        "workspace",
+        "run"
+      ]
+    },
+    "keys": {
+      "description": "Your key bindings (see `swarmux keys list`).",
+      "type": "object",
+      "x-swarmux-effect": "neutral",
+      "x-swarmux-env": true,
+      "x-swarmux-merge": "allowlist",
+      "x-swarmux-tiers": [
+        "org",
+        "user",
+        "workspace",
+        "run"
+      ]
+    },
+    "layout": {
+      "default": "command",
+      "description": "The dashboard layout: a built-in one or one of your [[layouts]].",
+      "type": "string",
+      "x-swarmux-effect": "neutral",
+      "x-swarmux-env": true,
+      "x-swarmux-merge": "scalar",
+      "x-swarmux-tiers": [
+        "org",
+        "user",
+        "workspace",
+        "run"
+      ]
+    },
+    "layouts": {
+      "description": "Your own dashboard layouts, `[[layouts]]` tables with rows of panels.",
+      "x-swarmux-effect": "neutral",
+      "x-swarmux-env": true,
+      "x-swarmux-merge": "allowlist",
+      "x-swarmux-tiers": [
+        "org",
+        "user",
+        "workspace",
+        "run"
+      ]
+    },
+    "low_power": {
+      "default": false,
+      "description": "Fewer frames and no animation, for a laptop on battery.",
+      "type": "boolean",
+      "x-swarmux-effect": "neutral",
+      "x-swarmux-env": true,
+      "x-swarmux-merge": "scalar",
+      "x-swarmux-tiers": [
+        "org",
+        "user",
+        "workspace",
+        "run"
+      ]
+    },
+    "max_concurrent": {
+      "default": 3,
+      "description": "Jobs that may run at the same time.",
+      "minimum": 1,
+      "type": "integer",
+      "x-swarmux-effect": "neutral",
+      "x-swarmux-env": true,
+      "x-swarmux-merge": "scalar",
+      "x-swarmux-tiers": [
+        "org",
+        "user",
+        "workspace",
+        "run"
+      ]
+    },
+    "min_free_ram_mb": {
+      "default": 1536,
+      "description": "Queued jobs wait while free memory is below this.",
+      "minimum": 0,
+      "type": "integer",
+      "x-swarmux-effect": "neutral",
+      "x-swarmux-env": true,
+      "x-swarmux-merge": "scalar",
+      "x-swarmux-tiers": [
+        "org",
+        "user",
+        "workspace",
+        "run"
+      ]
+    },
+    "missions": {
+      "additionalProperties": false,
+      "description": "Plan-first missions.",
+      "properties": {
+        "drift_threshold": {
+          "default": 0.3,
+          "description": "A change this far from the plan is drift.",
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "scalar",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        },
+        "landing": {
+          "default": "auto",
+          "description": "auto lands a mission when the gate passes; manual waits for you.",
+          "enum": [
+            "auto",
+            "manual"
+          ],
+          "type": "string",
+          "x-swarmux-effect": "restricts",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "lock",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "pack",
+            "mission",
+            "run"
+          ]
+        },
+        "parallel": {
+          "default": true,
+          "description": "Tasks of a mission run at the same time when they can.",
+          "type": "boolean",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "scalar",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        },
+        "plan_first": {
+          "default": false,
+          "description": "A mission waits for your approval of its plan.",
+          "type": "boolean",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "scalar",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        },
+        "plan_model": {
+          "default": "sonnet",
+          "description": "The planner's model.",
+          "type": "string",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "scalar",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "motion": {
+      "default": "auto",
+      "description": "How much the interface moves.",
+      "enum": [
+        "auto",
+        "full",
+        "reduced",
+        "off"
+      ],
+      "type": "string",
+      "x-swarmux-effect": "neutral",
+      "x-swarmux-env": true,
+      "x-swarmux-merge": "scalar",
+      "x-swarmux-tiers": [
+        "org",
+        "user",
+        "workspace",
+        "run"
+      ]
+    },
+    "notify": {
+      "additionalProperties": false,
+      "description": "Where swarmux tells you something needs you.",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "description": "Notifications at all.",
+          "type": "boolean",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "scalar",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        },
+        "ntfy": {
+          "default": "",
+          "description": "An ntfy topic URL: urgent items are sent there (leaves your machine).",
+          "type": "string",
+          "x-swarmux-effect": "grants",
+          "x-swarmux-env": false,
+          "x-swarmux-merge": "scalar",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        },
+        "quiet": {
+          "default": "",
+          "description": "A 24-hour window with no notifications, like \"22:00-08:00\".",
+          "type": "string",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "scalar",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        },
+        "terminal": {
+          "description": "A terminal notification escape (off on Windows, osc777 elsewhere).",
+          "enum": [
+            "off",
+            "osc777",
+            "osc9",
+            "bell"
+          ],
+          "type": "string",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "scalar",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        },
+        "toast": {
+          "description": "Desktop toasts (on by default on Windows).",
+          "type": "boolean",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "scalar",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "pricing": {
+      "additionalProperties": {
+        "description": "One model's prices per million tokens.",
+        "type": "object"
+      },
+      "description": "Model prices that replace the built-in table: `[pricing.<model>]`.",
+      "type": "object"
+    },
+    "review": {
+      "additionalProperties": false,
+      "description": "A second model reviews finished jobs.",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "description": "Review finished jobs.",
+          "type": "boolean",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "scalar",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        },
+        "model": {
+          "default": "opus",
+          "description": "The reviewer's model.",
+          "type": "string",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "scalar",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        },
+        "when": {
+          "default": "risk",
+          "description": "Review only risky changes, or every job.",
+          "enum": [
+            "risk",
+            "always"
+          ],
+          "type": "string",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "scalar",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "runtime": {
+      "additionalProperties": false,
+      "description": "How jobs launch Claude Code: profiles, canaries, trusted folders.",
+      "properties": {
+        "canary": {
+          "default": "each",
+          "description": "When the deny canary runs before an unattended job.",
+          "enum": [
+            "each",
+            "cached",
+            "off"
+          ],
+          "type": "string",
+          "x-swarmux-effect": "restricts",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "lock",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "pack",
+            "mission",
+            "run"
+          ]
+        },
+        "canary_cache_minutes": {
+          "default": 60,
+          "description": "How long a passed canary is reused (canary = cached).",
+          "maximum": 1440,
+          "minimum": 1,
+          "type": "integer",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "scalar",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        },
+        "canary_timeout_secs": {
+          "default": 90,
+          "description": "How long a canary may take.",
+          "maximum": 600,
+          "minimum": 10,
+          "type": "integer",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "scalar",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        },
+        "controlled_sources": {
+          "default": [
+            "user"
+          ],
+          "description": "Claude Code settings files a controlled job loads (user, project, local). Naming project or local lets a repository steer the agent.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "x-swarmux-effect": "grants",
+          "x-swarmux-env": false,
+          "x-swarmux-merge": "allowlist",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        },
+        "hook_failure": {
+          "default": "auto",
+          "description": "Whether the PreToolUse hook carries onFailure=block.",
+          "enum": [
+            "auto",
+            "block",
+            "off"
+          ],
+          "type": "string",
+          "x-swarmux-effect": "restricts",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "lock",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "pack",
+            "mission",
+            "run"
+          ]
+        },
+        "mcp": {
+          "description": "`[runtime.mcp.<name>]`: MCP servers (a command or a url) a controlled job may use.",
+          "x-swarmux-effect": "grants",
+          "x-swarmux-env": false,
+          "x-swarmux-merge": "allowlist",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        },
+        "on_error": {
+          "default": "refuse",
+          "description": "A canary that cannot run refuses the job, or only warns.",
+          "enum": [
+            "refuse",
+            "warn"
+          ],
+          "type": "string",
+          "x-swarmux-effect": "restricts",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "lock",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "pack",
+            "mission",
+            "run"
+          ]
+        },
+        "profile": {
+          "default": "auto",
+          "description": "inherit loads the user's and the repository's Claude Code settings; controlled loads only `controlled_sources` and a generated MCP config; auto makes unattended jobs in untrusted folders controlled.",
+          "enum": [
+            "auto",
+            "inherit",
+            "controlled"
+          ],
+          "type": "string",
+          "x-swarmux-effect": "restricts",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "lock",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "pack",
+            "mission",
+            "run"
+          ]
+        },
+        "repos": {
+          "description": "`[runtime.repos.\"<folder>\"] trusted = true`: folders whose own Claude Code settings an unattended job may load.",
+          "x-swarmux-effect": "grants",
+          "x-swarmux-env": false,
+          "x-swarmux-merge": "allowlist",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        },
+        "reviewer_sources": {
+          "default": [],
+          "description": "Settings files the reviewer loads; the reviewer is always controlled.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "x-swarmux-effect": "grants",
+          "x-swarmux-env": false,
+          "x-swarmux-merge": "allowlist",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        },
+        "statusline": {
+          "default": "auto",
+          "description": "Whether swarmux's status line replaces yours.",
+          "enum": [
+            "auto",
+            "on",
+            "off"
+          ],
+          "type": "string",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "scalar",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "schema_version": {
+      "default": 1,
+      "description": "The version of this file's format. Additive changes keep it; a breaking change raises it.",
+      "minimum": 1,
+      "type": "integer"
+    },
+    "splash": {
+      "default": true,
+      "description": "The splash screen at start.",
+      "type": "boolean",
+      "x-swarmux-effect": "neutral",
+      "x-swarmux-env": true,
+      "x-swarmux-merge": "scalar",
+      "x-swarmux-tiers": [
+        "org",
+        "user",
+        "workspace",
+        "run"
+      ]
+    },
+    "telemetry": {
+      "additionalProperties": false,
+      "description": "Which background sources run, and how often.",
+      "properties": {
+        "agents": {
+          "default": true,
+          "description": "Agents Claude Code runs.",
+          "type": "boolean",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "scalar",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        },
+        "agents_secs": {
+          "default": 15,
+          "description": "Seconds between reads.",
+          "maximum": 86400,
+          "minimum": 1,
+          "type": "integer",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "scalar",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        },
+        "git": {
+          "default": true,
+          "description": "Branch and diff figures.",
+          "type": "boolean",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "scalar",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        },
+        "git_secs": {
+          "default": 5,
+          "description": "Seconds between reads.",
+          "maximum": 86400,
+          "minimum": 1,
+          "type": "integer",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "scalar",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        },
+        "github": {
+          "default": true,
+          "description": "Pull requests through `gh` (talks to GitHub).",
+          "type": "boolean",
+          "x-swarmux-effect": "restricts",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "scalar",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "pack",
+            "mission",
+            "run"
+          ]
+        },
+        "github_secs": {
+          "default": 60,
+          "description": "Seconds between reads.",
+          "maximum": 86400,
+          "minimum": 1,
+          "type": "integer",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "scalar",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        },
+        "system": {
+          "default": true,
+          "description": "Memory and CPU.",
+          "type": "boolean",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "scalar",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        },
+        "system_secs": {
+          "default": 1,
+          "description": "Seconds between reads.",
+          "maximum": 86400,
+          "minimum": 1,
+          "type": "integer",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "scalar",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        },
+        "transcripts_path": {
+          "description": "Where Claude Code keeps its transcripts, when it is not the usual place.",
+          "type": "string",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "scalar",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        },
+        "usage": {
+          "default": true,
+          "description": "Usage windows and spend.",
+          "type": "boolean",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "scalar",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        },
+        "usage_secs": {
+          "default": 15,
+          "description": "Seconds between reads.",
+          "maximum": 86400,
+          "minimum": 1,
+          "type": "integer",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "scalar",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "theme": {
+      "default": "reference",
+      "description": "A built-in theme, one of your [themes], `wal`, `base16:<file>` or `matugen:<file>`.",
+      "type": "string",
+      "x-swarmux-effect": "neutral",
+      "x-swarmux-env": true,
+      "x-swarmux-merge": "scalar",
+      "x-swarmux-tiers": [
+        "org",
+        "user",
+        "workspace",
+        "run"
+      ]
+    },
+    "themes": {
+      "additionalProperties": {
+        "description": "One theme.",
+        "type": "object"
+      },
+      "description": "Your own themes: `[themes.<name>]` with `base` and colours by role.",
+      "type": "object"
+    },
+    "watchdog": {
+      "additionalProperties": false,
+      "description": "Stuck-agent detection and recovery.",
+      "properties": {
+        "burn_usd_per_min": {
+          "default": 1.0,
+          "description": "Dollars per minute that is too fast; 0 is off.",
+          "type": "number",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "scalar",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        },
+        "compactions": {
+          "default": 2,
+          "description": "Context compactions before a job is called thrashing.",
+          "minimum": 0,
+          "type": "integer",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "scalar",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        },
+        "context_high": {
+          "default": 0.85,
+          "description": "Context use above this is high.",
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "scalar",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        },
+        "enabled": {
+          "default": true,
+          "description": "Watch running jobs.",
+          "type": "boolean",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "scalar",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        },
+        "escalate_to": {
+          "default": [
+            "sonnet",
+            "opus"
+          ],
+          "description": "The models a job is moved up through before the ladder goes on.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "allowlist",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        },
+        "max_restarts": {
+          "default": 3,
+          "description": "Restarts before escalating.",
+          "minimum": 0,
+          "type": "integer",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "scalar",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        },
+        "nudge_cooldown_secs": {
+          "default": 90,
+          "description": "Seconds between nudges.",
+          "minimum": 0,
+          "type": "integer",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "scalar",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        },
+        "oscillation_repeats": {
+          "default": 3,
+          "description": "A back-and-forth this many times is a loop.",
+          "minimum": 0,
+          "type": "integer",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "scalar",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        },
+        "restart_cooldown_secs": {
+          "default": 180,
+          "description": "Seconds between restarts.",
+          "minimum": 0,
+          "type": "integer",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "scalar",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        },
+        "rungs": {
+          "default": [
+            "nudge",
+            "fresh",
+            "diagnose",
+            "fork",
+            "escalate",
+            "replan",
+            "inbox"
+          ],
+          "description": "The recovery ladder, in order.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "allowlist",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        },
+        "stall_secs": {
+          "default": 120,
+          "description": "Silence before a job is called stalled.",
+          "minimum": 0,
+          "type": "integer",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "scalar",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        },
+        "stall_tool_secs": {
+          "default": 600,
+          "description": "Silence during a tool call before it is called stalled.",
+          "minimum": 0,
+          "type": "integer",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "scalar",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        },
+        "stall_turns": {
+          "default": 15,
+          "description": "Turns without progress.",
+          "minimum": 0,
+          "type": "integer",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "scalar",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "worktree": {
+      "additionalProperties": false,
+      "description": "Where job worktrees go and what they get.",
+      "properties": {
+        "copy": {
+          "default": [
+            ".env",
+            ".env.local",
+            ".claude/settings.local.json",
+            "CLAUDE.local.md"
+          ],
+          "description": "Files copied from the main checkout into each worktree.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "list",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        },
+        "port_base": {
+          "default": 20000,
+          "description": "First port handed to jobs.",
+          "maximum": 65000,
+          "minimum": 1024,
+          "type": "integer",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "scalar",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        },
+        "port_block": {
+          "default": 20,
+          "description": "Ports per job.",
+          "maximum": 1000,
+          "minimum": 1,
+          "type": "integer",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "scalar",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        },
+        "port_slots": {
+          "default": 500,
+          "description": "How many blocks.",
+          "maximum": 1000,
+          "minimum": 1,
+          "type": "integer",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "scalar",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        },
+        "root": {
+          "description": "Where worktrees are made; empty is ~/.swarmux/worktrees.",
+          "type": "string",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "scalar",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        },
+        "stale_hours": {
+          "default": 12,
+          "description": "Hours before an untouched worktree counts as stale.",
+          "minimum": 1,
+          "type": "integer",
+          "x-swarmux-effect": "neutral",
+          "x-swarmux-env": true,
+          "x-swarmux-merge": "scalar",
+          "x-swarmux-tiers": [
+            "org",
+            "user",
+            "workspace",
+            "run"
+          ]
+        }
+      },
+      "type": "object"
+    }
+  },
+  "title": "swarmux config.toml",
+  "type": "object"
+}

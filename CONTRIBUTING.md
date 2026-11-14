@@ -90,6 +90,9 @@ add a new one at the end of the list in `crates/infrastructure/src/sqlite`.
 - Keep a pull request to one change, and add or update tests with it.
 - Use conventional commit messages (`feat:`, `fix:`, `docs:`, `test:`,
   `refactor:`, `chore:`), with an optional scope such as `feat(tui):`.
+- Regenerate `schema/` after changing a configuration key (`swarmux config schema
+  --out schema`); a test fails when it is stale. Tag a compatibility shim with
+  `COMPAT(name, version, date)` (see [COMPATIBILITY.md](COMPATIBILITY.md)).
 - Update the matching page in `guide/` when behavior or a setting changes, and
   add a line to `CHANGELOG.md` under Unreleased.
 - Do not commit secrets, local settings or personal files.

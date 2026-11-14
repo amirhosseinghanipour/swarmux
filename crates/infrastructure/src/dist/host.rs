@@ -14,6 +14,8 @@ const MANIFEST_FILE: &str = "install.json";
 /// Files and the user's `PATH`, under a given home folder.
 pub struct FsInstallHost {
     home: PathBuf,
+    /// Where swarmux keeps its data; `~/.swarmux` unless told.
+    data: Option<PathBuf>,
     /// Whether the user's `PATH` may be read and changed (tests turn it off
     /// so they never touch the real one).
     path_enabled: bool,
@@ -23,14 +25,34 @@ impl FsInstallHost {
     pub fn new(home: PathBuf) -> Self {
         Self {
             home,
+            data: None,
             path_enabled: true,
         }
+    }
+
+    /// Keeps the data in `dir` (the state folder swarmux resolved).
+    pub fn with_data_dir(mut self, dir: PathBuf) -> Self {
+        self.data = Some(dir);
+        self
     }
 
     /// Leaves the user's `PATH` alone, whatever is asked.
     pub fn without_path(mut self) -> Self {
         self.path_enabled = false;
         self
+    }
+
+    /// A state folder made under folders that were not there
+    /// (`~/.local/state`) takes the empty ones with it, up to the home
+    /// folder; a folder with anything in it stays.
+    fn prune_empty_parents(&self, path: &Path) {
+        let mut up = path.parent();
+        while let Some(dir) = up.filter(|d| *d != self.home && d.starts_with(&self.home)) {
+            if std::fs::remove_dir(dir).is_err() {
+                break;
+            }
+            up = dir.parent();
+        }
     }
 
     fn manifest_path(&self) -> PathBuf {
@@ -58,7 +80,9 @@ impl InstallHost for FsInstallHost {
     }
 
     fn data_dir(&self) -> PathBuf {
-        self.home.join(".swarmux")
+        self.data
+            .clone()
+            .unwrap_or_else(|| self.home.join(".swarmux"))
     }
 
     fn exists(&self, path: &Path) -> bool {
@@ -107,14 +131,19 @@ impl InstallHost for FsInstallHost {
 
     fn remove_dir_if_empty(&self, path: &Path) -> DistResult<bool> {
         match std::fs::remove_dir(path) {
-            Ok(()) => Ok(true),
+            Ok(()) => {
+                self.prune_empty_parents(path);
+                Ok(true)
+            }
             // Not empty (or already gone): leave it.
             Err(_) => Ok(false),
         }
     }
 
     fn remove_dir_all(&self, path: &Path) -> DistResult<()> {
-        std::fs::remove_dir_all(path).map_err(|e| io_err("remove", path, &e))
+        std::fs::remove_dir_all(path).map_err(|e| io_err("remove", path, &e))?;
+        self.prune_empty_parents(path);
+        Ok(())
     }
 
     fn path_has(&self, dir: &Path) -> bool {

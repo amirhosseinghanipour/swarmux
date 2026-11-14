@@ -41,6 +41,7 @@ mod telemetry;
 mod terminal;
 #[cfg(any(test, feature = "test-support"))]
 pub mod testing;
+pub mod trust;
 pub mod verifier;
 pub mod watchdog;
 pub mod workspace;
@@ -118,8 +119,8 @@ pub use sendback::{SentBack, send_back_prompt};
 pub use sessions::SessionService;
 pub use settings::{
     BoardSettings, ConsoleSettings, FailMode, GovernorSettings, GuardSettings, LayoutSettings,
-    MAX_SEND_BACK_NOTES, MotionSetting, OnUnreachable, ReviewSettings, ReviewWhen, RowSettings,
-    Settings, TelemetrySettings, UiSettings, WorktreeSettings,
+    MAX_SEND_BACK_NOTES, MotionSetting, OnUnreachable, Provenance, ReviewSettings, ReviewWhen,
+    RowSettings, Settings, TelemetrySettings, UiSettings, WorktreeSettings,
 };
 pub use telemetry::{
     ActivityView, AgentsPoll, Battery, CacheView, CiRun, Collected, CombinedStatusline, Commit,
@@ -128,6 +129,7 @@ pub use telemetry::{
     TOP_FILES, TelemetryService, TelemetrySnapshot, TruthBoard,
 };
 pub use terminal::SessionTerminal;
+pub use trust::{Pending, TrustGuard, TrustReader, TrustService};
 pub use verifier::{
     CleanCheckout, CleanCopy, HoldoutStore, Probe, SelfTest, Verification, Verifier, VerifyRequest,
     plan_checks,

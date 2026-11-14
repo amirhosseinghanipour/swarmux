@@ -1,0 +1,80 @@
+{
+  "$id": "https://raw.githubusercontent.com/amirhosseinghanipour/swarmux/main/schema/knowledge.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Rules, facts and decisions, as `swarmux knowledge export` writes them and `import` reads them. Keys of an item that this version does not know are kept out, not rejected.",
+  "properties": {
+    "about": {
+      "type": "string"
+    },
+    "items": {
+      "items": {
+        "properties": {
+          "anchors": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "core": {
+            "type": "boolean"
+          },
+          "enforcer": {
+            "type": "object"
+          },
+          "home": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "prior": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "object"
+          },
+          "source": {
+            "type": "string"
+          },
+          "stats": {
+            "type": "object"
+          },
+          "status": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "trust": {
+            "type": "string"
+          },
+          "valid_for": {
+            "type": "string"
+          },
+          "why": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "status",
+          "text"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "schema_version": {
+      "default": 1,
+      "description": "The version of this file's format. Additive changes keep it; a breaking change raises it.",
+      "minimum": 1,
+      "type": "integer"
+    }
+  },
+  "title": "swarmux knowledge file",
+  "type": "object"
+}

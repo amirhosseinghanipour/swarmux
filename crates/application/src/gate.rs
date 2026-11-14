@@ -29,10 +29,12 @@ use swarmux_domain::{
 use crate::attention::{Change, ChangeKind};
 use crate::checkpoint::{CheckpointService, Notes};
 use crate::contracts::{ContractGate, ContractJudgement};
+use crate::guard::UnattendedJobs;
 use crate::hookbus::{HookNotice, StopAnswer, StopContext, StopPolicy};
 use crate::knowledge::{RuleCheck, RuleChecks};
 use crate::ledger::LedgerService;
 use crate::ports::{Clock, JobRepository};
+use crate::trust::TrustGuard;
 use crate::verifier::{
     Verification, Verifier, VerifyRequest, fenced_folder, plan_checks, runs_holdout_command,
     runs_knowledge_command,
@@ -67,6 +69,13 @@ pub trait GateSource: Send + Sync {
     fn load(&self, dir: &Path) -> LoadedGate;
     /// Content hashes of the files under `root` that `globs` protect.
     fn pins(&self, root: &Path, globs: &[String]) -> Vec<Pin>;
+    /// What the repository of `gate` supplies that needs the owner's trust:
+    /// the commands it ships or that were guessed from its files, and the
+    /// hash of every file they come from. Nothing for a source that has no
+    /// repository behind it.
+    fn supplied(&self, _gate: &LoadedGate) -> swarmux_domain::trust::Supplied {
+        swarmux_domain::trust::Supplied::default()
+    }
 }
 
 /// Runs one check: directly (no shell), in `root`, killed at its timeout,
@@ -198,6 +207,10 @@ pub struct GateKeeper {
     rules: Option<Arc<dyn RuleChecks>>,
     /// The cross-repo check of a mission's change (contracts).
     contracts: Option<Arc<dyn ContractGate>>,
+    /// Withholds what a repository the owner has not trusted ships.
+    trust: Option<Arc<TrustGuard>>,
+    /// Background jobs nobody watches, besides missions.
+    unattended: UnattendedJobs,
 }
 
 /// What running checks takes.
@@ -324,6 +337,8 @@ impl GateKeeper {
             verifier: None,
             rules: None,
             contracts: None,
+            trust: None,
+            unattended: UnattendedJobs::new(),
         };
         (keeper, rx)
     }
@@ -343,6 +358,24 @@ impl GateKeeper {
     pub fn with_contracts(mut self, contracts: Arc<dyn ContractGate>) -> GateKeeper {
         self.contracts = Some(contracts);
         self
+    }
+
+    /// Withholds the commands and the loosening keys of repositories the
+    /// owner has not granted trust for (see [`TrustGuard`]).
+    pub fn with_trust(mut self, trust: Arc<TrustGuard>) -> GateKeeper {
+        self.trust = Some(trust);
+        self
+    }
+
+    /// Which jobs nobody watches, besides missions: for the trust rule.
+    pub fn with_unattended(mut self, unattended: UnattendedJobs) -> GateKeeper {
+        self.unattended = unattended;
+        self
+    }
+
+    /// Whether nobody watches `job`: a mission, or a background job.
+    fn nobody_watches(&self, job: Option<JobId>) -> bool {
+        job.is_some_and(|j| lock(&self.jobs).contains_key(&j) || self.unattended.contains(j))
     }
 
     /// The contract verdict of a mission's `job`, when it changed something
@@ -365,8 +398,11 @@ impl GateKeeper {
 
     /// The gate of the repository `dir` lies in, with what `job` was given
     /// on top.
-    fn load(&self, job: Option<JobId>, dir: &Path) -> LoadedGate {
+    fn load(&self, job: Option<JobId>, dir: &Path, unattended: bool) -> LoadedGate {
         let mut gate = self.source.load(dir);
+        if let Some(trust) = &self.trust {
+            trust.apply(&*self.source, &mut gate, unattended);
+        }
         if let Some(extra) = job.and_then(|j| lock(&self.jobs).get(&j).cloned()) {
             merge(&mut gate.spec, extra);
         }
@@ -387,7 +423,7 @@ impl GateKeeper {
             Key::Job(j) => Some(*j),
             Key::Session(_) => None,
         };
-        let gate = self.load(job, Path::new(cwd));
+        let gate = self.load(job, Path::new(cwd), self.nobody_watches(job));
         let pins = self.source.pins(&gate.root, &gate.spec.protected_globs());
         let base = self.verifier.as_ref().and_then(|v| v.head(&gate.root));
         let mut watches = lock(&self.watches);
@@ -407,7 +443,11 @@ impl GateKeeper {
         if stop.cwd.is_empty() {
             return None;
         }
-        let mut gate = self.load(stop.job, Path::new(&stop.cwd));
+        let mut gate = self.load(
+            stop.job,
+            Path::new(&stop.cwd),
+            self.nobody_watches(stop.job),
+        );
         let rules = self.rule_checks(stop.job);
         add_lint(&mut gate.spec, &rules);
         let key = Key::of(stop.job, &stop.session);
@@ -626,7 +666,7 @@ impl WriteFence for GateKeeper {
         if !changes_files(tool) || cwd.is_empty() {
             return None;
         }
-        let gate = self.load(job, Path::new(cwd));
+        let gate = self.load(job, Path::new(cwd), false);
         let root = gate.root.to_string_lossy().replace('\\', "/");
         let globs = gate.spec.protected_globs();
         protected_write(&globs, &root, tool, subject, cwd)
@@ -663,7 +703,7 @@ impl JobGates for GateKeeper {
         else {
             return Ok(false);
         };
-        let gate = self.load(Some(job), &root);
+        let gate = self.load(Some(job), &root, self.nobody_watches(Some(job)));
         let hidden = self
             .verifier
             .as_ref()
@@ -688,7 +728,11 @@ impl GateKeeper {
         let dir = baseline
             .as_ref()
             .map_or_else(|| dir.to_path_buf(), |(root, _)| root.clone());
-        let mut gate = self.load(Some(job), &dir);
+        let mut gate = self.load(
+            Some(job),
+            &dir,
+            unattended || self.nobody_watches(Some(job)),
+        );
         let rules = self.rule_checks(Some(job));
         add_lint(&mut gate.spec, &rules);
         let provider = self.rules.clone();

@@ -130,11 +130,17 @@ fn lint_names_the_lines_replaced_by_defaults() {
     let out = text(&lint);
     println!("{out}");
     assert!(!lint.status.success(), "a replaced line is a failure");
-    assert!(out.contains("warn config.toml (line 2)"), "{out}");
+    assert!(
+        out.contains("config.toml line 2: guard.on_unreachable"),
+        "{out}"
+    );
     assert!(out.contains("on_unreachable"), "{out}");
     assert!(out.contains("always_expiry_days = 14"), "{out}");
+    // A restrictive key that cannot be read reads as restrictive: it was
+    // "auto" (open for attended jobs) before.
+    assert!(out.contains("the restrictive answer"), "{out}");
     assert!(
-        out.contains("unattended jobs: closed, other jobs: open"),
+        out.contains("unattended jobs: closed, other jobs: closed"),
         "{out}"
     );
 
@@ -162,7 +168,7 @@ fn an_old_jev_section_loads_and_lint_says_it_is_ignored() {
     let out = text(&lint);
     println!("{out}");
     assert!(
-        out.contains("warn config.toml (line 2): JEV was removed; this section is ignored"),
+        out.contains("config.toml line 2: JEV was removed; this section is ignored"),
         "{out}"
     );
     assert!(

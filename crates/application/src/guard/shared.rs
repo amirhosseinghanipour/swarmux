@@ -394,6 +394,42 @@ impl SharedPolicy {
             .collect()
     }
 
+    /// The hash of the rules in force: the configured, built-in and learned
+    /// rules and the protected paths. It changes when any of them does.
+    pub fn policy_sha256(&self) -> String {
+        let mut text = self
+            .policy
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .policy_text();
+        let mut learned: Vec<String> = self
+            .learned
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .map(|(r, _)| {
+                format!(
+                    "learned:{}|{}|{}|{}|{}\n",
+                    r.id,
+                    r.text,
+                    r.scope.as_str(),
+                    r.root.as_deref().unwrap_or(""),
+                    r.expires_at.map_or(String::new(), |e| e.to_string())
+                )
+            })
+            .collect();
+        learned.sort();
+        text.extend(learned);
+        if let Some(p) = &self.protection {
+            let mut globs = p.protected_globs.clone();
+            globs.sort();
+            for g in globs {
+                text.push_str(&format!("protected:{g}\n"));
+            }
+        }
+        swarmux_domain::ledger::hex(&swarmux_domain::ledger::sha256(text.as_bytes()))
+    }
+
     pub fn add_allow(&self, rule: Pattern) {
         self.policy
             .write()

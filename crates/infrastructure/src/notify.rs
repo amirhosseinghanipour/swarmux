@@ -192,6 +192,7 @@ pub(crate) fn ntfy_push(n: &Notification) -> Push {
         AttentionKind::BoardQuestion => "an agent has a question for you",
         AttentionKind::FollowUp => "a follow-up needs you",
         AttentionKind::Knowledge => "project knowledge went stale",
+        AttentionKind::Trust => "a repository wants to run commands",
     };
     let (priority, tag) = match n.priority {
         Priority::P1 => ("urgent", "rotating_light"),
