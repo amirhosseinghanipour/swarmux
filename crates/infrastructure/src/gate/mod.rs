@@ -3,6 +3,7 @@
 
 mod checker;
 mod config;
+mod supplied;
 
 pub use checker::{OUTPUT_MAX, ProcessChecker};
 pub use config::{FsGateSource, GATES_FILE, parse_gates};

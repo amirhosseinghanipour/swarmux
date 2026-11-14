@@ -44,6 +44,7 @@ pub mod process;
 pub mod sqlite;
 pub mod telemetry;
 pub mod terminal;
+pub mod trust;
 pub mod workspace;
 pub mod worktree;
 

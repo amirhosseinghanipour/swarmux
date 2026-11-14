@@ -39,6 +39,7 @@ mod telemetry;
 mod terminal;
 #[cfg(any(test, feature = "test-support"))]
 pub mod testing;
+pub mod trust;
 pub mod verifier;
 pub mod watchdog;
 pub mod workspace;
@@ -122,6 +123,7 @@ pub use telemetry::{
     TOP_FILES, TelemetryService, TelemetrySnapshot, TruthBoard,
 };
 pub use terminal::SessionTerminal;
+pub use trust::{Pending, TrustGuard, TrustReader, TrustService};
 pub use verifier::{
     CleanCheckout, CleanCopy, HoldoutStore, Probe, SelfTest, Verification, Verifier, VerifyRequest,
     plan_checks,

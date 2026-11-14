@@ -64,6 +64,7 @@ pub fn run() -> anyhow::Result<()> {
         Err(e) => println!("fail config {e}"),
     }
     hook_checks();
+    crate::trust::doctor(&paths);
     println!("{}", crate::daemon::doctor_line(&paths));
     match SysinfoMonitor::new().free_memory_bytes() {
         Some(free) => println!("ok   free memory {:.1} GB", free as f64 / GB),

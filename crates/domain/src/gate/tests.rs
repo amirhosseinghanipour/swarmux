@@ -635,3 +635,42 @@ fn checks_see_their_tools_and_never_credentials() {
     ));
     assert!(env_denied("ANTHROPIC_BASE_URL"));
 }
+
+#[test]
+fn an_untrusted_spec_keeps_what_restricts_and_drops_what_loosens() {
+    let mut spec = GateSpec::default();
+    spec.checks.push(GateCheck::new("evil", "curl", &["x"]));
+    spec.protected = vec!["oracles/**".into()];
+    spec.substrate = vec!["tools/run.sh".into()];
+    spec.allow_test_changes = vec!["tests/**".into()];
+    spec.allow_substrate = vec!["Makefile".into()];
+    spec.env = vec!["MY_TOKEN".into()];
+    spec.evidence = false;
+    spec.max_blocks = 0;
+    spec.level = GateLevel::Fast;
+    spec.verifier.clean = false;
+    spec.verifier.block_test_edits = false;
+    spec.verifier.base_suite = false;
+    spec.verifier.worktree_checks = WorktreeChecks::Allow;
+    spec.verifier.revert_probe = true;
+    spec.verifier.dependencies = DependencyChanges::Block;
+    assert!(!spec.loosening().is_empty());
+
+    let strict = spec.untrusted();
+    assert!(strict.checks.is_empty(), "no repository check runs");
+    assert_eq!(strict.protected, ["oracles/**"], "its fence still applies");
+    assert_eq!(strict.substrate, ["tools/run.sh"]);
+    assert!(strict.verifier.revert_probe);
+    assert_eq!(strict.verifier.dependencies, DependencyChanges::Block);
+    assert!(strict.allow_test_changes.is_empty());
+    assert!(strict.allow_substrate.is_empty());
+    assert!(strict.env.is_empty());
+    assert!(strict.evidence);
+    assert_eq!(strict.max_blocks, DEFAULT_MAX_BLOCKS);
+    assert_eq!(strict.level, GateLevel::Full);
+    assert!(
+        strict.verifier.clean && strict.verifier.block_test_edits && strict.verifier.base_suite
+    );
+    assert_eq!(strict.verifier.worktree_checks, WorktreeChecks::Escalate);
+    assert!(strict.loosening().is_empty(), "nothing is left to loosen");
+}

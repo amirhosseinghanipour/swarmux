@@ -819,6 +819,50 @@ impl LedgerService {
         self.append(now, LedgerKind::Policy, "operator", None, None, payload)
     }
 
+    /// The owner trusted a repository: which one, the hash of every file
+    /// (and guessed command) the grant covers, and the commands it lets run.
+    /// Trust is read back from these entries, newest wins.
+    pub fn record_trust_granted(
+        &self,
+        record: &swarmux_domain::trust::TrustRecord,
+        supplied: &swarmux_domain::trust::Supplied,
+        now: Millis,
+    ) -> AppResult<()> {
+        let files = record
+            .entries
+            .iter()
+            .map(|e| {
+                Payload::new()
+                    .text("path", &e.path)
+                    .str("sha256", &e.sha256)
+            })
+            .collect();
+        let commands: Vec<String> = supplied.commands.iter().map(|c| c.line.clone()).collect();
+        let covered: String = record
+            .entries
+            .iter()
+            .map(|e| format!("{} {}\n", e.path, e.sha256))
+            .collect();
+        let payload = Payload::new()
+            .str("event", "trust_granted")
+            .str("repo_id", &record.repo_id)
+            .text("root", &record.root)
+            .objects("file_hashes", files)
+            .strs("commands", &commands)
+            .strs("loosens", &supplied.loosens)
+            .str("policy_sha256", &hex(&sha256(covered.as_bytes())));
+        self.append(now, LedgerKind::Policy, "operator", None, None, payload)
+    }
+
+    /// The owner took a repository's trust back.
+    pub fn record_trust_revoked(&self, repo_id: &str, root: &str, now: Millis) -> AppResult<()> {
+        let payload = Payload::new()
+            .str("event", "trust_revoked")
+            .str("repo_id", repo_id)
+            .text("root", root);
+        self.append(now, LedgerKind::Policy, "operator", None, None, payload)
+    }
+
     /// A hook call that fell back because swarmux could not be reached
     /// (read from the spool at the next start): what the hook printed and
     /// why, and the hash of the setting that decided it.

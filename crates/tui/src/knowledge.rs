@@ -89,7 +89,19 @@ impl App {
         if let Some(c) = &self.engine.contracts {
             items.extend(c.attention());
         }
+        if let Some(t) = &self.engine.trust {
+            items.extend(t.attention());
+        }
         items
+    }
+
+    /// Puts repositories that wait for the owner's trust in the inbox.
+    pub fn with_trust(
+        mut self,
+        trust: Option<std::sync::Arc<swarmux_application::trust::TrustGuard>>,
+    ) -> App {
+        self.engine.trust = trust;
+        self
     }
 
     /// The workspace whose contracts the tab shows.

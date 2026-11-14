@@ -38,6 +38,7 @@ pub mod taskgraph;
 pub mod telemetry;
 mod template;
 mod tokens;
+pub mod trust;
 pub mod verifier;
 pub mod workspace;
 mod worktree;

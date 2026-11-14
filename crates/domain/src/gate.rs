@@ -307,6 +307,85 @@ impl GateSpec {
     pub fn policy_sha256(&self) -> String {
         crate::ledger::hex(&crate::ledger::sha256(self.policy_text().as_bytes()))
     }
+
+    /// The keys of this spec that loosen the gate (a grant of the owner's
+    /// trust is needed for them to count), one line each.
+    pub fn loosening(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        if !self.allow_test_changes.is_empty() {
+            out.push(format!(
+                "test changes in {}",
+                self.allow_test_changes.join(", ")
+            ));
+        }
+        if !self.allow_substrate.is_empty() {
+            out.push(format!(
+                "harness changes in {}",
+                self.allow_substrate.join(", ")
+            ));
+        }
+        if !self.env.is_empty() {
+            out.push(format!("environment variables {}", self.env.join(", ")));
+        }
+        let v = &self.verifier;
+        if !v.clean {
+            out.push("checks in the worktree, not a clean copy (verifier.clean = false)".into());
+        }
+        if !v.block_test_edits {
+            out.push("edits to existing tests (verifier.test_edits = \"allow\")".into());
+        }
+        if !v.base_suite {
+            out.push("no base-suite run (verifier.base_suite = false)".into());
+        }
+        if v.worktree_checks == WorktreeChecks::Allow {
+            out.push(
+                "checks that run in the worktree (verifier.worktree_checks = \"allow\")".into(),
+            );
+        }
+        if !self.evidence {
+            out.push("no evidence check (gate.evidence = false)".into());
+        }
+        if self.level != GateLevel::Full {
+            out.push("a lower gate level".into());
+        }
+        if self.max_blocks == 0 {
+            out.push("a gate that never blocks (gate.max_blocks = 0)".into());
+        }
+        out
+    }
+
+    /// This spec as it counts while its repository is not trusted: the
+    /// repository's checks do not run and every key that loosens the gate
+    /// reads as its default. Keys that only restrict (protected globs,
+    /// extra harness files, blocking on new dependencies, the revert probe)
+    /// stay, so a hostile repository can add to the fence but not lower it.
+    pub fn untrusted(&self) -> GateSpec {
+        let strict = GateSpec::default();
+        GateSpec {
+            checks: Vec::new(),
+            max_blocks: if self.max_blocks == 0 {
+                strict.max_blocks
+            } else {
+                self.max_blocks
+            },
+            protected: self.protected.clone(),
+            evidence: strict.evidence,
+            subagent_checks: self.subagent_checks,
+            verifier: VerifierSpec {
+                revert_probe: self.verifier.revert_probe,
+                dependencies: self.verifier.dependencies,
+                flaky_after: self.verifier.flaky_after,
+                flaky_window: self.verifier.flaky_window,
+                ..strict.verifier
+            },
+            allow_test_changes: Vec::new(),
+            level: strict.level,
+            substrate: self.substrate.clone(),
+            allow_substrate: Vec::new(),
+            env: Vec::new(),
+            warnings: self.warnings.clone(),
+        }
+    }
 }
 
 /// Environment variables a check sees: the program must find its tools and

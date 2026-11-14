@@ -211,6 +211,7 @@ fn kind_icon(kind: AttentionKind) -> Icon {
         AttentionKind::BoardQuestion => Icon::Question,
         AttentionKind::FollowUp => Icon::Concerns,
         AttentionKind::Knowledge => Icon::Concerns,
+        AttentionKind::Trust => Icon::Guard,
     }
 }
 

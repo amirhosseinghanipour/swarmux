@@ -18,6 +18,7 @@ mod knowledge;
 mod stats;
 mod telemetry;
 mod theme;
+mod trust;
 mod workspace;
 mod worktree;
 
@@ -36,9 +37,10 @@ use swarmux_application::{
     AlwaysSettings, Board, BoardDigest, BoardService, CombinedStatusline, GateKeeper, GateService,
     Governor, GuardService, HandoffBoard, HistoryService, HookBus, HookMessenger, JobService,
     MissionService, NotifyService, NudgeBoard, PromptService, RoutingService, ScopeClaims,
-    SessionService, SharedPolicy, StatuslineFeed, TruthBoard, UnattendedJobs, Watchdog,
+    SessionService, SharedPolicy, StatuslineFeed, TrustGuard, TruthBoard, UnattendedJobs, Watchdog,
 };
 use swarmux_infrastructure::hook::{self, HookServer, Responders};
+use swarmux_infrastructure::trust::LedgerTrustReader;
 use swarmux_infrastructure::{
     BoardMcp, ClaudeCli, ClaudePlanner, FilePalette, FsAgentCatalog, FsGateSource, GitCli,
     GitMergeQueue, GitRepoRoots, GitVcs, GitWorktrees, GuardHook, HaikuDiagnoser, HaikuExtractor,
@@ -124,6 +126,13 @@ enum Command {
     Audit {
         #[command(subcommand)]
         action: AuditAction,
+    },
+    /// Repository trust: which repositories may run the commands they
+    /// ship (`.swarmux/gates.toml`, guessed checks). None do until you
+    /// grant it.
+    Trust {
+        #[command(subcommand)]
+        action: TrustAction,
     },
     /// The done-gate: the checks an agent must pass before it may stop.
     Gate {
@@ -403,6 +412,21 @@ enum KeysAction {
 }
 
 #[derive(Subcommand)]
+enum TrustAction {
+    /// Every repository you granted or revoked, and whether its files
+    /// still match what you granted.
+    List,
+    /// What a repository wants to run, the hash of each file a grant would
+    /// cover, and where it stands. Defaults to the current folder.
+    Show { repo: Option<std::path::PathBuf> },
+    /// Allow the commands a repository ships, for exactly the files `show`
+    /// lists. A changed file asks again. Written to the ledger.
+    Grant { repo: std::path::PathBuf },
+    /// Take a grant back: a folder, or an id from `list`.
+    Revoke { repo: String },
+}
+
+#[derive(Subcommand)]
 enum DeckAction {
     /// Check the `[deck]` of your config. Prints every problem and exits
     /// with 1 if there is one; the app still starts, with the default for
@@ -569,6 +593,12 @@ fn main() -> anyhow::Result<ExitCode> {
                 KeysAction::Export => keys::Action::Export,
             });
         }
+        Some(Command::Trust { action }) => match action {
+            TrustAction::List => trust::list(),
+            TrustAction::Show { repo } => trust::show(repo),
+            TrustAction::Grant { repo } => trust::grant(repo),
+            TrustAction::Revoke { repo } => trust::revoke(repo),
+        },
         Some(Command::Deck { action }) => {
             return deck::run(match action {
                 DeckAction::Lint => deck::Action::Lint,
@@ -664,6 +694,13 @@ fn build_app(
     // checks run in clean copies, followed by the hidden ones.
     let checker = holdout::checker();
     let (keeper, gate_records) = GateKeeper::new(Arc::new(FsGateSource::new()), checker.clone());
+    // A repository the owner has not trusted runs none of the commands it
+    // ships: the grants are read back from the ledger.
+    let unattended = UnattendedJobs::new();
+    let trust = Arc::new(TrustGuard::new(
+        Arc::new(LedgerTrustReader::new(&paths.db)),
+        Arc::new(|| SystemClock.now()),
+    ));
     // Rules, facts and decisions: guard rules ask the policy first, gate
     // and lint rules add checks, and sessions get what is in scope.
     let knowledge = Rc::new(knowledge::service(store.clone(), ledger.clone())?);
@@ -676,7 +713,9 @@ fn build_app(
         keeper
             .with_verifier(holdout::verifier(&paths, checker))
             .with_rules(hub.clone())
-            .with_contracts(contract_hub.clone()),
+            .with_contracts(contract_hub.clone())
+            .with_trust(trust.clone())
+            .with_unattended(unattended.clone()),
     );
     let guard_settings = &settings.guard;
     // Watchdog nudges reach an agent as the reason its next call is not run.
@@ -686,7 +725,6 @@ fn build_app(
     // What the Guard keeps from the agents' tools: swarmux's own commands and
     // files, and the files that steer agents. The jobs nobody watches fail
     // closed and may not write those.
-    let unattended = UnattendedJobs::new();
     let roots = Arc::new(GitRepoRoots::new("git".into()).with_workspaces({
         let hub = hub.clone();
         Box::new(move |job| {
@@ -984,6 +1022,7 @@ fn build_app(
     .with_followups(followups)
     .with_knowledge(Some(knowledge))
     .with_contracts(Some(contracts))
+    .with_trust(Some(trust))
     .with_hook_bus(hook_bus)
     .with_gate(gate)
     .with_watchdog(watchdog)

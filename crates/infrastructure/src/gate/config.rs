@@ -15,6 +15,7 @@ use swarmux_domain::gate::{
     protected_glob, search_roots,
 };
 use swarmux_domain::ledger::{hex, sha256};
+use swarmux_domain::trust::Supplied;
 
 /// Where a repository's gate lives, relative to its root.
 pub const GATES_FILE: &str = ".swarmux/gates.toml";
@@ -417,12 +418,25 @@ pub fn parse_gates(text: &str, repo: &RepoFacts) -> Result<GateSpec, String> {
 }
 
 type Stamp = (Option<SystemTime>, Option<SystemTime>);
+/// When the files that decide what a repository supplies last changed.
+pub(super) type RepoFilesStamp = [Option<SystemTime>; 5];
+
+/// How many `[[check]]` a `gates.toml` declares; 0 for text that is not one.
+pub(super) fn declared_check_count(text: &str) -> usize {
+    toml::from_str::<RawFile>(text).map_or(0, |f| f.check.len())
+}
+
+/// `scripts.test` of the `package.json` at `root`.
+pub(super) fn npm_test_script(root: &Path) -> Option<String> {
+    facts_of(root).npm_test
+}
 
 /// Reads gates from the file system, re-reading a repository's gate only
 /// when its `gates.toml` or its root folder changed.
 #[derive(Default)]
 pub struct FsGateSource {
     cache: Mutex<HashMap<PathBuf, (Stamp, LoadedGate)>>,
+    supplied: Mutex<HashMap<PathBuf, (RepoFilesStamp, Supplied)>>,
 }
 
 impl FsGateSource {
@@ -526,6 +540,20 @@ impl GateSource for FsGateSource {
         let gate = load_at(&root);
         cache.insert(root, (stamp, gate.clone()));
         gate
+    }
+
+    fn supplied(&self, gate: &LoadedGate) -> Supplied {
+        let stamp = super::supplied::stamp(&gate.root);
+        let mut cache = self.supplied.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some((at, found)) = cache.get(&gate.root)
+            && *at == stamp
+        {
+            return found.clone();
+        }
+        let id = crate::trust::repo_id_of(&gate.root);
+        let found = super::supplied::compute(&gate.root, gate, id);
+        cache.insert(gate.root.clone(), (stamp, found.clone()));
+        found
     }
 
     fn pins(&self, root: &Path, globs: &[String]) -> Vec<Pin> {
