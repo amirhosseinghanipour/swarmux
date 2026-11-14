@@ -69,6 +69,8 @@ struct RawConfig {
     keys: Option<toml::Value>,
     /// Read whole too: the Deck's lint reports what is wrong in it.
     deck: Option<toml::Value>,
+    /// Read whole too: `swarmux brief lint` reports what is wrong in it.
+    brief: Option<toml::Value>,
 }
 
 #[derive(Deserialize)]
@@ -232,6 +234,9 @@ pub fn parse_settings(text: &str, path: &Path) -> Result<Settings, ConfigError> 
     }
     if let Some(deck) = &raw.deck {
         settings.deck = crate::config_deck::parse_deck(deck);
+    }
+    if let Some(brief) = &raw.brief {
+        settings.brief = crate::config_brief::parse_brief(brief);
     }
     Ok(settings)
 }
@@ -1309,6 +1314,29 @@ bg = [\"#000000\", \"#111111\"]"
         let e = load_settings(dir.path()).unwrap_err();
         assert_eq!(e.line, None);
         assert!(e.to_string().contains(&dir.path().display().to_string()));
+    }
+
+    #[test]
+    fn a_mistake_in_the_brief_section_never_refuses_the_file() {
+        let s = parse(
+            "[brief]
+away_after_minutes = \"soon\"
+esc_goes_to = \"record\"
+colour = 1
+",
+        )
+        .expect("the file loads");
+        assert!(s.brief.present);
+        assert_eq!(s.brief.unknown, ["colour"]);
+        assert_eq!(s.brief.malformed.len(), 1);
+        assert!(parse("").unwrap().brief == swarmux_domain::console::BriefConfig::default());
+        let good = parse(
+            "[brief]
+away_after_minutes = 5
+",
+        )
+        .unwrap();
+        assert_eq!(good.brief.away_after_minutes, Some(5));
     }
 
     #[test]

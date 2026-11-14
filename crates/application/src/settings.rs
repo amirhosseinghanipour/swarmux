@@ -76,6 +76,10 @@ pub struct Settings {
     /// (`swarmux_domain::console::resolve_deck`), so a mistake in it never
     /// stops the file from loading.
     pub deck: swarmux_domain::console::DeckConfig,
+    /// The `[brief]` section as written, checked by
+    /// `swarmux_domain::console::resolve_brief`: a mistake in it never stops
+    /// the file from loading.
+    pub brief: swarmux_domain::console::BriefConfig,
 }
 
 /// The `[board]` section.
@@ -507,6 +511,7 @@ impl Default for Settings {
             keys: swarmux_domain::keys::KeyConfig::default(),
             warnings: Vec::new(),
             deck: swarmux_domain::console::DeckConfig::default(),
+            brief: swarmux_domain::console::BriefConfig::default(),
         }
     }
 }

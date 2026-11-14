@@ -10,12 +10,23 @@
 //! repositories' contracts and the files tasks claim).
 
 mod actions;
+mod brief;
+mod brief_config;
 mod deck_config;
 mod graph;
 mod metrics;
 mod rank;
 
 pub use actions::{ActionFacts, ActionKind, Allowed, LandFacts, allowed};
+pub use brief::{
+    CallState, Digest as BriefDigest, Fallback as GuardFallback, GuardCall, GuardDigest,
+    HiddenNotRun, Moment as BriefMoment, RuleAdded, Spend as BriefSpend, TIMELINE_KEPT,
+    Tone as BriefTone, WorktreeRun, digest as compute_brief_digest,
+};
+pub use brief_config::{
+    BriefConfig, BriefProblem, BriefSettings, DEFAULT_AWAY_AFTER_MINUTES, EscGoesTo,
+    KEYS as BRIEF_KEYS, MAX_AWAY_AFTER_MINUTES, resolve as resolve_brief,
+};
 pub use deck_config::{
     DEFAULT_PANELS, DEFAULT_SESSION_ROWS, DeckConfig, DeckLayout, DeckProblem, Direction,
     KEYS as DECK_KEYS, MAX_SESSION_ROWS, Panel, Zone, resolve as resolve_deck,
