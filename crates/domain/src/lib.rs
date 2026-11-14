@@ -23,6 +23,7 @@ mod job;
 mod json;
 pub mod keys;
 pub mod knowledge;
+pub mod layers;
 pub mod ledger;
 pub mod mission;
 mod model;

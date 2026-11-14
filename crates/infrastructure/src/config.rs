@@ -134,7 +134,33 @@ pub fn parse_settings(text: &str, path: &Path) -> Result<Settings, ConfigError> 
         let line = e.span().map(|span| line_at(text, span.start));
         error(line, e.message().trim().to_string())
     })?;
+    build(raw, text, path)
+}
 
+/// The settings of an already parsed (and merged) table. `text` only helps
+/// to name lines in messages: it is the file the values mostly came from.
+pub fn settings_from_table(
+    table: &toml::Table,
+    text: &str,
+    path: &Path,
+) -> Result<Settings, ConfigError> {
+    let raw: RawConfig = table
+        .clone()
+        .try_into()
+        .map_err(|e: toml::de::Error| ConfigError {
+            path: path.to_path_buf(),
+            line: None,
+            message: e.message().trim().to_string(),
+        })?;
+    build(raw, text, path)
+}
+
+fn build(raw: RawConfig, text: &str, path: &Path) -> Result<Settings, ConfigError> {
+    let error = |line: Option<usize>, message: String| ConfigError {
+        path: path.to_path_buf(),
+        line,
+        message,
+    };
     let mut settings = Settings::default();
     if let Some(n) = raw.max_concurrent {
         settings.max_concurrent = usize::try_from(n).ok().filter(|&n| n >= 1).ok_or_else(|| {
