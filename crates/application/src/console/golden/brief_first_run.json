@@ -1,0 +1,77 @@
+{
+  "schema": 1,
+  "state": "first_run",
+  "at": 10000000,
+  "window": null,
+  "landed": {
+    "with_proof": 0,
+    "without_proof": 0,
+    "truncated": false,
+    "items": []
+  },
+  "ready": [
+    {
+      "id": "job:6",
+      "title": "job 6: docs-site",
+      "since_at": 3200000,
+      "can_land": false,
+      "repos": []
+    }
+  ],
+  "ready_total": 1,
+  "decisions": [
+    {
+      "id": "job:2",
+      "title": "job 2: web-checkout",
+      "priority": "p1",
+      "kind": "approval",
+      "ask": "Bash git push origin HEAD:main",
+      "since_at": 1100000,
+      "deadline_at": 13000000,
+      "blocks": []
+    },
+    {
+      "id": "job:3",
+      "title": "job 3: data-pipeline",
+      "priority": "p2",
+      "kind": "job_failed",
+      "ask": "Backfill the events table",
+      "since_at": 5000,
+      "deadline_at": null,
+      "blocks": []
+    },
+    {
+      "id": "mission:plan-me",
+      "title": "plan me",
+      "priority": "p2",
+      "kind": "plan_ready",
+      "ask": "plan me",
+      "since_at": 6000,
+      "deadline_at": null,
+      "blocks": []
+    },
+    {
+      "id": "mission:split-app",
+      "title": "split app",
+      "priority": "p2",
+      "kind": "merge",
+      "ask": "split app",
+      "since_at": 7000,
+      "deadline_at": null,
+      "blocks": []
+    }
+  ],
+  "decisions_total": 4,
+  "stopped": [],
+  "stopped_total": 0,
+  "spend": null,
+  "verification": null,
+  "guard": null,
+  "fallbacks": [],
+  "rules_added": [],
+  "checks": null,
+  "lands_where": [],
+  "timeline": [],
+  "back_pressure": null,
+  "read": null
+}

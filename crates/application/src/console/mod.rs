@@ -36,6 +36,7 @@
 //! the same as an empty one. The landed group holds its newest
 //! [`DEFAULT_LANDED`] outcomes in full; the rest is only counted.
 
+mod brief;
 mod deck;
 mod hold;
 mod outcome;
@@ -44,6 +45,13 @@ mod service;
 mod tests;
 mod view;
 
+pub use brief::{
+    BRIEF_SCHEMA, BackPressureView, BriefInput, BriefState, BriefView, ChecksNoteView,
+    DecisionView, FallbackView, GuardCallState, GuardCallView, GuardView, HiddenNotRunView,
+    LIST_CAP, LandedItem, LandedView, MomentTone, MomentView, ReadView, ReadyView, RepoLandItem,
+    RepoLandsView, RuleAddedView, SpendAwayView, StoppedView, VerificationView, WindowView,
+    WorktreeRunView, build_brief, read_digest,
+};
 pub use hold::STREAM_WINDOW;
 pub use service::{ConsoleService, DEFAULT_LANDED, Extra, Gathered, Sources};
 pub use view::*;
