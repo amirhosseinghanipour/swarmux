@@ -258,7 +258,7 @@ been seen to say no proves nothing by saying yes.
 
 ## Configuration
 
-All of it is in `.swarmux/gates.toml`, which agents cannot write. The keys
+All of it is in `.swarmux/gates.toml`. The Guard holds an agent's tool-call writes to it (denies them for an unattended job); that is text matching, see [the limits](#what-this-does-not-establish). The keys
 below are read one by one: a value that cannot be used falls back to its
 default (strict) with a warning shown in the digest, in the ledger and by
 `swarmux gate lint`, never a crash. Keys that existed before keep their
@@ -315,7 +315,13 @@ Every accepted key is enforced; a key this version does not know is an error
   and its key are not out of the agents' reach (see [the ledger](ledger-and-evidence.md)).
 - **A passing gate is checks passing**, run as described, on the files that
   were there. It is not proof that the code is correct, and a bundle says
-  what ran, not that nothing was missed.
+  what ran, not that nothing was missed. The checks are the ones you wrote or
+  swarmux guessed; a check that does not exist is not run.
+- **Hidden checks are finite.** They reduce the ways an agent can pass by
+  gaming the visible checks; they do not remove them. Read `hidden 2/3`, never
+  a bare tick.
+- **The reviewer is a model.** Its concerns are an opinion shown below the
+  deterministic results, and it never changes a verdict.
 
 
 ## Test-weakening detector
@@ -347,8 +353,8 @@ touches what the mission's checks run (a protected path, a path a check
 names, or any test file when checks exist) or a harness file, else **P2**
 (for instance only CI configuration).
 
-Say that a test change is intended in `.swarmux/gates.toml`, which agents
-cannot write. Matching paths are not reported and not put back for the base
+Say that a test change is intended in `.swarmux/gates.toml`, which the Guard
+keeps agents' tool calls from writing. Matching paths are not reported and not put back for the base
 suite:
 
 ```toml

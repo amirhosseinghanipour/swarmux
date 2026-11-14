@@ -78,7 +78,7 @@ set shares one block of ports.
 
 Which repositories a job touches: the ones its mission names in `repos`,
 else all of them. Naming them is cheaper (a checkout per repository) and
-keeps the others out of reach; naming none is safe but checks out
+keeps the others out of reach; naming none is the default and checks out
 everything.
 
 ## Workspace missions

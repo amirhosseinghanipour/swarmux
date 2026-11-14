@@ -62,8 +62,9 @@ table orders — backend/supabase/migrations/001_orders.sql:2
 
 A contract is a symbol with a provider (repository, file, line, and the
 file's content hash as its anchor) and consumers (repository, file, line).
-Contracts are facts the sources prove, so they are *verified*, and they are
-never stale: they are read again from the files, and what changed is shown.
+Contracts are read from the sources by text matching, not declared, and they are
+never stale: they are read again from the files, and what changed is shown. A
+link the scan does not recognise is not seen.
 
 | Provides | Read from |
 | --- | --- |
