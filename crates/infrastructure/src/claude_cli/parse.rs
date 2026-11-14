@@ -106,6 +106,7 @@ fn parse_environment(v: &Value) -> Environment {
         plugins: names("plugins"),
         skills: names("skills"),
         agents: names("agents"),
+        capabilities: names("capabilities"),
     }
 }
 
